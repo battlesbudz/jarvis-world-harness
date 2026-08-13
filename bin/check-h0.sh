@@ -9,13 +9,13 @@ required=(
   milestones/H0/gate.json
   bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh
   bin/milestone-gate.py bin/codex-process.py
-  bin/test-codex-lifecycle.sh bin/test-harness-control.sh
+  bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh
 )
 for f in "${required[@]}"; do
   [ -f "$f" ] || { echo "missing: $f" >&2; exit 1; }
 done
 
-for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh; do
+for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh; do
   bash -n "$f"
 done
 python3 -m py_compile bin/milestone-gate.py bin/codex-process.py
@@ -25,7 +25,7 @@ p='milestones/H0/gate.json'
 d=json.load(open(p, encoding='utf-8'))
 assert d.get('milestone') == 'H0'
 ids={c.get('id') for c in d.get('checks', [])}
-assert {'h0-static','codex-lifecycle','harness-control'} <= ids, ids
+assert {'h0-static','codex-lifecycle','harness-control','lock-races'} <= ids, ids
 PY
 
 grep -q -- '--sandbox "$SANDBOX"' bin/run-codex.sh
