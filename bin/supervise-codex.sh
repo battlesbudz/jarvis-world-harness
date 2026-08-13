@@ -8,6 +8,7 @@ command -v python3 >/dev/null || { echo "python3 not found on PATH" >&2; exit 12
 command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
 mkdir -p .harness/logs
 SUPERVISOR_LOCK=.harness/codex-supervisor.lock
+CONTROL_LOCK=.harness/codex-control.lock
 RUNNER_LOCK=.harness/codex-runner.lock
 PAUSE=.harness/codex-supervisor.pause
 STOP=.harness/STOP
@@ -22,24 +23,71 @@ BACKOFF_MAX=${BACKOFF_MAX:-1800}
 MAX_RUNS=${MAX_RUNS:-0}
 backoff=$BACKOFF_MIN
 runs=0
+post_delay=0
+locks_held=0
 
-pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 say() { echo "$(date '+%F %T')  $*" | tee -a "$LOG"; }
 
-# The kernel owns stale-lock recovery. Never unlink/reclaim a PID file based on a
-# liveness read, because that can delete a concurrently-acquired owner.
-if [ "${JWH_SUPERVISOR_LOCKED:-0}" != "1" ]; then
-  LOCK_BUSY_RC=75
-  flock -n -E "$LOCK_BUSY_RC" "$SUPERVISOR_LOCK" env JWH_SUPERVISOR_LOCKED=1 bash "$0" "$@"
-  rc=$?
-  if [ "$rc" -eq "$LOCK_BUSY_RC" ]; then
-    owner=$(cat "$SUPERVISOR_LOCK" 2>/dev/null || true)
-    echo "Codex supervisor already active${owner:+: pid $owner}" >&2
-    exit 2
-  fi
-  exit "$rc"
+# Supervisor identity is protected by the kernel lock; stale PID text is metadata only.
+exec 7<>"$SUPERVISOR_LOCK"
+if ! flock -n 7; then
+  owner=$(cat "$SUPERVISOR_LOCK" 2>/dev/null || true)
+  echo "Codex supervisor already active${owner:+: pid $owner}" >&2
+  exit 2
 fi
+: > "$SUPERVISOR_LOCK"
 printf '%s\n' "$$" > "$SUPERVISOR_LOCK"
+
+acquire_control_and_runner() {
+  exec 9>"$CONTROL_LOCK"
+  flock 9 || return 2
+  exec 8<>"$RUNNER_LOCK"
+  if ! flock -n 8; then
+    exec 8>&- 2>/dev/null || true
+    flock -u 9 2>/dev/null || true
+    exec 9>&- 2>/dev/null || true
+    locks_held=0
+    return 1
+  fi
+  locks_held=1
+  return 0
+}
+
+release_control_and_runner() {
+  [ "$locks_held" -eq 1 ] || return 0
+  flock -u 8 2>/dev/null || true
+  exec 8>&- 2>/dev/null || true
+  flock -u 9 2>/dev/null || true
+  exec 9>&- 2>/dev/null || true
+  locks_held=0
+}
+
+# Launch transfers the already-held runner/control file descriptions to the child.
+# The child releases control immediately after writing its PID but retains runner ownership.
+launch_runner_from_handoff() {
+  runs=$((runs + 1))
+  say "launching Codex runner (run $runs)"
+  start=$(date +%s)
+  env JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1 bin/run-codex.sh >> "$OUT" 2>&1 &
+  runner_pid=$!
+  # Do not LOCK_UN here: the child inherited the same open file descriptions.
+  exec 8>&- 2>/dev/null || true
+  exec 9>&- 2>/dev/null || true
+  locks_held=0
+  wait "$runner_pid"
+  rc=$?
+  dur=$(( $(date +%s) - start ))
+  say "runner exited rc=$rc after ${dur}s"
+  if [ "$rc" -ne 0 ] || [ "$dur" -lt "$FAST_DEATH_S" ]; then
+    post_delay=$backoff
+    backoff=$(( backoff * 2 ))
+    [ "$backoff" -gt "$BACKOFF_MAX" ] && backoff=$BACKOFF_MAX
+  else
+    post_delay=15
+    backoff=$BACKOFF_MIN
+  fi
+  return "$rc"
+}
 
 milestone_passed() {
   python3 bin/milestone-gate.py >"$GATE_OUT" 2>"$GATE_ERR"
@@ -61,8 +109,10 @@ milestone_passed() {
 cleanup() {
   rc=$?
   trap - EXIT
-  owner=$(cat "$SUPERVISOR_LOCK" 2>/dev/null || true)
-  [ "$owner" = "$$" ] && : > "$SUPERVISOR_LOCK"
+  release_control_and_runner
+  : > "$SUPERVISOR_LOCK" 2>/dev/null || true
+  flock -u 7 2>/dev/null || true
+  exec 7>&- 2>/dev/null || true
   rm -f "$GATE_OUT" "$GATE_ERR"
   exit "$rc"
 }
@@ -79,10 +129,28 @@ while true; do
     continue
   fi
 
-  # Never run milestone evals against a worktree while Codex is actively editing it.
-  rp=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
-  if pid_alive "$rp"; then
+  # Acquire control first, then the runner lock. This both proves whether a runner
+  # actually exists and prevents manual startup/restart from racing gate evaluation.
+  acquire_control_and_runner
+  lock_rc=$?
+  if [ "$lock_rc" -eq 1 ]; then
     backoff=$BACKOFF_MIN
+    sleep "$CHECK_S"
+    continue
+  elif [ "$lock_rc" -ne 0 ]; then
+    say "could not acquire control/runner handoff locks"
+    exit 2
+  fi
+
+  # PAUSE/STOP are rechecked while control+runner are both held, closing the
+  # check-to-launch window entirely.
+  if [ -e "$STOP" ]; then
+    release_control_and_runner
+    say "STOP marker present after handoff; supervisor exiting"
+    exit 0
+  fi
+  if [ -e "$PAUSE" ]; then
+    release_control_and_runner
     sleep "$CHECK_S"
     continue
   fi
@@ -90,58 +158,44 @@ while true; do
   milestone_passed
   gate_rc=$?
   if [ "$gate_rc" -eq 0 ]; then
+    release_control_and_runner
     say "active milestone objectively passed; supervisor exiting"
     exit 0
   elif [ "$gate_rc" -eq 2 ]; then
+    release_control_and_runner
     say "cannot safely continue without a valid milestone gate; supervisor exiting"
     exit 2
   fi
 
+  # Backoff happens only after an objective gate says work remains. Release locks
+  # during the delay, then loop and re-evaluate under locks before any launch.
+  if [ "$post_delay" -gt 0 ]; then
+    delay=$post_delay
+    post_delay=0
+    release_control_and_runner
+    say "milestone incomplete; delaying next launch ${delay}s"
+    sleep "$delay"
+    continue
+  fi
+
   if [ "$MAX_RUNS" -gt 0 ] && [ "$runs" -ge "$MAX_RUNS" ]; then
+    release_control_and_runner
     say "MAX_RUNS=$MAX_RUNS reached; supervisor exiting"
     exit 0
   fi
 
-  # A manual restart can create PAUSE while milestone_passed is running. Recheck
-  # immediately before launch so the supervisor cannot steal the runner lock from
-  # the replacement or discard its RESUME_NOTE_FILE.
   if [ -e "$STOP" ]; then
-    say "STOP marker appeared after gate; supervisor exiting"
+    release_control_and_runner
+    say "STOP marker appeared before launch; supervisor exiting"
     exit 0
   fi
   if [ -e "$PAUSE" ]; then
+    release_control_and_runner
     sleep "$CHECK_S"
     continue
   fi
 
-  runs=$((runs + 1))
-  say "launching Codex runner (run $runs)"
-  start=$(date +%s)
-  bin/run-codex.sh >> "$OUT" 2>&1
-  rc=$?
-  dur=$(( $(date +%s) - start ))
-  say "runner exited rc=$rc after ${dur}s"
-
-  [ -e "$STOP" ] && continue
-  [ -e "$PAUSE" ] && continue
-
-  milestone_passed
-  gate_rc=$?
-  if [ "$gate_rc" -eq 0 ]; then
-    say "active milestone passed after run $runs; supervisor exiting"
-    exit 0
-  elif [ "$gate_rc" -eq 2 ]; then
-    say "milestone gate failed to evaluate safely; supervisor exiting"
-    exit 2
-  fi
-
-  if [ "$rc" -ne 0 ] || [ "$dur" -lt "$FAST_DEATH_S" ]; then
-    say "short/failed run; backing off ${backoff}s"
-    sleep "$backoff"
-    backoff=$(( backoff * 2 ))
-    [ "$backoff" -gt "$BACKOFF_MAX" ] && backoff=$BACKOFF_MAX
-  else
-    backoff=$BACKOFF_MIN
-    sleep 15
-  fi
+  launch_runner_from_handoff || true
+  # Loop immediately. The next iteration reacquires both locks and evaluates the
+  # gate before any backoff/relaunch decision.
 done
