@@ -8,7 +8,7 @@ required=(
   spec/CORE-LAWS.md spec/WORLD-VISION.md docs/ARCHITECTURE.md docs/MILESTONE-GATES.md
   milestones/H0/gate.json
   bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh
-  bin/milestone-gate.py bin/pid-lock.py bin/codex-process.py
+  bin/milestone-gate.py bin/codex-process.py
   bin/test-codex-lifecycle.sh bin/test-harness-control.sh
 )
 for f in "${required[@]}"; do
@@ -18,7 +18,7 @@ done
 for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh; do
   bash -n "$f"
 done
-python3 -m py_compile bin/milestone-gate.py bin/pid-lock.py bin/codex-process.py
+python3 -m py_compile bin/milestone-gate.py bin/codex-process.py
 python3 - <<'PY'
 import json
 p='milestones/H0/gate.json'
@@ -30,10 +30,12 @@ PY
 
 grep -q -- '--sandbox "$SANDBOX"' bin/run-codex.sh
 grep -q 'resume "$session_id"' bin/run-codex.sh
-grep -q 'pid-lock.py acquire' bin/run-codex.sh
+grep -q 'flock -n' bin/run-codex.sh
 grep -q 'codex-process.py' bin/run-codex.sh
-grep -q 'pid-lock.py acquire' bin/supervise-codex.sh
+grep -q 'flock -n' bin/supervise-codex.sh
+grep -q 'flock -n' bin/restart-codex.sh
 grep -q 'codex-supervisor.pause' bin/supervise-codex.sh
+grep -q 'A manual restart can create PAUSE' bin/supervise-codex.sh
 grep -q 'BACKOFF_MAX' bin/supervise-codex.sh
 grep -q 'milestone-gate.py' bin/supervise-codex.sh
 grep -q 'MAX_EVENT_AGE_MIN' bin/health-codex.sh
