@@ -108,8 +108,15 @@ Do not begin a later milestone. Stop only when the current milestone acceptance 
 PROMPT
 )
 
+# A manual restart note is one-turn operator context, not resume-only context.
+# If the interrupted runner had not emitted thread.started yet, the replacement is
+# necessarily a fresh Codex turn and must still receive the note.
 if [ -n "${RESUME_NOTE_FILE:-}" ] && [ -f "$RESUME_NOTE_FILE" ]; then
-  CONTINUE_PROMPT="$(cat "$RESUME_NOTE_FILE")
+  RESTART_NOTE="$(cat "$RESUME_NOTE_FILE")"
+  BASE_PROMPT="$RESTART_NOTE
+
+$BASE_PROMPT"
+  CONTINUE_PROMPT="$RESTART_NOTE
 
 $CONTINUE_PROMPT"
 fi
