@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 
 command -v codex >/dev/null || { echo "codex CLI not found on PATH" >&2; exit 127; }
 command -v python3 >/dev/null || { echo "python3 not found on PATH" >&2; exit 127; }
+command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
 
 mkdir -p .harness/logs
 RUNNER_LOCK=.harness/codex-runner.lock
@@ -16,26 +17,22 @@ LAST_MESSAGE=.harness/last-message.md
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
-acquire_runner_lock() {
-  if python3 bin/pid-lock.py acquire "$RUNNER_LOCK" "$$"; then
-    return 0
+# Use an OS-backed lock on the PID file itself. A stale PID never needs unlink/reclaim logic:
+# flock is released by the kernel when the owning wrapper exits, including after crashes.
+if [ "${JWH_RUNNER_LOCKED:-0}" != "1" ]; then
+  LOCK_BUSY_RC=75
+  set +e
+  flock -n -E "$LOCK_BUSY_RC" "$RUNNER_LOCK" env JWH_RUNNER_LOCKED=1 bash "$0" "$@"
+  rc=$?
+  set -e
+  if [ "$rc" -eq "$LOCK_BUSY_RC" ]; then
+    owner=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
+    echo "Codex runner already active${owner:+: pid $owner}" >&2
+    exit 2
   fi
-  owner=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
-  if pid_alive "$owner"; then
-    echo "Codex runner already active: pid $owner" >&2
-    return 2
-  fi
-  # A dead/corrupt owner is stale. Remove it and race once more through atomic acquisition.
-  rm -f "$RUNNER_LOCK"
-  if python3 bin/pid-lock.py acquire "$RUNNER_LOCK" "$$"; then
-    return 0
-  fi
-  owner=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
-  echo "Codex runner lock was acquired concurrently${owner:+ by pid $owner}" >&2
-  return 2
-}
-
-acquire_runner_lock || exit $?
+  exit "$rc"
+fi
+printf '%s\n' "$$" > "$RUNNER_LOCK"
 rm -f "$CHILD_PID_FILE"
 
 process_pid=""
@@ -59,7 +56,8 @@ cleanup() {
     pid_alive "$child_pid" && kill -9 "$child_pid" 2>/dev/null || true
   fi
   rm -f "$CHILD_PID_FILE"
-  python3 bin/pid-lock.py release "$RUNNER_LOCK" "$$" >/dev/null 2>&1 || true
+  owner=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
+  [ "$owner" = "$$" ] && : > "$RUNNER_LOCK"
   exit "$rc"
 }
 trap cleanup EXIT
