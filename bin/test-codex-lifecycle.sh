@@ -6,8 +6,8 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/jwh-lifecycle.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
 mkdir -p "$TMP/bin" "$TMP/fakebin"
-cp "$ROOT/bin/run-codex.sh" "$TMP/bin/run-codex.sh"
-chmod +x "$TMP/bin/run-codex.sh"
+for f in run-codex.sh codex-process.py pid-lock.py; do cp "$ROOT/bin/$f" "$TMP/bin/$f"; done
+chmod +x "$TMP/bin/"*
 TRACE="$TMP/fake-codex.args"
 
 cat > "$TMP/fakebin/codex" <<'FAKE'
@@ -17,7 +17,11 @@ if [ "${1:-}" = "--version" ]; then
   echo "codex-cli fake-0.1"
   exit 0
 fi
-printf '%s\n' "$*" >> "$FAKE_CODEX_TRACE"
+{
+  printf 'CALL'
+  for arg in "$@"; do printf ' %q' "$arg"; done
+  printf '\n'
+} >> "$FAKE_CODEX_TRACE"
 last=""
 prev=""
 for arg in "$@"; do
@@ -41,12 +45,13 @@ export FAKE_CODEX_TRACE="$TRACE"
   cd "$TMP"
   bash bin/run-codex.sh >/dev/null
   [ "$(tr -d '[:space:]' < .harness/codex-session-id)" = "fixture-thread-123" ]
-  sleep 1
+  # Intentionally run again immediately: log names must remain collision-resistant within one second.
   bash bin/run-codex.sh >/dev/null
   python3 - <<'PY'
 import glob, json
 logs=sorted(glob.glob('.harness/logs/codex-*.jsonl'))
-assert len(logs) >= 2, logs
+assert len(logs) == 2, logs
+assert logs[0] != logs[1]
 for path in logs:
     with open(path, encoding='utf-8') as f:
         for line in f:
@@ -56,6 +61,7 @@ with open('.harness/last-run.json', encoding='utf-8') as f:
 assert last['mode'] == 'resume', last
 assert last['session_id'] == 'fixture-thread-123', last
 assert last['exit_code'] == 0, last
+assert last['terminal_event'] == 'turn.completed', last
 PY
 )
 
@@ -63,4 +69,4 @@ lines=$(wc -l < "$TRACE" | tr -d ' ')
 [ "$lines" -eq 2 ] || { echo "expected 2 fake Codex invocations, got $lines" >&2; exit 1; }
 sed -n '2p' "$TRACE" | grep -q 'resume fixture-thread-123'
 
-echo "Codex lifecycle test passed: fresh thread persisted and exact thread resumed"
+echo "Codex lifecycle test passed: exact thread persisted/resumed and logs remained distinct"

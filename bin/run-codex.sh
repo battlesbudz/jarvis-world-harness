@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Codex-first runner for Jarvis World Harness.
-# Persists the Codex thread id so repeated invocations continue the same milestone.
-# H0/H1 are intentionally headless; Unreal/MCP remains a separate lane.
+# Persists the Codex thread id while events stream so restarts keep long-horizon context.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -15,34 +14,60 @@ SESSION_FILE=.harness/codex-session-id
 LAST_RUN=.harness/last-run.json
 LAST_MESSAGE=.harness/last-message.md
 
-pid_alive() {
-  [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null
+pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+
+acquire_runner_lock() {
+  if python3 bin/pid-lock.py acquire "$RUNNER_LOCK" "$$"; then
+    return 0
+  fi
+  owner=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
+  if pid_alive "$owner"; then
+    echo "Codex runner already active: pid $owner" >&2
+    return 2
+  fi
+  # A dead/corrupt owner is stale. Remove it and race once more through atomic acquisition.
+  rm -f "$RUNNER_LOCK"
+  if python3 bin/pid-lock.py acquire "$RUNNER_LOCK" "$$"; then
+    return 0
+  fi
+  owner=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
+  echo "Codex runner lock was acquired concurrently${owner:+ by pid $owner}" >&2
+  return 2
 }
 
-if [ -s "$RUNNER_LOCK" ] && pid_alive "$(cat "$RUNNER_LOCK" 2>/dev/null)"; then
-  echo "Codex runner already active: pid $(cat "$RUNNER_LOCK")" >&2
-  exit 2
-fi
-rm -f "$RUNNER_LOCK" "$CHILD_PID_FILE"
-echo $$ > "$RUNNER_LOCK"
+acquire_runner_lock || exit $?
+rm -f "$CHILD_PID_FILE"
 
-child_pid=""
+process_pid=""
 cleanup() {
   rc=$?
-  if [ -n "${child_pid:-}" ] && pid_alive "$child_pid"; then
+  trap - EXIT INT TERM HUP
+  if [ -n "${process_pid:-}" ] && pid_alive "$process_pid"; then
+    kill "$process_pid" 2>/dev/null || true
+    for _ in 1 2 3 4 5; do
+      sleep 1
+      pid_alive "$process_pid" || break
+    done
+    pid_alive "$process_pid" && kill -9 "$process_pid" 2>/dev/null || true
+  fi
+  [ -n "${process_pid:-}" ] && wait "$process_pid" 2>/dev/null || true
+
+  child_pid=$(cat "$CHILD_PID_FILE" 2>/dev/null || true)
+  if pid_alive "$child_pid"; then
     kill "$child_pid" 2>/dev/null || true
     sleep 1
     pid_alive "$child_pid" && kill -9 "$child_pid" 2>/dev/null || true
   fi
-  rm -f "$RUNNER_LOCK" "$CHILD_PID_FILE"
-  return "$rc"
+  rm -f "$CHILD_PID_FILE"
+  python3 bin/pid-lock.py release "$RUNNER_LOCK" "$$" >/dev/null 2>&1 || true
+  exit "$rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
-STAMP=$(date +%Y%m%d-%H%M%S)
-LOG=".harness/logs/codex-$STAMP.jsonl"
-ERRLOG=".harness/logs/codex-$STAMP.stderr.log"
+RUN_ID="$(date +%Y%m%d-%H%M%S)-$$-${RANDOM:-0}"
+LOG=".harness/logs/codex-$RUN_ID.jsonl"
+ERRLOG=".harness/logs/codex-$RUN_ID.stderr.log"
 STARTED_AT=$(date +%s)
 SANDBOX="${CODEX_SANDBOX:-workspace-write}"
 
@@ -79,14 +104,17 @@ fi
 
 mode="fresh"
 session_id=""
-if [ "${FRESH:-0}" != "1" ] && [ -s "$SESSION_FILE" ]; then
+if [ "${FRESH:-0}" = "1" ]; then
+  rm -f "$SESSION_FILE"
+elif [ -s "$SESSION_FILE" ]; then
   session_id="$(tr -d '[:space:]' < "$SESSION_FILE")"
   if [ -n "$session_id" ]; then
     mode="resume"
-    CMD+=(resume "$session_id" "$CONTINUE_PROMPT")
-  else
-    CMD+=("$BASE_PROMPT")
   fi
+fi
+
+if [ "$mode" = "resume" ]; then
+  CMD+=(resume "$session_id" "$CONTINUE_PROMPT")
 else
   CMD+=("$BASE_PROMPT")
 fi
@@ -94,36 +122,23 @@ fi
 printf '%s\n' "$(codex --version 2>/dev/null || true)" > .harness/codex-version.txt
 echo "starting Codex ($mode, sandbox=$SANDBOX); structured log: $LOG"
 
-# Keep stdout as valid JSONL. Stderr is captured separately so diagnostics never corrupt the event stream.
+# The Python process wrapper owns the Codex child and does not return until both stdout/stderr
+# consumers are drained. It persists thread.started immediately while streaming JSONL.
 set +e
-"${CMD[@]}" > >(tee "$LOG") 2> >(tee "$ERRLOG" >&2) &
-child_pid=$!
-echo "$child_pid" > "$CHILD_PID_FILE"
-wait "$child_pid"
+python3 bin/codex-process.py \
+  --log "$LOG" \
+  --errlog "$ERRLOG" \
+  --session-file "$SESSION_FILE" \
+  --child-pid-file "$CHILD_PID_FILE" \
+  -- "${CMD[@]}" &
+process_pid=$!
+wait "$process_pid"
 rc=$?
+process_pid=""
 set -e
 
-# A fresh exec emits thread.started. Persist it so the next run resumes the exact thread.
-new_session_id=$(python3 - "$LOG" <<'PY'
-import json, sys
-sid = ""
-try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        for line in f:
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") == "thread.started" and event.get("thread_id"):
-                sid = str(event["thread_id"])
-except FileNotFoundError:
-    pass
-print(sid)
-PY
-)
-if [ -n "$new_session_id" ]; then
-  printf '%s\n' "$new_session_id" > "$SESSION_FILE"
-  session_id="$new_session_id"
+if [ -s "$SESSION_FILE" ]; then
+  session_id="$(tr -d '[:space:]' < "$SESSION_FILE")"
 fi
 
 terminal_event=$(python3 - "$LOG" <<'PY'
@@ -146,21 +161,33 @@ PY
 
 ENDED_AT=$(date +%s)
 python3 - "$LAST_RUN" "$STARTED_AT" "$ENDED_AT" "$rc" "$LOG" "$ERRLOG" "$mode" "${session_id:-}" "${terminal_event:-}" <<'PY'
-import json, sys
+import json, os, sys, tempfile
+from pathlib import Path
 path, started, ended, rc, log, errlog, mode, sid, terminal = sys.argv[1:]
-with open(path, "w", encoding="utf-8") as f:
-    json.dump({
-        "started_at_epoch": int(started),
-        "ended_at_epoch": int(ended),
-        "duration_seconds": int(ended) - int(started),
-        "exit_code": int(rc),
-        "event_log": log,
-        "stderr_log": errlog,
-        "mode": mode,
-        "session_id": sid or None,
-        "terminal_event": terminal or None,
-    }, f, indent=2)
-    f.write("\n")
+p = Path(path)
+p.parent.mkdir(parents=True, exist_ok=True)
+payload = {
+    "started_at_epoch": int(started),
+    "ended_at_epoch": int(ended),
+    "duration_seconds": int(ended) - int(started),
+    "exit_code": int(rc),
+    "event_log": log,
+    "stderr_log": errlog,
+    "mode": mode,
+    "session_id": sid or None,
+    "terminal_event": terminal or None,
+}
+fd, tmp_name = tempfile.mkstemp(prefix=p.name + ".tmp.", dir=p.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_name, p)
+finally:
+    try: os.unlink(tmp_name)
+    except FileNotFoundError: pass
 PY
 
 exit "$rc"
