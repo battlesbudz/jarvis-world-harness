@@ -30,14 +30,22 @@ PY
 
 grep -q -- '--sandbox "$SANDBOX"' bin/run-codex.sh
 grep -q 'resume "$session_id"' bin/run-codex.sh
-grep -q 'flock -n' bin/run-codex.sh
+grep -q 'CONTROL_LOCK=.harness/codex-control.lock' bin/run-codex.sh
+grep -q 'flock -n 8' bin/run-codex.sh
 grep -q 'codex-process.py' bin/run-codex.sh
-grep -q 'flock -n' bin/supervise-codex.sh
-grep -q 'flock -n' bin/restart-codex.sh
-grep -q 'codex-supervisor.pause' bin/supervise-codex.sh
-grep -q 'A manual restart can create PAUSE' bin/supervise-codex.sh
-grep -q 'BACKOFF_MAX' bin/supervise-codex.sh
+
+grep -q 'CONTROL_LOCK=.harness/codex-control.lock' bin/supervise-codex.sh
+grep -q 'acquire_control_and_runner' bin/supervise-codex.sh
+grep -q 'JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1' bin/supervise-codex.sh
 grep -q 'milestone-gate.py' bin/supervise-codex.sh
+grep -q 'BACKOFF_MAX' bin/supervise-codex.sh
+
+grep -q 'CONTROL_LOCK=.harness/codex-control.lock' bin/restart-codex.sh
+grep -q 'flock -w 10 8' bin/restart-codex.sh
+grep -q 'JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1' bin/restart-codex.sh
+
+grep -q 'lock_held "$RUNNER_LOCK"' bin/health-codex.sh
 grep -q 'MAX_EVENT_AGE_MIN' bin/health-codex.sh
+! grep -q 'pid-lock.py' bin/test-codex-lifecycle.sh
 
 echo "H0 static harness checks passed"
