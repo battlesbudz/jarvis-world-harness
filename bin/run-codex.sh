@@ -9,6 +9,7 @@ command -v python3 >/dev/null || { echo "python3 not found on PATH" >&2; exit 12
 command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
 
 mkdir -p .harness/logs
+CONTROL_LOCK=.harness/codex-control.lock
 RUNNER_LOCK=.harness/codex-runner.lock
 CHILD_PID_FILE=.harness/codex-child.pid
 SESSION_FILE=.harness/codex-session-id
@@ -17,23 +18,40 @@ LAST_MESSAGE=.harness/last-message.md
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
-# Use an OS-backed lock on the PID file itself. A stale PID never needs unlink/reclaim logic:
-# flock is released by the kernel when the owning wrapper exits, including after crashes.
-if [ "${JWH_RUNNER_LOCKED:-0}" != "1" ]; then
-  LOCK_BUSY_RC=75
-  set +e
-  flock -n -E "$LOCK_BUSY_RC" "$RUNNER_LOCK" env JWH_RUNNER_LOCKED=1 bash "$0" "$@"
-  rc=$?
-  set -e
-  if [ "$rc" -eq "$LOCK_BUSY_RC" ]; then
+# Runner startup participates in the shared control handoff. The supervisor holds
+# this same lock while evaluating a milestone and deciding whether to launch; a
+# manual restart holds it while installing PAUSE and transferring runner ownership.
+if [ "${JWH_CONTROL_LOCK_HELD:-0}" = "1" ]; then
+  { true >&9; } 2>/dev/null || { echo "inherited control lock fd is missing" >&2; exit 2; }
+else
+  exec 9>"$CONTROL_LOCK"
+  flock 9
+fi
+
+# The runner kernel lock, not PID text in the file, is authoritative.
+if [ "${JWH_RUNNER_LOCK_HELD:-0}" = "1" ]; then
+  { true >&8; } 2>/dev/null || { echo "inherited runner lock fd is missing" >&2; exit 2; }
+else
+  exec 8<>"$RUNNER_LOCK"
+  if ! flock -n 8; then
     owner=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
     echo "Codex runner already active${owner:+: pid $owner}" >&2
+    flock -u 9 2>/dev/null || true
+    exec 9>&- 2>/dev/null || true
+    exec 8>&- 2>/dev/null || true
     exit 2
   fi
-  exit "$rc"
 fi
+
+# Under the kernel lock, PID text is safe as metadata for diagnostics/restart.
+: > "$RUNNER_LOCK"
 printf '%s\n' "$$" > "$RUNNER_LOCK"
 rm -f "$CHILD_PID_FILE"
+
+# Startup handoff is complete. Keep fd 8 for the whole run, but release fd 9 so
+# restart/control operations can proceed while Codex is working.
+flock -u 9 2>/dev/null || true
+exec 9>&- 2>/dev/null || true
 
 process_pid=""
 cleanup() {
@@ -56,8 +74,9 @@ cleanup() {
     pid_alive "$child_pid" && kill -9 "$child_pid" 2>/dev/null || true
   fi
   rm -f "$CHILD_PID_FILE"
-  owner=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
-  [ "$owner" = "$$" ] && : > "$RUNNER_LOCK"
+  : > "$RUNNER_LOCK" 2>/dev/null || true
+  flock -u 8 2>/dev/null || true
+  exec 8>&- 2>/dev/null || true
   exit "$rc"
 }
 trap cleanup EXIT
