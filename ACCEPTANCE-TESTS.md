@@ -4,9 +4,15 @@
 
 - [ ] A fresh agent can identify the protected core laws and refuses to modify them as an implementation shortcut.
 - [ ] A fresh agent can identify the currently authorized milestone without reading a giant monolithic prompt.
-- [ ] Codex runner creates a structured session/event log.
-- [ ] Health probe fails when no Codex work has produced a recent event/progress artifact.
-- [ ] Health probe does not equate a merely-running process with progress.
+- [ ] Codex runner uses an explicit `workspace-write` sandbox by default while allowing a local override.
+- [ ] Codex runner creates a structured JSONL session/event log without mixing stderr into the event stream.
+- [ ] Codex runner persists the `thread.started` session id and resumes that exact session on later invocations.
+- [ ] A clean Codex turn does not automatically mean the milestone is complete; the supervisor may resume the same thread.
+- [ ] Supervisor enforces one active supervisor/runner, supports pause and stop markers, and exponentially backs off after short/failed runs.
+- [ ] Manual restart pauses the supervisor, terminates the old runner/child, and starts exactly one replacement.
+- [ ] Health probe can detect a live Codex process whose event stream or progress artifact has gone stale.
+- [ ] Runtime logs, PIDs, thread IDs, and last-run metadata are stored under gitignored `.harness/`.
+- [ ] `bin/check-h0.sh` passes static document and shell-syntax checks.
 - [ ] Unreal MCP setup remains separable from headless simulation work.
 - [ ] Upstream AAABench MIT license and attribution remain present.
 - [ ] H1 Text Simulator specification exists before H0 closes.

@@ -2,7 +2,11 @@
 
 Jarvis World Harness is a Codex-first adaptation layer for [AAABench](https://github.com/ukanwat/aaabench), an MIT-licensed long-horizon autonomous Unreal Engine harness.
 
-This repository preserves AAABench's Unreal/MCP/VibeUE control surface, unattended supervision, visual QA philosophy, and production knowledge while replacing the benchmark demand with the Jarvis World OS product specification and milestone/evaluation loop.
+This repository preserves AAABench's Unreal/MCP/VibeUE control surface, unattended supervision lessons, visual QA philosophy, and production knowledge while replacing the benchmark demand with the Jarvis World OS product specification and milestone/evaluation loop.
+
+## Current scope
+
+**This repository is the development harness, not Jarvis World OS itself.** H0 builds the machinery that will later let Codex implement and verify Jarvis World OS milestone by milestone.
 
 ## North star
 
@@ -12,7 +16,7 @@ The game renderer and moment-to-moment gameplay live in Unreal Engine. Jarvis Wo
 
 ## Development sequence
 
-1. **Harness foundation** — protect design laws, establish Codex runtime, logging, progress, evaluation, and recovery.
+1. **Harness foundation** — protect design laws, establish Codex runtime, logging, progress, evaluation, recovery, and resumable long-horizon execution.
 2. **Text simulator** — prove the living-world rules without graphics.
 3. **Engine prototype** — one small Albion village, player movement, simple combat, System UI, Thinker/Non-Thinker behavior.
 4. **Awakening prototype** — one Non-Thinker can awaken through sustained meaningful interaction.
@@ -39,6 +43,50 @@ Unreal Engine <---- validated action boundary ----> Jarvis World OS runtime
 
 The World OS must never have unrestricted mutation power over Unreal. It proposes legal world actions; the engine/world service validates and applies them.
 
+## Codex lifecycle
+
+H0 uses the stable `codex exec` automation surface with JSONL events and persisted session resume.
+
+Start or resume one Codex turn:
+
+```bash
+./bin/run-codex.sh
+```
+
+Run continuously, resuming the same persisted thread after each turn:
+
+```bash
+nohup ./bin/supervise-codex.sh >/dev/null 2>&1 &
+```
+
+Check whether the harness is actually progressing:
+
+```bash
+./bin/health-codex.sh
+```
+
+Safely restart without racing the supervisor:
+
+```bash
+./bin/restart-codex.sh
+```
+
+Optionally pass a one-time restart note:
+
+```bash
+./bin/restart-codex.sh RESUME-NOTE.md
+```
+
+Run the static H0 harness checks:
+
+```bash
+./bin/check-h0.sh
+```
+
+To pause automatic relaunches, create `.harness/codex-supervisor.pause`. To stop the supervisor cleanly, create `.harness/STOP`. Remove the marker before starting again.
+
+Runtime state, logs, PIDs, thread IDs, and last-run metadata live under `.harness/` and are intentionally gitignored.
+
 ## Important files
 
 - `AGENTS.md` — Codex operating contract.
@@ -48,9 +96,12 @@ The World OS must never have unrestricted mutation power over Unreal. It propose
 - `ACCEPTANCE-TESTS.md` — evidence required before advancing.
 - `HARNESS-RULES.md` — operator/agent boundaries.
 - `docs/ARCHITECTURE.md` — intended split between Unreal and World OS.
-- `bin/run-codex.sh` — first-pass Codex runner.
+- `bin/run-codex.sh` — resumable Codex runner with structured events.
+- `bin/supervise-codex.sh` — single-instance unattended supervisor with backoff.
+- `bin/restart-codex.sh` — race-safe manual restart.
 - `bin/health-codex.sh` — progress-oriented health probe.
+- `bin/check-h0.sh` — static H0 harness checks.
 
 ## AAABench relationship
 
-This is not a claim of independent origin. AAABench provides the upstream Unreal harness concepts and substantial implementation adapted here. The upstream MIT license and attribution are preserved in `LICENSE` and `UPSTREAM.md`.
+This is not a claim of independent origin. AAABench provides the upstream Unreal harness concepts and substantial implementation adapted here. The upstream MIT license and attribution are preserved in `LICENSE`, `LICENSE-UPSTREAM-AAABENCH`, and `UPSTREAM.md`.

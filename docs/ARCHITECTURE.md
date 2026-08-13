@@ -66,3 +66,17 @@ AAABench MCP/VibeUE control, PIE, viewport capture, Blueprint/asset authoring, p
 ### Lane C — evaluation
 
 Milestone-specific tests collect evidence from A and B. No milestone passes solely because the agent says it passed.
+
+## Harness lifecycle
+
+H0 deliberately keeps Codex orchestration separate from the game implementation.
+
+`bin/run-codex.sh` owns one Codex turn. It records JSONL events, captures stderr separately, persists the Codex thread id, and resumes the same thread on subsequent runs.
+
+`bin/supervise-codex.sh` is the outer watchdog. It guarantees one supervisor, avoids racing an already-live runner, retries clean stops on the same thread, and exponentially backs off after short or failed runs.
+
+`bin/restart-codex.sh` is the operator-safe restart path. It pauses the supervisor before terminating the runner/child and releases the pause only after one replacement has acquired the runner lock.
+
+`bin/health-codex.sh` treats process existence, recent Codex events, and recent `PROGRESS.md` updates as separate signals. A process that exists but has stopped producing events/progress is unhealthy.
+
+Runtime lifecycle state belongs under `.harness/` and is not source-of-truth product state.
