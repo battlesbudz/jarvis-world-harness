@@ -2,20 +2,9 @@
   "milestone": "H0",
   "description": "Harness foundation is complete only when structure, Codex lifecycle, and control-plane behavior pass executable checks.",
   "checks": [
-    {
-      "id": "h0-static",
-      "command": ["bash", "bin/check-h0.sh"],
-      "timeout_seconds": 60
-    },
-    {
-      "id": "codex-lifecycle",
-      "command": ["bash", "bin/test-codex-lifecycle.sh"],
-      "timeout_seconds": 120
-    },
-    {
-      "id": "harness-control",
-      "command": ["bash", "bin/test-harness-control.sh"],
-      "timeout_seconds": 180
-    }
+    {"id":"h0-static","command":["bash","bin/check-h0.sh"],"timeout_seconds":60},
+    {"id":"codex-lifecycle","command":["bash","bin/test-codex-lifecycle.sh"],"timeout_seconds":120},
+    {"id":"harness-control","command":["bash","bin/test-harness-control.sh"],"timeout_seconds":180},
+    {"id":"lock-races","command":["bash","bin/test-lock-races.sh"],"timeout_seconds":120}
   ]
 }
