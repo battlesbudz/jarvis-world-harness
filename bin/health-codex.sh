@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
 # Progress-oriented Codex health probe.
-# Process existence is not progress: this checks the child, JSONL events, and progress artifacts.
+# Kernel locks, not PID-file text, determine whether runner/supervisor are live.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
+mkdir -p .harness/logs
+RUNNER_LOCK=.harness/codex-runner.lock
+SUPERVISOR_LOCK=.harness/codex-supervisor.lock
 
 bad=0
 ok() { echo "  OK       $*"; }
@@ -10,6 +15,17 @@ note() { echo "  NOTE     $*"; }
 problem() { echo "  PROBLEM  $*"; bad=1; }
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+lock_held() {
+  path="$1"
+  exec 5<>"$path"
+  if flock -n 5; then
+    flock -u 5 2>/dev/null || true
+    exec 5>&- 2>/dev/null || true
+    return 1
+  fi
+  exec 5>&- 2>/dev/null || true
+  return 0
+}
 mtime() {
   stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
 }
@@ -17,28 +33,31 @@ age_minutes() {
   echo $(( ( $(date +%s) - $(mtime "$1") ) / 60 ))
 }
 
-runner_pid=$(cat .harness/codex-runner.lock 2>/dev/null || true)
+runner_pid=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
 child_pid=$(cat .harness/codex-child.pid 2>/dev/null || true)
-supervisor_pid=$(cat .harness/codex-supervisor.lock 2>/dev/null || true)
+supervisor_pid=$(cat "$SUPERVISOR_LOCK" 2>/dev/null || true)
 
 runner_live=0
 child_live=0
 supervisor_live=0
-pid_alive "$runner_pid" && runner_live=1
-pid_alive "$child_pid" && child_live=1
-pid_alive "$supervisor_pid" && supervisor_live=1
+lock_held "$RUNNER_LOCK" && runner_live=1
+lock_held "$SUPERVISOR_LOCK" && supervisor_live=1
+[ "$runner_live" -eq 1 ] && pid_alive "$child_pid" && child_live=1
 
 if [ "$runner_live" -eq 1 ]; then
-  ok "Codex runner active (pid $runner_pid)"
-  [ "$child_live" -eq 1 ] && ok "Codex child active (pid $child_pid)" || problem "runner is active but Codex child is not"
+  ok "Codex runner kernel lock is held${runner_pid:+ (pid metadata $runner_pid)}"
+  [ "$child_live" -eq 1 ] && ok "Codex child active (pid $child_pid)" || problem "runner lock is held but Codex child is not live"
 else
   note "Codex runner is idle"
+  [ -n "$runner_pid" ] && note "runner PID metadata is stale/non-authoritative: $runner_pid"
 fi
 
 if [ "$supervisor_live" -eq 1 ]; then
-  ok "Codex supervisor active (pid $supervisor_pid)"
+  ok "Codex supervisor kernel lock is held${supervisor_pid:+ (pid metadata $supervisor_pid)}"
   if [ ! -e .harness/codex-supervisor.pause ] && [ ! -e .harness/STOP ] && [ "$runner_live" -eq 0 ]; then
-    problem "supervisor is active but no runner is alive"
+    # The supervisor may be evaluating a gate while intentionally holding the runner lock,
+    # so runner_live normally becomes true during that critical section.
+    problem "supervisor is active but no runner/gate ownership is visible"
   fi
 else
   note "supervisor not running (manual mode)"
