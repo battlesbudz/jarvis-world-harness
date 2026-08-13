@@ -5,8 +5,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/jwh-lifecycle.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
+command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
 mkdir -p "$TMP/bin" "$TMP/fakebin"
-for f in run-codex.sh codex-process.py pid-lock.py; do cp "$ROOT/bin/$f" "$TMP/bin/$f"; done
+for f in run-codex.sh codex-process.py; do cp "$ROOT/bin/$f" "$TMP/bin/$f"; done
 chmod +x "$TMP/bin/"*
 TRACE="$TMP/fake-codex.args"
 
