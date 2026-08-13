@@ -61,14 +61,16 @@ def main() -> int:
     atomic_write(child_pid_path, f"{proc.pid}\n")
 
     interrupted = {"signal": None}
+    escalation_timer = {"timer": None}
 
     def signal_tree(signum: int) -> None:
-        if proc.poll() is not None:
-            return
         try:
             if os.name == "posix":
+                # The process-group id remains proc.pid even after the original Codex
+                # leader exits. Descendants can still own inherited stdout/stderr pipes,
+                # so escalation must target the group independently of proc.poll().
                 os.killpg(proc.pid, signum)
-            else:
+            elif proc.poll() is None:
                 proc.terminate() if signum == signal.SIGTERM else proc.kill()
         except (ProcessLookupError, PermissionError):
             pass
@@ -77,8 +79,12 @@ def main() -> int:
         interrupted["signal"] = signum
         signal_tree(signal.SIGTERM)
         # A stuck descendant must not keep stdout/stderr pipes open forever during restart.
+        old_timer = escalation_timer["timer"]
+        if old_timer is not None:
+            old_timer.cancel()
         timer = threading.Timer(2.0, lambda: signal_tree(signal.SIGKILL))
         timer.daemon = True
+        escalation_timer["timer"] = timer
         timer.start()
 
     for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", signal.SIGTERM)):
@@ -120,6 +126,9 @@ def main() -> int:
     rc = proc.wait()
     out_thread.join()
     err_thread.join()
+    timer = escalation_timer["timer"]
+    if timer is not None:
+        timer.cancel()
 
     # Remove only our own child PID reference so the shell never acts on a recycled PID.
     try:
