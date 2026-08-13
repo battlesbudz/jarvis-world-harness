@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Keep exactly one Codex runner alive until explicitly paused/stopped.
-# Uses the persisted session id from run-codex.sh, so relaunches continue the same thread.
+# Keep exactly one Codex runner alive until the active milestone objectively passes,
+# or the operator explicitly pauses/stops the supervisor.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -11,6 +11,8 @@ PAUSE=.harness/codex-supervisor.pause
 STOP=.harness/STOP
 LOG=.harness/logs/codex-supervisor.log
 OUT=.harness/logs/codex-supervised-runner.out
+GATE_OUT=.harness/logs/milestone-gate.stdout.tmp
+GATE_ERR=.harness/logs/milestone-gate.stderr.tmp
 CHECK_S=${CHECK_S:-30}
 FAST_DEATH_S=${FAST_DEATH_S:-180}
 BACKOFF_MIN=${BACKOFF_MIN:-60}
@@ -22,13 +24,32 @@ runs=0
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 say() { echo "$(date '+%F %T')  $*" | tee -a "$LOG"; }
 
+milestone_passed() {
+  python3 bin/milestone-gate.py >"$GATE_OUT" 2>"$GATE_ERR"
+  gate_rc=$?
+  case "$gate_rc" in
+    0)
+      while IFS= read -r line; do say "gate: $line"; done < "$GATE_OUT"
+      return 0
+      ;;
+    1)
+      return 1
+      ;;
+    *)
+      say "milestone gate configuration/infrastructure error (rc=$gate_rc)"
+      [ -s "$GATE_ERR" ] && while IFS= read -r line; do say "gate error: $line"; done < "$GATE_ERR"
+      return 2
+      ;;
+  esac
+}
+
 if [ -s "$SUPERVISOR_LOCK" ] && pid_alive "$(cat "$SUPERVISOR_LOCK" 2>/dev/null)"; then
   echo "Codex supervisor already active: pid $(cat "$SUPERVISOR_LOCK")" >&2
   exit 2
 fi
 rm -f "$SUPERVISOR_LOCK"
 echo $$ > "$SUPERVISOR_LOCK"
-trap 'rm -f "$SUPERVISOR_LOCK"' EXIT
+trap 'rm -f "$SUPERVISOR_LOCK" "$GATE_OUT" "$GATE_ERR"' EXIT
 
 say "supervisor started (pid $$)"
 while true; do
@@ -41,11 +62,22 @@ while true; do
     continue
   fi
 
+  # Never run milestone evals against a worktree while Codex is actively editing it.
   rp=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
   if pid_alive "$rp"; then
     backoff=$BACKOFF_MIN
     sleep "$CHECK_S"
     continue
+  fi
+
+  milestone_passed
+  gate_rc=$?
+  if [ "$gate_rc" -eq 0 ]; then
+    say "active milestone objectively passed; supervisor exiting"
+    exit 0
+  elif [ "$gate_rc" -eq 2 ]; then
+    say "cannot safely continue without a valid milestone gate; supervisor exiting"
+    exit 2
   fi
 
   if [ "$MAX_RUNS" -gt 0 ] && [ "$runs" -ge "$MAX_RUNS" ]; then
@@ -64,13 +96,23 @@ while true; do
   [ -e "$STOP" ] && continue
   [ -e "$PAUSE" ] && continue
 
+  milestone_passed
+  gate_rc=$?
+  if [ "$gate_rc" -eq 0 ]; then
+    say "active milestone passed after run $runs; supervisor exiting"
+    exit 0
+  elif [ "$gate_rc" -eq 2 ]; then
+    say "milestone gate failed to evaluate safely; supervisor exiting"
+    exit 2
+  fi
+
   if [ "$rc" -ne 0 ] || [ "$dur" -lt "$FAST_DEATH_S" ]; then
     say "short/failed run; backing off ${backoff}s"
     sleep "$backoff"
     backoff=$(( backoff * 2 ))
     [ "$backoff" -gt "$BACKOFF_MAX" ] && backoff=$BACKOFF_MAX
   else
-    # A clean Codex turn is not proof the milestone is complete. Resume the same thread.
+    # Clean completion is not milestone completion; objective gate remains authoritative.
     backoff=$BACKOFF_MIN
     sleep 15
   fi
