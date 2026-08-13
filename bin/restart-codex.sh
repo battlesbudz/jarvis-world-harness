@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 command -v python3 >/dev/null || { echo "python3 not found on PATH" >&2; exit 127; }
+command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
 mkdir -p .harness/logs
 PAUSE=.harness/codex-supervisor.pause
 RUNNER_LOCK=.harness/codex-runner.lock
@@ -15,16 +16,20 @@ pause_created=0
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 
-acquire_restart_lock() {
-  if python3 bin/pid-lock.py acquire "$RESTART_LOCK" "$$"; then return 0; fi
-  owner=$(cat "$RESTART_LOCK" 2>/dev/null || true)
-  if pid_alive "$owner"; then
-    echo "Another Codex restart is already active: pid $owner" >&2
-    return 2
+if [ "${JWH_RESTART_LOCKED:-0}" != "1" ]; then
+  LOCK_BUSY_RC=75
+  set +e
+  flock -n -E "$LOCK_BUSY_RC" "$RESTART_LOCK" env JWH_RESTART_LOCKED=1 bash "$0" "$@"
+  rc=$?
+  set -e
+  if [ "$rc" -eq "$LOCK_BUSY_RC" ]; then
+    owner=$(cat "$RESTART_LOCK" 2>/dev/null || true)
+    echo "Another Codex restart is already active${owner:+: pid $owner}" >&2
+    exit 2
   fi
-  rm -f "$RESTART_LOCK"
-  python3 bin/pid-lock.py acquire "$RESTART_LOCK" "$$" || return 2
-}
+  exit "$rc"
+fi
+printf '%s\n' "$$" > "$RESTART_LOCK"
 
 stop_pid() {
   p="${1:-}"
@@ -43,12 +48,12 @@ stop_pid() {
   return 1
 }
 
-acquire_restart_lock || exit $?
 cleanup() {
   rc=$?
   trap - EXIT
   [ "$pause_created" -eq 1 ] && rm -f "$PAUSE"
-  python3 bin/pid-lock.py release "$RESTART_LOCK" "$$" >/dev/null 2>&1 || true
+  owner=$(cat "$RESTART_LOCK" 2>/dev/null || true)
+  [ "$owner" = "$$" ] && : > "$RESTART_LOCK"
   exit "$rc"
 }
 trap cleanup EXIT
@@ -62,17 +67,20 @@ echo "Codex supervisor paused"
 runner_pid=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
 child_pid=$(cat "$CHILD_PID_FILE" 2>/dev/null || true)
 
-# Stop the runner first; its signal/exit cleanup drains event streams before releasing its lock.
+# Stop the runner first; its signal/exit cleanup drains event streams before its
+# kernel lock is released.
 stop_pid "$runner_pid"
 # Belt-and-suspenders cleanup if the runner died before its wrapper completed.
 stop_pid "$child_pid"
 
+# Never unlink the runner lock file: flock owns that inode. A stale PID is harmless
+# after the kernel lock is free, and the replacement overwrites it under the lock.
 owner=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
 if pid_alive "$owner"; then
   echo "refusing restart: runner lock is now owned by live pid $owner" >&2
   exit 2
 fi
-rm -f "$RUNNER_LOCK" "$CHILD_PID_FILE"
+rm -f "$CHILD_PID_FILE"
 
 OUT=".harness/logs/manual-restart-$(date +%Y%m%d-%H%M%S)-$$-${RANDOM:-0}.out"
 if [ -n "$NOTE" ] && [ -f "$NOTE" ]; then
