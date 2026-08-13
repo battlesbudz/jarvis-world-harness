@@ -67,22 +67,6 @@ Prefer deterministic tests for simulation rules. For visual/gameplay rules, capt
 
 Never claim an awakening, relationship consequence, autonomous crisis resolution, or persistence behavior without a reproducible trace showing why it happened.
 
-## Pull request review gate
-
-Every pull request must receive an OpenAI Codex GitHub review before merge.
-
-Required flow:
-
-1. Open or update the PR and run the relevant local/CI verification.
-2. Trigger `@codex review` on the PR unless automatic Codex review has already started.
-3. Confirm Codex picked up the request (normally visible as the Codex reaction/review activity on GitHub).
-4. Read every Codex review comment and review submission.
-5. Fix actionable findings or document why a finding is not applicable.
-6. If the PR changes after Codex feedback, trigger `@codex review` again.
-7. Do not merge while actionable Codex review findings remain unresolved.
-
-Codex review is an additional gate, not a substitute for tests, acceptance evidence, or human judgment.
-
 ## Safety / repo integrity
 
 Do not rewrite protected design documents unless the milestone explicitly authorizes design work.
