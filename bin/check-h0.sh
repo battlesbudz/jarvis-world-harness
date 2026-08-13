@@ -10,12 +10,13 @@ required=(
   bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh
   bin/milestone-gate.py bin/codex-process.py
   bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh
+  bin/test-gate-timeout-tree.sh
 )
 for f in "${required[@]}"; do
   [ -f "$f" ] || { echo "missing: $f" >&2; exit 1; }
 done
 
-for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh; do
+for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh bin/test-gate-timeout-tree.sh; do
   bash -n "$f"
 done
 python3 -m py_compile bin/milestone-gate.py bin/codex-process.py
@@ -25,7 +26,7 @@ p='milestones/H0/gate.json'
 d=json.load(open(p, encoding='utf-8'))
 assert d.get('milestone') == 'H0'
 ids={c.get('id') for c in d.get('checks', [])}
-assert {'h0-static','codex-lifecycle','harness-control','lock-races'} <= ids, ids
+assert {'h0-static','codex-lifecycle','harness-control','lock-races','gate-timeout-tree'} <= ids, ids
 PY
 
 grep -q -- '--sandbox "$SANDBOX"' bin/run-codex.sh
@@ -47,5 +48,9 @@ grep -q 'JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1' bin/restart-codex.sh
 grep -q 'lock_held "$RUNNER_LOCK"' bin/health-codex.sh
 grep -q 'MAX_EVENT_AGE_MIN' bin/health-codex.sh
 ! grep -q 'pid-lock.py' bin/test-codex-lifecycle.sh
+
+grep -q 'start_new_session' bin/milestone-gate.py
+grep -q 'os.killpg' bin/milestone-gate.py
+grep -q 'process tree terminated' bin/milestone-gate.py
 
 echo "H0 static harness checks passed"
