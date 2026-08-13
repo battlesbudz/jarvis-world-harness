@@ -1,0 +1,16 @@
+{
+  "milestone": "H0",
+  "description": "Harness foundation is complete only when static structure and Codex lifecycle behavior pass executable checks.",
+  "checks": [
+    {
+      "id": "h0-static",
+      "command": ["bash", "bin/check-h0.sh"],
+      "timeout_seconds": 60
+    },
+    {
+      "id": "codex-lifecycle",
+      "command": ["bash", "bin/test-codex-lifecycle.sh"],
+      "timeout_seconds": 120
+    }
+  ]
+}
