@@ -5,6 +5,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 command -v python3 >/dev/null || { echo "python3 not found on PATH" >&2; exit 127; }
+command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
 mkdir -p .harness/logs
 SUPERVISOR_LOCK=.harness/codex-supervisor.lock
 RUNNER_LOCK=.harness/codex-runner.lock
@@ -25,19 +26,20 @@ runs=0
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 say() { echo "$(date '+%F %T')  $*" | tee -a "$LOG"; }
 
-acquire_supervisor_lock() {
-  if python3 bin/pid-lock.py acquire "$SUPERVISOR_LOCK" "$$"; then return 0; fi
-  owner=$(cat "$SUPERVISOR_LOCK" 2>/dev/null || true)
-  if pid_alive "$owner"; then
-    echo "Codex supervisor already active: pid $owner" >&2
-    return 2
+# The kernel owns stale-lock recovery. Never unlink/reclaim a PID file based on a
+# liveness read, because that can delete a concurrently-acquired owner.
+if [ "${JWH_SUPERVISOR_LOCKED:-0}" != "1" ]; then
+  LOCK_BUSY_RC=75
+  flock -n -E "$LOCK_BUSY_RC" "$SUPERVISOR_LOCK" env JWH_SUPERVISOR_LOCKED=1 bash "$0" "$@"
+  rc=$?
+  if [ "$rc" -eq "$LOCK_BUSY_RC" ]; then
+    owner=$(cat "$SUPERVISOR_LOCK" 2>/dev/null || true)
+    echo "Codex supervisor already active${owner:+: pid $owner}" >&2
+    exit 2
   fi
-  rm -f "$SUPERVISOR_LOCK"
-  if python3 bin/pid-lock.py acquire "$SUPERVISOR_LOCK" "$$"; then return 0; fi
-  owner=$(cat "$SUPERVISOR_LOCK" 2>/dev/null || true)
-  echo "Codex supervisor lock was acquired concurrently${owner:+ by pid $owner}" >&2
-  return 2
-}
+  exit "$rc"
+fi
+printf '%s\n' "$$" > "$SUPERVISOR_LOCK"
 
 milestone_passed() {
   python3 bin/milestone-gate.py >"$GATE_OUT" 2>"$GATE_ERR"
@@ -56,11 +58,11 @@ milestone_passed() {
   esac
 }
 
-acquire_supervisor_lock || exit $?
 cleanup() {
   rc=$?
   trap - EXIT
-  python3 bin/pid-lock.py release "$SUPERVISOR_LOCK" "$$" >/dev/null 2>&1 || true
+  owner=$(cat "$SUPERVISOR_LOCK" 2>/dev/null || true)
+  [ "$owner" = "$$" ] && : > "$SUPERVISOR_LOCK"
   rm -f "$GATE_OUT" "$GATE_ERR"
   exit "$rc"
 }
@@ -98,6 +100,18 @@ while true; do
   if [ "$MAX_RUNS" -gt 0 ] && [ "$runs" -ge "$MAX_RUNS" ]; then
     say "MAX_RUNS=$MAX_RUNS reached; supervisor exiting"
     exit 0
+  fi
+
+  # A manual restart can create PAUSE while milestone_passed is running. Recheck
+  # immediately before launch so the supervisor cannot steal the runner lock from
+  # the replacement or discard its RESUME_NOTE_FILE.
+  if [ -e "$STOP" ]; then
+    say "STOP marker appeared after gate; supervisor exiting"
+    exit 0
+  fi
+  if [ -e "$PAUSE" ]; then
+    sleep "$CHECK_S"
+    continue
   fi
 
   runs=$((runs + 1))
