@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -50,6 +51,38 @@ def load_config(milestone: str) -> tuple[Path, list[dict]]:
     return config_path, checks
 
 
+def terminate_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 2.0) -> tuple[str, str]:
+    """Terminate a timed-out check and all descendants before returning.
+
+    The harness is POSIX-oriented (bash + flock), so each check is started in its own
+    session/process group. SIGTERM gives cooperative cleanup a chance; SIGKILL prevents
+    stubborn descendants from surviving after the supervisor releases the runner lock.
+    """
+    if proc.poll() is None:
+        try:
+            if os.name == "posix":
+                os.killpg(proc.pid, signal.SIGTERM)
+            else:
+                proc.terminate()
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    try:
+        stdout, stderr = proc.communicate(timeout=grace_seconds)
+        return stdout or "", stderr or ""
+    except subprocess.TimeoutExpired:
+        if proc.poll() is None:
+            try:
+                if os.name == "posix":
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+            except (ProcessLookupError, PermissionError):
+                pass
+        stdout, stderr = proc.communicate()
+        return stdout or "", stderr or ""
+
+
 def run_check(check: dict) -> dict:
     cid = str(check.get("id") or "unnamed")
     command = check.get("command")
@@ -67,16 +100,27 @@ def run_check(check: dict) -> dict:
 
     started = time.time()
     try:
-        proc = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        return {
-            "id": cid,
-            "passed": False,
-            "error": f"timeout after {timeout}s",
-            "duration_seconds": round(time.time() - started, 3),
-            "stdout": (e.stdout or "")[-12000:] if isinstance(e.stdout, str) else "",
-            "stderr": (e.stderr or "")[-12000:] if isinstance(e.stderr, str) else "",
+        popen_kwargs = {
+            "cwd": ROOT,
+            "text": True,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
         }
+        if os.name == "posix":
+            popen_kwargs["start_new_session"] = True
+        proc = subprocess.Popen(command, **popen_kwargs)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = terminate_process_tree(proc)
+            return {
+                "id": cid,
+                "passed": False,
+                "error": f"timeout after {timeout}s; process tree terminated",
+                "duration_seconds": round(time.time() - started, 3),
+                "stdout": stdout[-12000:],
+                "stderr": stderr[-12000:],
+            }
     except (FileNotFoundError, PermissionError, OSError) as e:
         raise GateConfigurationError(f"check {cid!r} could not execute {command[0]!r}: {e}") from e
 
@@ -85,8 +129,8 @@ def run_check(check: dict) -> dict:
         "passed": proc.returncode == 0,
         "exit_code": proc.returncode,
         "duration_seconds": round(time.time() - started, 3),
-        "stdout": proc.stdout[-12000:],
-        "stderr": proc.stderr[-12000:],
+        "stdout": (stdout or "")[-12000:],
+        "stderr": (stderr or "")[-12000:],
     }
 
 
