@@ -75,6 +75,15 @@ wait_lock_free() {
   return 1
 }
 
+wait_trace() {
+  pattern="$1"
+  for _ in $(seq 1 240); do
+    grep -q "$pattern" "$TRACE" 2>/dev/null && return 0
+    sleep 0.05
+  done
+  return 1
+}
+
 # 1) Runner lock: stale PID text must not matter. Eight simultaneous starts against
 # one unlocked inode must yield exactly one Codex owner because flock is authoritative.
 rm -rf .harness; mkdir -p .harness/logs
@@ -132,8 +141,7 @@ done
 [ "$(cat .harness/codex-session-id 2>/dev/null || true)" = "fixture-thread-123" ] || { echo "thread id was not persisted while streaming" >&2; exit 1; }
 FAKE_CODEX_SLEEP=5 bash bin/restart-codex.sh >/dev/null
 wait "$old_runner" 2>/dev/null || true
-sleep 0.2
-grep -q 'resume fixture-thread-123' "$TRACE" || { echo "manual restart did not resume persisted thread" >&2; exit 1; }
+wait_trace 'resume fixture-thread-123' || { echo "manual restart did not resume persisted thread" >&2; cat "$TRACE" >&2; exit 1; }
 touch .harness/STOP
 replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 [ -n "$replacement" ] && kill "$replacement" 2>/dev/null || true
@@ -212,7 +220,7 @@ wait "$manual_runner"
 rm -f .harness/STOP
 
 # 8) Restart handoff: beginning a restart while the supervisor is inside a gate must
-# preserve the requested note even if the supervisor launches a runner first.
+# preserve the requested note, including when the replacement must start a fresh thread.
 rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
 printf 'UNIQUE_RESTART_NOTE\n' > restart-note.txt
 MILESTONE_ID=TEST_GATE_RACE CHECK_S=0.1 BACKOFF_MIN=0 FAST_DEATH_S=999 bash bin/supervise-codex.sh > restart-race.out 2>&1 &
@@ -223,11 +231,7 @@ FAKE_CODEX_SLEEP=30 bash bin/restart-codex.sh restart-note.txt > restart-race-re
 sleep 0.2
 # Restart is blocked on the control lock while the gate is active; no Codex turn can be its replacement yet.
 touch .harness/test-gate-release
-for _ in $(seq 1 240); do
-  grep -q 'UNIQUE_RESTART_NOTE' "$TRACE" 2>/dev/null && break
-  sleep 0.05
-done
-grep -q 'UNIQUE_RESTART_NOTE' "$TRACE" || { echo "restart handoff lost RESUME_NOTE_FILE" >&2; cat restart-race-restart.out >&2; exit 1; }
+wait_trace 'UNIQUE_RESTART_NOTE' || { echo "restart handoff lost RESUME_NOTE_FILE" >&2; cat restart-race-restart.out >&2; exit 1; }
 wait "$restart_job"
 touch .harness/STOP
 current=$(cat .harness/codex-runner.lock 2>/dev/null || true)
