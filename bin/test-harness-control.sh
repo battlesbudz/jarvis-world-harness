@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Deterministic control-plane tests for atomic locks, restart continuity, health staleness, and gate errors.
+# Deterministic control-plane tests for kernel locks, restart continuity, health staleness, and gate errors.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/jwh-control.XXXXXX")
 cleanup_all() {
   set +e
   if [ -d "$TMP" ]; then
-    for f in "$TMP"/.harness/codex-runner.lock "$TMP"/.harness/codex-supervisor.lock; do
+    for f in "$TMP"/.harness/codex-runner.lock "$TMP"/.harness/codex-supervisor.lock "$TMP"/.harness/codex-restart.lock; do
       p=$(cat "$f" 2>/dev/null || true); [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
   fi
@@ -14,8 +14,9 @@ cleanup_all() {
 }
 trap cleanup_all EXIT
 
-mkdir -p "$TMP/bin" "$TMP/fakebin" "$TMP/spec" "$TMP/milestones/TEST_INCOMPLETE" "$TMP/milestones/TEST_BAD"
-for f in run-codex.sh codex-process.py pid-lock.py supervise-codex.sh restart-codex.sh health-codex.sh milestone-gate.py; do
+command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
+mkdir -p "$TMP/bin" "$TMP/fakebin" "$TMP/spec" "$TMP/milestones/TEST_INCOMPLETE" "$TMP/milestones/TEST_BAD" "$TMP/milestones/TEST_PAUSE_RACE"
+for f in run-codex.sh codex-process.py supervise-codex.sh restart-codex.sh health-codex.sh milestone-gate.py; do
   cp "$ROOT/bin/$f" "$TMP/bin/$f"
 done
 chmod +x "$TMP/bin/"*
@@ -28,6 +29,9 @@ cat > "$TMP/milestones/TEST_INCOMPLETE/gate.json" <<'JSON'
 JSON
 cat > "$TMP/milestones/TEST_BAD/gate.json" <<'JSON'
 {"milestone":"TEST_BAD","checks":[{"id":"missing-executable","command":["definitely-not-a-real-jwh-command"],"timeout_seconds":5}]}
+JSON
+cat > "$TMP/milestones/TEST_PAUSE_RACE/gate.json" <<'JSON'
+{"milestone":"TEST_PAUSE_RACE","checks":[{"id":"pause-window","command":["bash","-c","touch .harness/test-gate-entered; while [ ! -e .harness/test-gate-release ]; do sleep 0.05; done; exit 1"],"timeout_seconds":10}]}
 JSON
 TRACE="$TMP/fake-codex.args"
 cat > "$TMP/fakebin/codex" <<'FAKE'
@@ -61,8 +65,10 @@ export FAKE_CODEX_TRACE="$TRACE"
 
 cd "$TMP"
 
-# 1) Runner lock: eight simultaneous starts must yield exactly one Codex owner.
+# 1) Runner lock: stale PID text must not matter. Eight simultaneous starts against
+# one unlocked inode must yield exactly one Codex owner because flock is authoritative.
 rm -rf .harness; mkdir -p .harness/logs
+printf '%s\n' 99999999 > .harness/codex-runner.lock
 release_file="$TMP/release-runner"
 rm -f "$release_file" status.runner.*
 pids=()
@@ -86,8 +92,10 @@ zeros=$(grep -l '^0$' status.runner.* | wc -l | tr -d ' ')
 twos=$(grep -l '^2$' status.runner.* | wc -l | tr -d ' ')
 [ "$zeros" -eq 1 ] && [ "$twos" -eq 7 ] || { echo "runner lock results: success=$zeros rejected=$twos" >&2; exit 1; }
 
-# 2) Supervisor lock: one paused supervisor owns the lock; all concurrent contenders are rejected.
+# 2) Supervisor lock: stale PID text is overwritten by the one process that owns
+# the kernel lock; concurrent supervisors are rejected.
 rm -rf .harness; mkdir -p .harness/logs; touch .harness/codex-supervisor.pause
+printf '%s\n' 99999999 > .harness/codex-supervisor.lock
 rm -f status.supervisor.*
 sup_pids=()
 for i in $(seq 1 5); do
@@ -98,12 +106,13 @@ for i in $(seq 1 5); do
   ) &
   sup_pids+=("$!")
 done
-for _ in $(seq 1 100); do
-  [ -s .harness/codex-supervisor.lock ] && break
+owner=""
+for _ in $(seq 1 160); do
+  owner=$(cat .harness/codex-supervisor.lock 2>/dev/null || true)
+  [ -n "$owner" ] && [ "$owner" != "99999999" ] && break
   sleep 0.05
 done
-owner=$(cat .harness/codex-supervisor.lock 2>/dev/null || true)
-[ -n "$owner" ] || { echo "supervisor lock not acquired" >&2; exit 1; }
+[ -n "$owner" ] && [ "$owner" != "99999999" ] || { echo "supervisor did not replace stale PID text under flock" >&2; exit 1; }
 for _ in $(seq 1 100); do
   done_count=$(find . -maxdepth 1 -name 'status.supervisor.*' | wc -l | tr -d ' ')
   [ "$done_count" -ge 4 ] && break
@@ -129,7 +138,16 @@ sleep 0.2
 grep -q 'resume fixture-thread-123' "$TRACE" || { echo "manual restart did not resume persisted thread" >&2; exit 1; }
 replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 [ -n "$replacement" ] && kill "$replacement" 2>/dev/null || true
-for _ in $(seq 1 100); do [ ! -e .harness/codex-runner.lock ] && break; sleep 0.05; done
+lock_free=1
+for _ in $(seq 1 100); do
+  set +e
+  flock -n .harness/codex-runner.lock true >/dev/null 2>&1
+  lock_free=$?
+  set -e
+  [ "$lock_free" -eq 0 ] && break
+  sleep 0.05
+done
+[ "$lock_free" -eq 0 ] || { echo "replacement runner did not release kernel lock" >&2; exit 1; }
 
 # 4) Health: a live runner with a stale event log must fail health.
 rm -rf .harness; mkdir -p .harness/logs
@@ -160,4 +178,22 @@ bad_gate_rc=$?
 set -e
 [ "$bad_gate_rc" -eq 2 ] || { echo "bad gate returned $bad_gate_rc instead of 2" >&2; cat gate.err >&2; exit 1; }
 
-echo "Harness control test passed: atomic locks, restart continuity, stale health, and fail-closed gates"
+# 6) Pause race: if manual restart pauses the supervisor while milestone_passed
+# is still evaluating, the supervisor must recheck PAUSE before launching Codex.
+rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
+MILESTONE_ID=TEST_PAUSE_RACE CHECK_S=0.1 MAX_RUNS=1 bash bin/supervise-codex.sh > pause-race.out 2>&1 &
+pause_sup=$!
+for _ in $(seq 1 100); do
+  [ -e .harness/test-gate-entered ] && break
+  sleep 0.05
+done
+[ -e .harness/test-gate-entered ] || { echo "pause-race gate never started" >&2; cat pause-race.out >&2; exit 1; }
+touch .harness/codex-supervisor.pause
+touch .harness/test-gate-release
+sleep 0.3
+[ ! -s "$TRACE" ] || { echo "supervisor launched Codex after pause appeared during gate" >&2; cat "$TRACE" >&2; exit 1; }
+[ ! -s .harness/codex-runner.lock ] || { echo "runner PID appeared during paused launch window" >&2; exit 1; }
+touch .harness/STOP
+wait "$pause_sup"
+
+echo "Harness control test passed: kernel locks tolerate stale PID text, restart continuity holds, stale health fails, gates fail closed, and pause-race safety holds"
