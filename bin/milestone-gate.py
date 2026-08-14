@@ -51,6 +51,19 @@ def load_config(milestone: str) -> tuple[Path, list[dict]]:
     return config_path, checks
 
 
+def signal_process_tree(proc: subprocess.Popen[str], sig: signal.Signals) -> None:
+    """Signal the check's process group even after its original leader exits."""
+    try:
+        if os.name == "posix":
+            # The process group can outlive its leader. Do not gate this on poll(): a
+            # descendant may still own inherited stdout/stderr and edit the worktree.
+            os.killpg(proc.pid, sig)
+        elif proc.poll() is None:
+            proc.send_signal(sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def terminate_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 2.0) -> tuple[str, str]:
     """Terminate a timed-out check and all descendants before returning.
 
@@ -58,29 +71,33 @@ def terminate_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 2
     session/process group. SIGTERM gives cooperative cleanup a chance; SIGKILL prevents
     stubborn descendants from surviving after the supervisor releases the runner lock.
     """
-    if proc.poll() is None:
-        try:
-            if os.name == "posix":
-                os.killpg(proc.pid, signal.SIGTERM)
-            else:
-                proc.terminate()
-        except (ProcessLookupError, PermissionError):
-            pass
+    signal_process_tree(proc, signal.SIGTERM)
 
     try:
         stdout, stderr = proc.communicate(timeout=grace_seconds)
         return stdout or "", stderr or ""
     except subprocess.TimeoutExpired:
-        if proc.poll() is None:
-            try:
-                if os.name == "posix":
-                    os.killpg(proc.pid, signal.SIGKILL)
-                else:
+        # A cooperative leader may have exited while a stubborn descendant keeps
+        # the output pipes open. Escalate against the group regardless of the
+        # leader's status, then bound the final drain so the supervisor cannot hang.
+        signal_process_tree(proc, signal.SIGKILL)
+        try:
+            stdout, stderr = proc.communicate(timeout=grace_seconds)
+            return stdout or "", stderr or ""
+        except subprocess.TimeoutExpired as e:
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
+            if proc.poll() is None:
+                try:
                     proc.kill()
-            except (ProcessLookupError, PermissionError):
-                pass
-        stdout, stderr = proc.communicate()
-        return stdout or "", stderr or ""
+                    proc.wait(timeout=grace_seconds)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    pass
+            raise GateConfigurationError(
+                "timed-out check did not release its output pipes after process-tree "
+                "SIGKILL; descendant state is untrusted"
+            ) from e
 
 
 def run_check(check: dict) -> dict:
