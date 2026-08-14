@@ -1,7 +1,5 @@
 # Agent Plan
 
-1. Audit every H0 runner, wrapper, restart, supervisor, lock, and signal handoff against current PR #1 feedback.
-2. Make restart completion authoritative: zombie-safe lock acquisition plus a verified replacement wrapper/child readiness handshake.
-3. Make shell fallback cleanup terminate the entire Codex process group if the Python wrapper is hard-killed.
-4. Add deterministic zombie, repeated-restart, readiness, and escaped-descendant regressions.
-5. Stress the focused lifecycle tests, run the complete H0 gate repeatedly, record evidence, publish one consolidated fix, and request a fresh Codex review.
+1. Bind restart readiness to the exact replacement shell it spawned, not any healthy runner that appears during the polling window.
+2. Add a deterministic regression where the intended replacement fails and an unrelated direct runner starts concurrently.
+3. Stress the focused lifecycle tests, run the complete H0 gate, record evidence, publish the fix, and request a fresh Codex review.

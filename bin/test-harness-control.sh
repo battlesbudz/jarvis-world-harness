@@ -428,4 +428,38 @@ replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 [ -n "$replacement" ] && kill "$replacement" 2>/dev/null || true
 wait_lock_free .harness/codex-runner.lock || { echo "concurrent restart replacement did not stop" >&2; exit 1; }
 
-echo "Harness control test passed: kernel locks, serialized gates, ready handoffs, zombie-safe repeated restart, and process-group cleanup"
+# 14) Replacement identity: if the shell spawned by restart fails, a separate
+# direct runner must not satisfy that restart's readiness poll.
+rm -rf .harness; mkdir -p .harness/logs
+mv bin/run-codex.sh bin/run-codex.real.sh
+cat > bin/run-codex.sh <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${JWH_RUNNER_LOCK_HELD:-0}" = "1" ]; then
+  touch .harness/intended-replacement-failed
+  exit 23
+fi
+exec "$(dirname "$0")/run-codex.real.sh" "$@"
+FAKE
+chmod +x bin/run-codex.sh
+set +e
+FAKE_CODEX_SLEEP=30 bash bin/restart-codex.sh > identity-restart.out 2>&1 & identity_restart=$!
+set -e
+for _ in $(seq 1 100); do [ -e .harness/intended-replacement-failed ] && break; sleep 0.05; done
+[ -e .harness/intended-replacement-failed ] || { echo "identity fixture did not fail the intended replacement" >&2; exit 1; }
+FAKE_CODEX_SLEEP=30 bash bin/run-codex.sh >/dev/null 2>&1 & unrelated_runner=$!
+set +e
+wait "$identity_restart"
+identity_rc=$?
+set -e
+[ "$identity_rc" -ne 0 ] || { echo "restart accepted an unrelated ready runner" >&2; exit 1; }
+for _ in $(seq 1 100); do
+  [ "$(cat .harness/codex-runner.lock 2>/dev/null || true)" = "$unrelated_runner" ] && [ -s .harness/codex-wrapper.ready ] && break
+  sleep 0.05
+done
+[ "$(cat .harness/codex-runner.lock 2>/dev/null || true)" = "$unrelated_runner" ] || { echo "identity fixture direct runner did not start" >&2; exit 1; }
+kill "$unrelated_runner" 2>/dev/null || true
+wait "$unrelated_runner" 2>/dev/null || true
+wait_lock_free .harness/codex-runner.lock || { echo "identity fixture runner did not stop" >&2; exit 1; }
+
+echo "Harness control test passed: kernel locks, serialized gates, identity-bound ready handoffs, zombie-safe repeated restart, and process-group cleanup"

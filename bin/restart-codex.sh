@@ -21,6 +21,7 @@ runner_handoff=0
 control_handoff=0
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+job_running() { [ -n "${1:-}" ] && jobs -pr | grep -Fxq -- "$1"; }
 
 # Only one restart coordinator at a time.
 exec 6<>"$RESTART_LOCK"
@@ -154,15 +155,15 @@ for _ in $(seq 1 40); do
     wrapper=$(cat "$WRAPPER_PID_FILE" 2>/dev/null || true)
     ready=$(cat "$WRAPPER_READY_FILE" 2>/dev/null || true)
     child=$(cat "$CHILD_PID_FILE" 2>/dev/null || true)
-    if [ -n "$p" ] && pid_alive "$p" && wrapper_lock_held \
+    if [ "$p" = "$replacement_shell" ] && job_running "$replacement_shell" && wrapper_lock_held \
       && [ -n "$wrapper" ] && [ "$ready" = "$wrapper" ] \
       && pid_alive "$wrapper" && [ -n "$child" ] && pid_alive "$child"; then
       echo "Codex runner ready: shell=$p wrapper=$wrapper child=$child"
       exit 0
     fi
   fi
-  pid_alive "$replacement_shell" || true
+  job_running "$replacement_shell" || break
 done
 
-echo "Codex runner did not acquire its kernel lock; inspect $OUT" >&2
+echo "Spawned Codex runner did not become ready; inspect $OUT" >&2
 exit 1
