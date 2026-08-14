@@ -12,6 +12,8 @@ mkdir -p .harness/logs
 CONTROL_LOCK=.harness/codex-control.lock
 RUNNER_LOCK=.harness/codex-runner.lock
 CHILD_PID_FILE=.harness/codex-child.pid
+WRAPPER_PID_FILE=.harness/codex-wrapper.pid
+WRAPPER_STOP_FILE=.harness/codex-wrapper.stop
 SESSION_FILE=.harness/codex-session-id
 LAST_RUN=.harness/last-run.json
 LAST_MESSAGE=.harness/last-message.md
@@ -47,6 +49,8 @@ fi
 : > "$RUNNER_LOCK"
 printf '%s\n' "$$" > "$RUNNER_LOCK"
 rm -f "$CHILD_PID_FILE"
+rm -f "$WRAPPER_PID_FILE"
+rm -f "$WRAPPER_STOP_FILE"
 
 # Startup handoff is complete. Keep fd 8 for the whole run, but release fd 9 so
 # restart/control operations can proceed while Codex is working.
@@ -74,6 +78,8 @@ cleanup() {
     pid_alive "$child_pid" && kill -9 "$child_pid" 2>/dev/null || true
   fi
   rm -f "$CHILD_PID_FILE"
+  rm -f "$WRAPPER_PID_FILE"
+  rm -f "$WRAPPER_STOP_FILE"
   : > "$RUNNER_LOCK" 2>/dev/null || true
   flock -u 8 2>/dev/null || true
   exec 8>&- 2>/dev/null || true
@@ -154,6 +160,8 @@ python3 bin/codex-process.py \
   --errlog "$ERRLOG" \
   --session-file "$SESSION_FILE" \
   --child-pid-file "$CHILD_PID_FILE" \
+  --wrapper-pid-file "$WRAPPER_PID_FILE" \
+  --stop-file "$WRAPPER_STOP_FILE" \
   -- "${CMD[@]}" &
 process_pid=$!
 wait "$process_pid"

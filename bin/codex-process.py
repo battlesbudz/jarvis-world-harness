@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 
@@ -27,12 +28,23 @@ def atomic_write(path: Path, text: str) -> None:
             pass
 
 
+def remove_own_pid(path: Path, pid: int) -> None:
+    """Remove a PID reference only when it still names this process."""
+    try:
+        if path.read_text(encoding="utf-8").strip() == str(pid):
+            path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run Codex while durably streaming structured events")
     parser.add_argument("--log", required=True)
     parser.add_argument("--errlog", required=True)
     parser.add_argument("--session-file", required=True)
     parser.add_argument("--child-pid-file", required=True)
+    parser.add_argument("--wrapper-pid-file", required=True)
+    parser.add_argument("--stop-file", required=True)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command
@@ -45,7 +57,11 @@ def main() -> int:
     err_path = Path(args.errlog)
     session_path = Path(args.session_file)
     child_pid_path = Path(args.child_pid_file)
+    wrapper_pid_path = Path(args.wrapper_pid_file)
+    stop_path = Path(args.stop_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    wrapper_pid = os.getpid()
+    atomic_write(wrapper_pid_path, f"{wrapper_pid}\n")
 
     popen_kwargs = {
         "stdout": subprocess.PIPE,
@@ -57,11 +73,16 @@ def main() -> int:
         popen_kwargs["start_new_session"] = True
     elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    proc = subprocess.Popen(command, **popen_kwargs)
+    try:
+        proc = subprocess.Popen(command, **popen_kwargs)
+    except BaseException:
+        remove_own_pid(wrapper_pid_path, wrapper_pid)
+        raise
     atomic_write(child_pid_path, f"{proc.pid}\n")
 
     interrupted = {"signal": None}
     escalation_timer = {"timer": None}
+    escalation_deadline = {"value": None}
 
     def signal_tree(signum: int) -> None:
         try:
@@ -78,20 +99,37 @@ def main() -> int:
     def handle_signal(signum, _frame):
         interrupted["signal"] = signum
         signal_tree(signal.SIGTERM)
-        # A stuck descendant must not keep stdout/stderr pipes open forever during restart.
-        old_timer = escalation_timer["timer"]
-        if old_timer is not None:
-            old_timer.cancel()
-        timer = threading.Timer(2.0, lambda: signal_tree(signal.SIGKILL))
-        timer.daemon = True
-        escalation_timer["timer"] = timer
-        timer.start()
+        # The first interrupt establishes one fixed grace deadline. Repeated signals
+        # must not postpone escalation and let a stubborn descendant survive forever.
+        if escalation_timer["timer"] is None:
+            escalation_deadline["value"] = time.monotonic() + 2.0
+            timer = threading.Timer(2.0, lambda: signal_tree(signal.SIGKILL))
+            timer.daemon = True
+            escalation_timer["timer"] = timer
+            timer.start()
 
     for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", signal.SIGTERM)):
         try:
             signal.signal(sig, handle_signal)
         except (ValueError, OSError):
             pass
+
+    # Restart requests use a file watched by the actual lock-inheriting wrapper.
+    # This avoids sending a signal to a PID that may have been recycled after the
+    # runner shell was hard-killed.
+    stop_monitor_done = threading.Event()
+
+    def monitor_stop_file() -> None:
+        while not stop_monitor_done.wait(0.05):
+            if stop_path.exists():
+                try:
+                    os.kill(wrapper_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                return
+
+    stop_thread = threading.Thread(target=monitor_stop_file, name="codex-stop-monitor", daemon=True)
+    stop_thread.start()
 
     def pump_stdout() -> None:
         assert proc.stdout is not None
@@ -126,14 +164,28 @@ def main() -> int:
     rc = proc.wait()
     out_thread.join()
     err_thread.join()
+    stop_monitor_done.set()
+    stop_thread.join()
     timer = escalation_timer["timer"]
+    if interrupted["signal"] is not None:
+        # Pump completion proves only pipe EOF. A redirected descendant may still be
+        # alive, so preserve the full grace period and always signal the process group
+        # before the wrapper returns and releases the inherited runner lock.
+        deadline = escalation_deadline["value"]
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
+        signal_tree(signal.SIGKILL)
     if timer is not None:
         timer.cancel()
+        timer.join()
 
-    # Remove only our own child PID reference so the shell never acts on a recycled PID.
+    # Remove only our own PID references so restart never acts on recycled metadata.
+    remove_own_pid(child_pid_path, proc.pid)
+    remove_own_pid(wrapper_pid_path, wrapper_pid)
     try:
-        if child_pid_path.read_text(encoding="utf-8").strip() == str(proc.pid):
-            child_pid_path.unlink()
+        stop_path.unlink()
     except FileNotFoundError:
         pass
 

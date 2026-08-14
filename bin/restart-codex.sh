@@ -11,6 +11,8 @@ CONTROL_LOCK=.harness/codex-control.lock
 RUNNER_LOCK=.harness/codex-runner.lock
 RESTART_LOCK=.harness/codex-restart.lock
 CHILD_PID_FILE=.harness/codex-child.pid
+WRAPPER_PID_FILE=.harness/codex-wrapper.pid
+WRAPPER_STOP_FILE=.harness/codex-wrapper.stop
 NOTE="${1:-}"
 pause_created=0
 runner_handoff=0
@@ -82,12 +84,19 @@ if flock -n 8; then
   runner_handoff=1
 else
   runner_pid=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
+  wrapper_pid=$(cat "$WRAPPER_PID_FILE" 2>/dev/null || true)
   # Re-probe immediately before trusting the PID; the runner may have exited since
   # the first probe. If the lock became free, we now own it and do not signal anyone.
   if flock -n 8; then
     runner_handoff=1
   else
-    if [ -n "$runner_pid" ] && pid_alive "$runner_pid"; then
+    if [ -n "$wrapper_pid" ]; then
+      # Ask the process that actually watches this control file to stop itself.
+      # Unlike signaling PID metadata, this cannot target an unrelated recycled PID.
+      touch "$WRAPPER_STOP_FILE"
+    elif pid_alive "$runner_pid"; then
+      # Narrow startup fallback: the shell owns the lock but has not launched and
+      # recorded its wrapper yet.
       stop_pid "$runner_pid"
     fi
     # Wait for the authoritative kernel lock. If an unknown holder remains, fail
@@ -103,6 +112,8 @@ fi
 # We own the runner lock now. Stale metadata can be cleared safely.
 : > "$RUNNER_LOCK"
 rm -f "$CHILD_PID_FILE"
+rm -f "$WRAPPER_PID_FILE"
+rm -f "$WRAPPER_STOP_FILE"
 
 OUT=".harness/logs/manual-restart-$(date +%Y%m%d-%H%M%S)-$$-${RANDOM:-0}.out"
 if [ -n "$NOTE" ] && [ -f "$NOTE" ]; then

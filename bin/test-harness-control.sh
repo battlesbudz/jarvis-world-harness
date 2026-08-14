@@ -6,7 +6,10 @@ TMP=$(mktemp -d "${TMPDIR:-/tmp}/jwh-control.XXXXXX")
 cleanup_all() {
   set +e
   if [ -d "$TMP" ]; then
-    for f in "$TMP"/.harness/codex-runner.lock "$TMP"/.harness/codex-supervisor.lock "$TMP"/.harness/codex-restart.lock; do
+    child=$(cat "$TMP"/.harness/codex-child.pid 2>/dev/null || true)
+    [ -n "$child" ] && kill -- "-$child" 2>/dev/null || true
+    [ -n "$child" ] && kill -9 -- "-$child" 2>/dev/null || true
+    for f in "$TMP"/.harness/codex-runner.lock "$TMP"/.harness/codex-supervisor.lock "$TMP"/.harness/codex-restart.lock "$TMP"/.harness/codex-wrapper.pid; do
       p=$(cat "$f" 2>/dev/null || true); [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
   fi
@@ -62,6 +65,22 @@ fi
 printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
 FAKE
 chmod +x "$TMP/fakebin/codex"
+cat > "$TMP/fakebin/codex-redirected" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+marker="$1"
+trap 'exit 0' TERM
+(
+  trap '' TERM HUP
+  exec >/dev/null 2>&1
+  sleep 4
+  touch "$marker"
+  sleep 30
+) &
+printf '%s\n' '{"type":"thread.started","thread_id":"redirected-fixture"}'
+wait
+FAKE
+chmod +x "$TMP/fakebin/codex-redirected"
 export PATH="$TMP/fakebin:$PATH"
 export FAKE_CODEX_TRACE="$TRACE"
 cd "$TMP"
@@ -239,4 +258,62 @@ current=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 wait_lock_free .harness/codex-runner.lock || true
 wait "$race_sup" 2>/dev/null || true
 
-echo "Harness control test passed: kernel-authoritative liveness, safe restart, serialized gates, and atomic restart handoff"
+# 9) Wrapper escalation: if the command leader exits on TERM and a TERM-ignoring
+# descendant redirected both streams, preserve the full grace window and kill the
+# original process group before returning.
+rm -rf .harness; mkdir -p .harness/logs
+redirect_marker="$TMP/redirected-descendant-survived"
+python3 bin/codex-process.py \
+  --log .harness/logs/redirected.jsonl \
+  --errlog .harness/logs/redirected.stderr.log \
+  --session-file .harness/redirected-session \
+  --child-pid-file .harness/codex-child.pid \
+  --wrapper-pid-file .harness/codex-wrapper.pid \
+  --stop-file .harness/codex-wrapper.stop \
+  -- codex-redirected "$redirect_marker" >/dev/null 2>&1 &
+redirect_wrapper=$!
+for _ in $(seq 1 100); do
+  [ -s .harness/codex-child.pid ] && [ -s .harness/codex-wrapper.pid ] && break
+  sleep 0.05
+done
+[ -s .harness/codex-child.pid ] && [ -s .harness/codex-wrapper.pid ] || { echo "redirected fixture did not start" >&2; exit 1; }
+start_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
+kill -TERM "$redirect_wrapper"
+set +e
+wait "$redirect_wrapper"
+redirect_rc=$?
+set -e
+end_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
+elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
+[ "$redirect_rc" -eq 143 ] || { echo "redirected wrapper returned $redirect_rc instead of 143" >&2; exit 1; }
+[ "$elapsed_ms" -ge 1800 ] && [ "$elapsed_ms" -lt 8000 ] || { echo "redirected wrapper grace was ${elapsed_ms}ms" >&2; exit 1; }
+sleep 3
+[ ! -e "$redirect_marker" ] || { echo "redirected descendant survived process-group escalation" >&2; exit 1; }
+[ ! -e .harness/codex-child.pid ] && [ ! -e .harness/codex-wrapper.pid ] || { echo "wrapper PID metadata was not cleaned" >&2; exit 1; }
+
+# 10) Orphan recovery: SIGKILL can remove the runner shell while its Python wrapper
+# retains fd 8. Restart must use the wrapper's own stop control before replacing it.
+rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
+FAKE_CODEX_SLEEP=30 bash bin/run-codex.sh >/dev/null 2>&1 &
+orphan_shell=$!
+for _ in $(seq 1 100); do [ -s .harness/codex-wrapper.pid ] && break; sleep 0.05; done
+orphan_wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
+[ -n "$orphan_wrapper" ] && kill -0 "$orphan_wrapper" 2>/dev/null || { echo "orphan fixture wrapper did not start" >&2; exit 1; }
+set +e
+flock -n .harness/codex-runner.lock true >/dev/null 2>&1
+orphan_lock_probe=$?
+set -e
+[ "$orphan_lock_probe" -ne 0 ] || { echo "orphan fixture never acquired runner lock" >&2; exit 1; }
+kill -9 "$orphan_shell"
+wait "$orphan_shell" 2>/dev/null || true
+kill -0 "$orphan_wrapper" 2>/dev/null || { echo "wrapper did not retain the inherited runner lock" >&2; exit 1; }
+FAKE_CODEX_SLEEP=5 bash bin/restart-codex.sh > orphan-restart.out 2>&1 || { cat orphan-restart.out >&2; exit 1; }
+kill -0 "$orphan_wrapper" 2>/dev/null && { echo "restart left orphaned wrapper alive" >&2; exit 1; }
+replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
+[ -n "$replacement" ] && kill -0 "$replacement" 2>/dev/null || { echo "orphan recovery replacement did not start" >&2; exit 1; }
+touch .harness/STOP
+kill "$replacement" 2>/dev/null || true
+wait_lock_free .harness/codex-runner.lock || { echo "orphan recovery replacement did not stop" >&2; exit 1; }
+rm -f .harness/STOP
+
+echo "Harness control test passed: kernel-authoritative liveness, safe restart, serialized gates, atomic handoff, full escalation, and orphan recovery"
