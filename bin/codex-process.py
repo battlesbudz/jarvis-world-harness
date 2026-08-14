@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import fcntl
 import json
 import os
 import signal
@@ -44,6 +45,8 @@ def main() -> int:
     parser.add_argument("--session-file", required=True)
     parser.add_argument("--child-pid-file", required=True)
     parser.add_argument("--wrapper-pid-file", required=True)
+    parser.add_argument("--wrapper-lock-file", required=True)
+    parser.add_argument("--ready-file", required=True)
     parser.add_argument("--stop-file", required=True)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -58,9 +61,31 @@ def main() -> int:
     session_path = Path(args.session_file)
     child_pid_path = Path(args.child_pid_file)
     wrapper_pid_path = Path(args.wrapper_pid_file)
+    wrapper_lock_path = Path(args.wrapper_lock_file)
+    ready_path = Path(args.ready_file)
     stop_path = Path(args.stop_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     wrapper_pid = os.getpid()
+    wrapper_lock_path.parent.mkdir(parents=True, exist_ok=True)
+    wrapper_lock_fd = os.open(wrapper_lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(wrapper_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as e:
+        os.close(wrapper_lock_fd)
+        raise RuntimeError("another Codex process wrapper already owns its kernel lock") from e
+    early_interrupt = {"signal": None}
+
+    def handle_early_signal(signum, _frame):
+        # Keep the wrapper alive until Popen either returns a process group that can
+        # be cleaned up or fails without creating one.
+        early_interrupt["signal"] = signum
+
+    managed_signals = (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", signal.SIGTERM))
+    for sig in managed_signals:
+        try:
+            signal.signal(sig, handle_early_signal)
+        except (ValueError, OSError):
+            pass
     atomic_write(wrapper_pid_path, f"{wrapper_pid}\n")
 
     popen_kwargs = {
@@ -77,6 +102,7 @@ def main() -> int:
         proc = subprocess.Popen(command, **popen_kwargs)
     except BaseException:
         remove_own_pid(wrapper_pid_path, wrapper_pid)
+        remove_own_pid(ready_path, wrapper_pid)
         raise
     atomic_write(child_pid_path, f"{proc.pid}\n")
 
@@ -108,11 +134,13 @@ def main() -> int:
             escalation_timer["timer"] = timer
             timer.start()
 
-    for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", signal.SIGTERM)):
+    for sig in managed_signals:
         try:
             signal.signal(sig, handle_signal)
         except (ValueError, OSError):
             pass
+    if early_interrupt["signal"] is not None:
+        handle_signal(int(early_interrupt["signal"]), None)
 
     # Restart requests use a file watched by the actual lock-inheriting wrapper.
     # This avoids sending a signal to a PID that may have been recycled after the
@@ -160,6 +188,10 @@ def main() -> int:
     err_thread = threading.Thread(target=pump_stderr, name="codex-stderr")
     out_thread.start()
     err_thread.start()
+    if interrupted["signal"] is None:
+        # Restart does not report success until this readiness handshake agrees
+        # with wrapper/child PID metadata and the authoritative runner lock.
+        atomic_write(ready_path, f"{wrapper_pid}\n")
 
     rc = proc.wait()
     out_thread.join()
@@ -184,10 +216,13 @@ def main() -> int:
     # Remove only our own PID references so restart never acts on recycled metadata.
     remove_own_pid(child_pid_path, proc.pid)
     remove_own_pid(wrapper_pid_path, wrapper_pid)
+    remove_own_pid(ready_path, wrapper_pid)
     try:
         stop_path.unlink()
     except FileNotFoundError:
         pass
+    fcntl.flock(wrapper_lock_fd, fcntl.LOCK_UN)
+    os.close(wrapper_lock_fd)
 
     if interrupted["signal"] is not None:
         return 128 + int(interrupted["signal"])

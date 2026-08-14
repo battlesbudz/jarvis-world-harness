@@ -12,6 +12,8 @@ RUNNER_LOCK=.harness/codex-runner.lock
 RESTART_LOCK=.harness/codex-restart.lock
 CHILD_PID_FILE=.harness/codex-child.pid
 WRAPPER_PID_FILE=.harness/codex-wrapper.pid
+WRAPPER_LOCK_FILE=.harness/codex-wrapper.lock
+WRAPPER_READY_FILE=.harness/codex-wrapper.ready
 WRAPPER_STOP_FILE=.harness/codex-wrapper.stop
 NOTE="${1:-}"
 pause_created=0
@@ -29,23 +31,6 @@ if ! flock -n 6; then
 fi
 : > "$RESTART_LOCK"
 printf '%s\n' "$$" > "$RESTART_LOCK"
-
-stop_pid() {
-  p="${1:-}"
-  pid_alive "$p" || return 0
-  kill "$p" 2>/dev/null || true
-  for _ in 1 2 3 4 5; do
-    sleep 1
-    pid_alive "$p" || return 0
-  done
-  kill -9 "$p" 2>/dev/null || true
-  for _ in 1 2 3; do
-    sleep 1
-    pid_alive "$p" || return 0
-  done
-  echo "process $p did not stop" >&2
-  return 1
-}
 
 cleanup() {
   rc=$?
@@ -97,13 +82,23 @@ else
     elif pid_alive "$runner_pid"; then
       # Narrow startup fallback: the shell owns the lock but has not launched and
       # recorded its wrapper yet.
-      stop_pid "$runner_pid"
+      kill -TERM "$runner_pid" 2>/dev/null || true
     fi
-    # Wait for the authoritative kernel lock. If an unknown holder remains, fail
-    # closed rather than killing a PID we cannot prove owns the runner lock.
-    if ! flock -w 10 8; then
-      echo "runner lock is held but no safe owner could be stopped" >&2
-      exit 2
+    # PID signalability is not exit evidence: an orphaned shell can remain a zombie
+    # after releasing every file descriptor. The kernel lock is authoritative.
+    if ! flock -w 5 8; then
+      late_wrapper_pid=$(cat "$WRAPPER_PID_FILE" 2>/dev/null || true)
+      if [ -n "$late_wrapper_pid" ]; then
+        # The wrapper may have appeared after the initial startup-gap probe.
+        touch "$WRAPPER_STOP_FILE"
+      elif [ "$(cat "$RUNNER_LOCK" 2>/dev/null || true)" = "$runner_pid" ] && pid_alive "$runner_pid"; then
+        # Last resort for a shell stuck before it can create a controllable wrapper.
+        kill -KILL "$runner_pid" 2>/dev/null || true
+      fi
+      if ! flock -w 5 8; then
+        echo "runner lock is held but no safe owner could be stopped" >&2
+        exit 2
+      fi
     fi
     runner_handoff=1
   fi
@@ -113,6 +108,7 @@ fi
 : > "$RUNNER_LOCK"
 rm -f "$CHILD_PID_FILE"
 rm -f "$WRAPPER_PID_FILE"
+rm -f "$WRAPPER_READY_FILE"
 rm -f "$WRAPPER_STOP_FILE"
 
 OUT=".harness/logs/manual-restart-$(date +%Y%m%d-%H%M%S)-$$-${RANDOM:-0}.out"
@@ -140,12 +136,28 @@ runner_lock_held() {
   return 0
 }
 
+wrapper_lock_held() {
+  exec 4<>"$WRAPPER_LOCK_FILE"
+  if flock -n 4; then
+    flock -u 4 2>/dev/null || true
+    exec 4>&- 2>/dev/null || true
+    return 1
+  fi
+  exec 4>&- 2>/dev/null || true
+  return 0
+}
+
 for _ in $(seq 1 40); do
   sleep 0.25
   if runner_lock_held; then
     p=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
-    if [ -n "$p" ] && pid_alive "$p"; then
-      echo "Codex runner up: $p"
+    wrapper=$(cat "$WRAPPER_PID_FILE" 2>/dev/null || true)
+    ready=$(cat "$WRAPPER_READY_FILE" 2>/dev/null || true)
+    child=$(cat "$CHILD_PID_FILE" 2>/dev/null || true)
+    if [ -n "$p" ] && pid_alive "$p" && wrapper_lock_held \
+      && [ -n "$wrapper" ] && [ "$ready" = "$wrapper" ] \
+      && pid_alive "$wrapper" && [ -n "$child" ] && pid_alive "$child"; then
+      echo "Codex runner ready: shell=$p wrapper=$wrapper child=$child"
       exit 0
     fi
   fi

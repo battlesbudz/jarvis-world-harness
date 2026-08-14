@@ -13,6 +13,8 @@ CONTROL_LOCK=.harness/codex-control.lock
 RUNNER_LOCK=.harness/codex-runner.lock
 CHILD_PID_FILE=.harness/codex-child.pid
 WRAPPER_PID_FILE=.harness/codex-wrapper.pid
+WRAPPER_LOCK_FILE=.harness/codex-wrapper.lock
+WRAPPER_READY_FILE=.harness/codex-wrapper.ready
 WRAPPER_STOP_FILE=.harness/codex-wrapper.stop
 SESSION_FILE=.harness/codex-session-id
 LAST_RUN=.harness/last-run.json
@@ -50,6 +52,7 @@ fi
 printf '%s\n' "$$" > "$RUNNER_LOCK"
 rm -f "$CHILD_PID_FILE"
 rm -f "$WRAPPER_PID_FILE"
+rm -f "$WRAPPER_READY_FILE"
 rm -f "$WRAPPER_STOP_FILE"
 
 # Startup handoff is complete. Keep fd 8 for the whole run, but release fd 9 so
@@ -58,27 +61,36 @@ flock -u 9 2>/dev/null || true
 exec 9>&- 2>/dev/null || true
 
 process_pid=""
+job_running() {
+  p="${1:-}"
+  [ -n "$p" ] && jobs -pr | grep -Fxq -- "$p"
+}
+
 cleanup() {
   rc=$?
   trap - EXIT INT TERM HUP
-  if [ -n "${process_pid:-}" ] && pid_alive "$process_pid"; then
+  if [ -n "${process_pid:-}" ] && job_running "$process_pid"; then
     kill "$process_pid" 2>/dev/null || true
     for _ in 1 2 3 4 5; do
       sleep 1
-      pid_alive "$process_pid" || break
+      job_running "$process_pid" || break
     done
-    pid_alive "$process_pid" && kill -9 "$process_pid" 2>/dev/null || true
+    job_running "$process_pid" && kill -9 "$process_pid" 2>/dev/null || true
   fi
   [ -n "${process_pid:-}" ] && wait "$process_pid" 2>/dev/null || true
 
   child_pid=$(cat "$CHILD_PID_FILE" 2>/dev/null || true)
-  if pid_alive "$child_pid"; then
-    kill "$child_pid" 2>/dev/null || true
+  if [ -n "$child_pid" ]; then
+    # codex-process.py creates a new session whose process-group id is the child
+    # leader PID. If the wrapper was SIGKILLed, clean the group independently of
+    # leader liveness so redirected/TERM-ignoring descendants cannot escape.
+    kill -TERM -- "-$child_pid" 2>/dev/null || true
     sleep 1
-    pid_alive "$child_pid" && kill -9 "$child_pid" 2>/dev/null || true
+    kill -KILL -- "-$child_pid" 2>/dev/null || true
   fi
   rm -f "$CHILD_PID_FILE"
   rm -f "$WRAPPER_PID_FILE"
+  rm -f "$WRAPPER_READY_FILE"
   rm -f "$WRAPPER_STOP_FILE"
   : > "$RUNNER_LOCK" 2>/dev/null || true
   flock -u 8 2>/dev/null || true
@@ -161,6 +173,8 @@ python3 bin/codex-process.py \
   --session-file "$SESSION_FILE" \
   --child-pid-file "$CHILD_PID_FILE" \
   --wrapper-pid-file "$WRAPPER_PID_FILE" \
+  --wrapper-lock-file "$WRAPPER_LOCK_FILE" \
+  --ready-file "$WRAPPER_READY_FILE" \
   --stop-file "$WRAPPER_STOP_FILE" \
   -- "${CMD[@]}" &
 process_pid=$!

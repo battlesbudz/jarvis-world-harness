@@ -71,11 +71,11 @@ Milestone-specific tests collect evidence from A and B. No milestone passes sole
 
 H0 deliberately keeps Codex orchestration separate from the game implementation.
 
-`bin/run-codex.sh` owns one Codex turn. It records JSONL events, captures stderr separately, persists the Codex thread id, and resumes the same thread on subsequent runs.
+`bin/run-codex.sh` owns one Codex turn. It records JSONL events, captures stderr separately, persists the Codex thread id, and resumes the same thread on subsequent runs. The Python wrapper publishes readiness only after its dedicated Codex process group, PID metadata, signal handlers, stop monitor, and stream consumers exist. If the wrapper is hard-killed, shell fallback cleanup still terminates that whole process group.
 
 `bin/supervise-codex.sh` is the outer watchdog. It guarantees one supervisor, avoids racing an already-live runner, retries clean stops on the same thread, and exponentially backs off after short or failed runs.
 
-`bin/restart-codex.sh` is the operator-safe restart path. It pauses the supervisor before terminating the runner/child and releases the pause only after one replacement has acquired the runner lock.
+`bin/restart-codex.sh` is the operator-safe restart path. It pauses the supervisor before terminating the runner/child and releases the pause only after one replacement owns the runner lock, its wrapper owns a separate kernel lease, and matching shell/wrapper/readiness/child metadata exists. PID signalability is never treated as exit evidence because unreaped zombies remain signalable; kernel lock state is authoritative.
 
 `bin/health-codex.sh` treats process existence, recent Codex events, and recent `PROGRESS.md` updates as separate signals. A process that exists but has stopped producing events/progress is unhealthy.
 

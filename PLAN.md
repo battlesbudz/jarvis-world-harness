@@ -1,6 +1,7 @@
 # Agent Plan
 
-1. Reproduce PR #1's replacement-wrapper startup race against head `df93fbd`.
-2. Poll with a bounded timeout for the distinct live replacement wrapper after restart returns.
-3. Run the focused control-plane regression and the complete H0 gate.
-4. Record evidence, publish the focused fix to PR #1, and request a fresh Codex review.
+1. Audit every H0 runner, wrapper, restart, supervisor, lock, and signal handoff against current PR #1 feedback.
+2. Make restart completion authoritative: zombie-safe lock acquisition plus a verified replacement wrapper/child readiness handshake.
+3. Make shell fallback cleanup terminate the entire Codex process group if the Python wrapper is hard-killed.
+4. Add deterministic zombie, repeated-restart, readiness, and escaped-descendant regressions.
+5. Stress the focused lifecycle tests, run the complete H0 gate repeatedly, record evidence, publish one consolidated fix, and request a fresh Codex review.

@@ -42,12 +42,16 @@ grep -q 'milestone-gate.py' bin/supervise-codex.sh
 grep -q 'BACKOFF_MAX' bin/supervise-codex.sh
 
 grep -q 'CONTROL_LOCK=.harness/codex-control.lock' bin/restart-codex.sh
-grep -q 'flock -w 10 8' bin/restart-codex.sh
+grep -q 'flock -w 5 8' bin/restart-codex.sh
 grep -q 'WRAPPER_STOP_FILE=.harness/codex-wrapper.stop' bin/restart-codex.sh
+grep -q 'WRAPPER_READY_FILE=.harness/codex-wrapper.ready' bin/restart-codex.sh
+grep -q 'WRAPPER_LOCK_FILE=.harness/codex-wrapper.lock' bin/restart-codex.sh
 grep -q 'JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1' bin/restart-codex.sh
 
 grep -q -- '--wrapper-pid-file' bin/run-codex.sh
+grep -q -- '--wrapper-lock-file' bin/run-codex.sh
 grep -q -- '--stop-file' bin/run-codex.sh
+grep -q -- '--ready-file' bin/run-codex.sh
 grep -q 'timer.join' bin/codex-process.py
 
 grep -q 'lock_held "$RUNNER_LOCK"' bin/health-codex.sh

@@ -12,6 +12,9 @@ cleanup_all() {
     for f in "$TMP"/.harness/codex-runner.lock "$TMP"/.harness/codex-supervisor.lock "$TMP"/.harness/codex-restart.lock "$TMP"/.harness/codex-wrapper.pid; do
       p=$(cat "$f" 2>/dev/null || true); [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
+    for f in "$TMP"/.harness/zombie-child.pid "$TMP"/.harness/zombie-parent.pid; do
+      p=$(cat "$f" 2>/dev/null || true); [ -n "$p" ] && kill "$p" 2>/dev/null || true
+    done
   fi
   rm -rf "$TMP"
 }
@@ -59,6 +62,15 @@ if ! printf '%s\n' "$*" | grep -q ' resume fixture-thread-123 '; then
 fi
 if [ -n "${FAKE_CODEX_RELEASE_FILE:-}" ]; then
   while [ ! -e "$FAKE_CODEX_RELEASE_FILE" ]; do sleep 0.05; done
+elif [ -n "${FAKE_CODEX_ESCAPE_MARKER:-}" ]; then
+  (
+    trap '' TERM HUP
+    exec >/dev/null 2>&1
+    sleep 4
+    touch "$FAKE_CODEX_ESCAPE_MARKER"
+    sleep 30
+  ) &
+  wait
 elif [ -n "${FAKE_CODEX_SLEEP:-}" ]; then
   sleep "$FAKE_CODEX_SLEEP"
 fi
@@ -269,6 +281,8 @@ python3 bin/codex-process.py \
   --session-file .harness/redirected-session \
   --child-pid-file .harness/codex-child.pid \
   --wrapper-pid-file .harness/codex-wrapper.pid \
+  --wrapper-lock-file .harness/codex-wrapper.lock \
+  --ready-file .harness/codex-wrapper.ready \
   --stop-file .harness/codex-wrapper.stop \
   -- codex-redirected "$redirect_marker" >/dev/null 2>&1 &
 redirect_wrapper=$!
@@ -289,16 +303,21 @@ elapsed_ms=$(( (end_ns - start_ns) / 1000000 ))
 [ "$elapsed_ms" -ge 1800 ] && [ "$elapsed_ms" -lt 8000 ] || { echo "redirected wrapper grace was ${elapsed_ms}ms" >&2; exit 1; }
 sleep 3
 [ ! -e "$redirect_marker" ] || { echo "redirected descendant survived process-group escalation" >&2; exit 1; }
-[ ! -e .harness/codex-child.pid ] && [ ! -e .harness/codex-wrapper.pid ] || { echo "wrapper PID metadata was not cleaned" >&2; exit 1; }
+[ ! -e .harness/codex-child.pid ] && [ ! -e .harness/codex-wrapper.pid ] && [ ! -e .harness/codex-wrapper.ready ] || { echo "wrapper readiness metadata was not cleaned" >&2; exit 1; }
+flock -n .harness/codex-wrapper.lock true >/dev/null 2>&1 || { echo "wrapper kernel lock was not released" >&2; exit 1; }
 
 # 10) Orphan recovery: SIGKILL can remove the runner shell while its Python wrapper
 # retains fd 8. Restart must use the wrapper's own stop control before replacing it.
 rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
 FAKE_CODEX_SLEEP=30 bash bin/run-codex.sh >/dev/null 2>&1 &
 orphan_shell=$!
-for _ in $(seq 1 100); do [ -s .harness/codex-wrapper.pid ] && break; sleep 0.05; done
+for _ in $(seq 1 100); do
+  wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
+  [ -n "$wrapper" ] && [ "$(cat .harness/codex-wrapper.ready 2>/dev/null || true)" = "$wrapper" ] && break
+  sleep 0.05
+done
 orphan_wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
-[ -n "$orphan_wrapper" ] && kill -0 "$orphan_wrapper" 2>/dev/null || { echo "orphan fixture wrapper did not start" >&2; exit 1; }
+[ -n "$orphan_wrapper" ] && [ "$(cat .harness/codex-wrapper.ready 2>/dev/null || true)" = "$orphan_wrapper" ] && kill -0 "$orphan_wrapper" 2>/dev/null || { echo "orphan fixture wrapper did not become ready" >&2; exit 1; }
 set +e
 flock -n .harness/codex-runner.lock true >/dev/null 2>&1
 orphan_lock_probe=$?
@@ -310,23 +329,103 @@ kill -0 "$orphan_wrapper" 2>/dev/null || { echo "wrapper did not retain the inhe
 FAKE_CODEX_SLEEP=5 bash bin/restart-codex.sh > orphan-restart.out 2>&1 || { cat orphan-restart.out >&2; exit 1; }
 replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 [ -n "$replacement" ] && kill -0 "$replacement" 2>/dev/null || { echo "orphan recovery replacement did not start" >&2; exit 1; }
-replacement_wrapper=""
-for _ in $(seq 1 100); do
-  replacement_wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
-  if [ -n "$replacement_wrapper" ] && [ "$replacement_wrapper" != "$orphan_wrapper" ] && kill -0 "$replacement_wrapper" 2>/dev/null; then
-    break
-  fi
-  sleep 0.05
-done
-[ -n "$replacement_wrapper" ] && [ "$replacement_wrapper" != "$orphan_wrapper" ] && kill -0 "$replacement_wrapper" 2>/dev/null || { echo "orphan recovery did not install a distinct live wrapper" >&2; exit 1; }
+replacement_wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
+[ -n "$replacement_wrapper" ] && [ "$replacement_wrapper" != "$orphan_wrapper" ] && [ "$(cat .harness/codex-wrapper.ready 2>/dev/null || true)" = "$replacement_wrapper" ] && kill -0 "$replacement_wrapper" 2>/dev/null || { echo "restart returned before a distinct wrapper was ready" >&2; exit 1; }
 set +e
 flock -n .harness/codex-runner.lock true >/dev/null 2>&1
 replacement_lock_probe=$?
 set -e
 [ "$replacement_lock_probe" -ne 0 ] || { echo "orphan recovery replacement does not own the runner lock" >&2; exit 1; }
+first_replacement="$replacement"
+first_replacement_wrapper="$replacement_wrapper"
+FAKE_CODEX_SLEEP=5 bash bin/restart-codex.sh > repeated-restart.out 2>&1 || { cat repeated-restart.out >&2; exit 1; }
+replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
+replacement_wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
+[ -n "$replacement" ] && [ "$replacement" != "$first_replacement" ] && kill -0 "$replacement" 2>/dev/null || { echo "immediate second restart did not replace the shell" >&2; exit 1; }
+[ -n "$replacement_wrapper" ] && [ "$replacement_wrapper" != "$first_replacement_wrapper" ] && [ "$(cat .harness/codex-wrapper.ready 2>/dev/null || true)" = "$replacement_wrapper" ] && kill -0 "$replacement_wrapper" 2>/dev/null || { echo "immediate second restart did not install a ready wrapper" >&2; exit 1; }
 touch .harness/STOP
 kill "$replacement" 2>/dev/null || true
 wait_lock_free .harness/codex-runner.lock || { echo "orphan recovery replacement did not stop" >&2; exit 1; }
 rm -f .harness/STOP
 
-echo "Harness control test passed: kernel-authoritative liveness, safe restart, serialized gates, atomic handoff, full escalation, and orphan recovery"
+# 11) Zombie startup shell: a terminated pre-wrapper shell can remain signalable
+# while its runner lock is already free. Restart must proceed from flock evidence.
+rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
+python3 - .harness/codex-runner.lock .harness/zombie-child.pid .harness/reap-zombie <<'PY' &
+import fcntl, os, signal, sys, time
+from pathlib import Path
+lock_path, child_path, reap_path = map(Path, sys.argv[1:])
+child = os.fork()
+if child == 0:
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    lock_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    while True:
+        signal.pause()
+else:
+    child_path.write_text(f"{child}\n", encoding="utf-8")
+    while not reap_path.exists():
+        time.sleep(0.05)
+    os.waitpid(child, 0)
+PY
+zombie_parent=$!
+printf '%s\n' "$zombie_parent" > .harness/zombie-parent.pid
+for _ in $(seq 1 100); do
+  zombie_child=$(cat .harness/zombie-child.pid 2>/dev/null || true)
+  set +e; flock -n .harness/codex-runner.lock true >/dev/null 2>&1; zombie_probe=$?; set -e
+  [ -n "$zombie_child" ] && [ "$zombie_probe" -ne 0 ] && break
+  sleep 0.05
+done
+[ -n "${zombie_child:-}" ] && [ "$zombie_probe" -ne 0 ] || { echo "zombie startup fixture did not acquire runner lock" >&2; exit 1; }
+FAKE_CODEX_SLEEP=5 bash bin/restart-codex.sh > zombie-restart.out 2>&1 || { cat zombie-restart.out >&2; exit 1; }
+kill -0 "$zombie_child" 2>/dev/null || { echo "startup fixture was reaped before zombie behavior could be checked" >&2; exit 1; }
+replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
+wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
+[ -n "$replacement" ] && [ -n "$wrapper" ] && [ "$(cat .harness/codex-wrapper.ready 2>/dev/null || true)" = "$wrapper" ] || { echo "zombie-safe restart did not return a ready replacement" >&2; exit 1; }
+kill "$replacement" 2>/dev/null || true
+wait_lock_free .harness/codex-runner.lock || { echo "zombie-safe replacement did not stop" >&2; exit 1; }
+touch .harness/reap-zombie
+wait "$zombie_parent"
+
+# 12) Wrapper hard death: if the Python owner is SIGKILLed, shell fallback cleanup
+# must kill the entire Codex session even after its leader exits on TERM.
+rm -rf .harness; mkdir -p .harness/logs
+escape_marker="$TMP/wrapper-kill-descendant-survived"
+FAKE_CODEX_ESCAPE_MARKER="$escape_marker" bash bin/run-codex.sh >/dev/null 2>&1 &
+escaped_runner=$!
+for _ in $(seq 1 100); do
+  escaped_wrapper=$(cat .harness/codex-wrapper.ready 2>/dev/null || true)
+  [ -n "$escaped_wrapper" ] && [ -s .harness/codex-child.pid ] && break
+  sleep 0.05
+done
+[ -n "${escaped_wrapper:-}" ] || { echo "wrapper-kill fixture did not become ready" >&2; exit 1; }
+kill -9 "$escaped_wrapper"
+wait "$escaped_runner" 2>/dev/null || true
+sleep 4
+[ ! -e "$escape_marker" ] || { echo "wrapper SIGKILL left a Codex descendant alive" >&2; exit 1; }
+wait_lock_free .harness/codex-runner.lock || { echo "wrapper-kill runner lock was not released" >&2; exit 1; }
+
+# 13) Restart coordinator lock: concurrent restart requests yield exactly one
+# replacement and one deterministic rejection.
+rm -rf .harness; mkdir -p .harness/logs
+FAKE_CODEX_SLEEP=30 bash bin/run-codex.sh >/dev/null 2>&1 & concurrent_runner=$!
+for _ in $(seq 1 100); do [ -s .harness/codex-wrapper.ready ] && break; sleep 0.05; done
+restart_jobs=()
+for i in 1 2; do
+  (
+    set +e
+    FAKE_CODEX_SLEEP=5 bash bin/restart-codex.sh > "concurrent-restart.$i.out" 2>&1
+    printf '%s\n' "$?" > "concurrent-restart.$i.status"
+  ) &
+  restart_jobs+=("$!")
+done
+for p in "${restart_jobs[@]}"; do wait "$p"; done
+restart_zeros=$(grep -l '^0$' concurrent-restart.*.status | wc -l | tr -d ' ')
+restart_twos=$(grep -l '^2$' concurrent-restart.*.status | wc -l | tr -d ' ')
+[ "$restart_zeros" -eq 1 ] && [ "$restart_twos" -eq 1 ] || { echo "concurrent restart results: success=$restart_zeros rejected=$restart_twos" >&2; exit 1; }
+wait "$concurrent_runner" 2>/dev/null || true
+replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
+[ -n "$replacement" ] && kill "$replacement" 2>/dev/null || true
+wait_lock_free .harness/codex-runner.lock || { echo "concurrent restart replacement did not stop" >&2; exit 1; }
+
+echo "Harness control test passed: kernel locks, serialized gates, ready handoffs, zombie-safe repeated restart, and process-group cleanup"

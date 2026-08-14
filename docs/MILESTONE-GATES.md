@@ -43,6 +43,6 @@ H0 deliberately uses tests that do not require a real Codex account or Unreal in
 
 - static harness/document/shell checks;
 - a fake-Codex lifecycle test proving exact thread persistence/resume, collision-resistant logs, and parseable JSONL/last-run metadata;
-- a control-plane regression test proving atomic runner/supervisor locks, interrupted-turn restart continuity, stale-event health detection, and fail-closed malformed-gate handling.
+- a control-plane regression test proving atomic runner/supervisor/restart locks, an independent wrapper kernel lease, interrupted-turn continuity, serialized gate/restart handoffs, stale-event health detection, fail-closed malformed-gate handling, zombie-safe repeated restart, wrapper/child readiness, and process-group cleanup after hard wrapper death.
 
 Later milestones can add simulation tests, saved causal traces, Unreal PIE tests, screenshots, performance captures, or other deterministic evidence. The manifest is the executable definition of "done"; prose remains the product definition.
