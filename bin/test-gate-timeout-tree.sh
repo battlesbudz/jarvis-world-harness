@@ -3,11 +3,25 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/jwh-gate-tree.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+cleanup() {
+  set +e
+  for pid_file in "$TMP"/.harness/stubborn.pid "$TMP"/.harness/redirected.pid; do
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    command_line=$([ -n "$pid" ] && ps -o command= -p "$pid" 2>/dev/null || true)
+    case "$command_line" in
+      *LEAKED_DESCENDANT*|*LEAKED_REDIRECTED_DESCENDANT*)
+        kill -9 "$pid" 2>/dev/null || true
+        ;;
+    esac
+  done
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 command -v timeout >/dev/null || { echo "timeout not found on PATH" >&2; exit 127; }
 
-mkdir -p "$TMP/bin" "$TMP/milestones/TEST_TIMEOUT" "$TMP/.harness"
+mkdir -p "$TMP/bin" "$TMP/milestones/TEST_TIMEOUT" \
+  "$TMP/milestones/TEST_TIMEOUT_REDIRECTED" "$TMP/.harness"
 cp "$ROOT/bin/milestone-gate.py" "$TMP/bin/milestone-gate.py"
 chmod +x "$TMP/bin/milestone-gate.py"
 
@@ -20,7 +34,24 @@ cat > "$TMP/milestones/TEST_TIMEOUT/gate.json" <<'JSON'
       "command": [
         "bash",
         "-c",
-        "trap 'exit 0' TERM; (trap '' TERM HUP; sleep 5; touch .harness/LEAKED_DESCENDANT; sleep 60) & wait"
+        "trap 'exit 0' TERM; (trap '' TERM HUP; printf '%s\\n' \"$BASHPID\" > .harness/stubborn.pid; sleep 5; touch .harness/LEAKED_DESCENDANT; sleep 60) & wait"
+      ],
+      "timeout_seconds": 1
+    }
+  ]
+}
+JSON
+
+cat > "$TMP/milestones/TEST_TIMEOUT_REDIRECTED/gate.json" <<'JSON'
+{
+  "milestone": "TEST_TIMEOUT_REDIRECTED",
+  "checks": [
+    {
+      "id": "redirected-stubborn-descendant",
+      "command": [
+        "bash",
+        "-c",
+        "trap 'exit 0' TERM; (trap '' TERM HUP; printf '%s\\n' \"$BASHPID\" > .harness/redirected.pid; exec >/dev/null 2>&1; sleep 5; touch .harness/LEAKED_REDIRECTED_DESCENDANT; sleep 60) & wait"
       ],
       "timeout_seconds": 1
     }
@@ -68,6 +99,41 @@ grep -q 'process tree terminated' gate.out || {
 sleep 3
 [ ! -e .harness/LEAKED_DESCENDANT ] || {
   echo "timed-out gate leaked a descendant that modified the worktree" >&2
+  exit 1
+}
+
+# Pipe EOF is not process-tree EOF. This child redirects both streams before the
+# leader exits on TERM, then attempts a delayed worktree write while ignoring TERM/HUP.
+started_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
+set +e
+MILESTONE_ID=TEST_TIMEOUT_REDIRECTED timeout 8s python3 bin/milestone-gate.py --json --no-record > redirected.out 2> redirected.err
+redirected_rc=$?
+set -e
+ended_ns=$(python3 -c 'import time; print(time.monotonic_ns())')
+redirected_elapsed_ms=$(( (ended_ns - started_ns) / 1000000 ))
+
+[ "$redirected_rc" -ne 124 ] || {
+  echo "redirected-output gate hung during process-tree cleanup" >&2
+  cat redirected.out >&2 || true
+  cat redirected.err >&2 || true
+  exit 1
+}
+
+[ "$redirected_rc" -eq 1 ] || {
+  echo "redirected-output gate returned $redirected_rc instead of 1" >&2
+  cat redirected.out >&2 || true
+  cat redirected.err >&2 || true
+  exit 1
+}
+
+[ "$redirected_elapsed_ms" -ge 2800 ] && [ "$redirected_elapsed_ms" -lt 8000 ] || {
+  echo "redirected-output gate did not honor its bounded TERM grace and cleanup window" >&2
+  exit 1
+}
+
+sleep 3
+[ ! -e .harness/LEAKED_REDIRECTED_DESCENDANT ] || {
+  echo "redirected-output descendant survived the gate and modified the worktree" >&2
   exit 1
 }
 

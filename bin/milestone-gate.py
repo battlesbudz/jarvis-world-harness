@@ -73,31 +73,44 @@ def terminate_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 2
     """
     signal_process_tree(proc, signal.SIGTERM)
 
+    grace_deadline = time.monotonic() + grace_seconds
+    stdout = ""
+    stderr = ""
+    streams_drained = False
+    try:
+        stdout, stderr = proc.communicate(timeout=grace_seconds)
+        streams_drained = True
+    except subprocess.TimeoutExpired:
+        pass
+
+    # Pipe EOF proves only that no survivor still owns these particular streams.
+    # Preserve the full cooperative grace period, then always escalate against the
+    # process group so a redirected descendant cannot outlive the gate.
+    remaining_grace = grace_deadline - time.monotonic()
+    if remaining_grace > 0:
+        time.sleep(remaining_grace)
+    signal_process_tree(proc, signal.SIGKILL)
+
+    if streams_drained:
+        return stdout or "", stderr or ""
+
     try:
         stdout, stderr = proc.communicate(timeout=grace_seconds)
         return stdout or "", stderr or ""
-    except subprocess.TimeoutExpired:
-        # A cooperative leader may have exited while a stubborn descendant keeps
-        # the output pipes open. Escalate against the group regardless of the
-        # leader's status, then bound the final drain so the supervisor cannot hang.
-        signal_process_tree(proc, signal.SIGKILL)
-        try:
-            stdout, stderr = proc.communicate(timeout=grace_seconds)
-            return stdout or "", stderr or ""
-        except subprocess.TimeoutExpired as e:
-            for stream in (proc.stdout, proc.stderr):
-                if stream is not None:
-                    stream.close()
-            if proc.poll() is None:
-                try:
-                    proc.kill()
-                    proc.wait(timeout=grace_seconds)
-                except (ProcessLookupError, subprocess.TimeoutExpired):
-                    pass
-            raise GateConfigurationError(
-                "timed-out check did not release its output pipes after process-tree "
-                "SIGKILL; descendant state is untrusted"
-            ) from e
+    except subprocess.TimeoutExpired as e:
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None:
+                stream.close()
+        if proc.poll() is None:
+            try:
+                proc.kill()
+                proc.wait(timeout=grace_seconds)
+            except (ProcessLookupError, subprocess.TimeoutExpired):
+                pass
+        raise GateConfigurationError(
+            "timed-out check did not release its output pipes after process-tree "
+            "SIGKILL; descendant state is untrusted"
+        ) from e
 
 
 def run_check(check: dict) -> dict:
