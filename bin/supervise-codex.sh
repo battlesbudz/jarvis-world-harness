@@ -53,7 +53,6 @@ acquire_control_and_runner() {
   exec 8<>"$RUNNER_LOCK"
   if ! flock -n 8 7>&- 9>&-; then
     exec 8>&- 2>/dev/null || true
-    flock -u 9 7>&- 2>/dev/null || true
     exec 9>&- 2>/dev/null || true
     locks_held=0
     return 1
@@ -64,9 +63,9 @@ acquire_control_and_runner() {
 
 release_control_and_runner() {
   [ "$locks_held" -eq 1 ] || return 0
-  flock -u 8 7>&- 9>&- 2>/dev/null || true
+  # Close without LOCK_UN: a live gate may share these open descriptions after
+  # supervisor death and must retain serialization until it finishes.
   exec 8>&- 2>/dev/null || true
-  flock -u 9 7>&- 2>/dev/null || true
   exec 9>&- 2>/dev/null || true
   locks_held=0
 }
@@ -99,7 +98,9 @@ launch_runner_from_handoff() {
 }
 
 milestone_passed() {
-  python3 bin/milestone-gate.py 7>&- 8>&- 9>&- >"$GATE_OUT" 2>"$GATE_ERR"
+  # The gate excludes private fd 7 but retains fd 8/9 so serialization survives
+  # supervisor death until the evaluator itself finishes.
+  python3 bin/milestone-gate.py 7>&- >"$GATE_OUT" 2>"$GATE_ERR"
   gate_rc=$?
   case "$gate_rc" in
     0)

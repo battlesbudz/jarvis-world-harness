@@ -243,23 +243,34 @@ kill "$replacement_sup" 2>/dev/null || true
 wait "$replacement_sup" 2>/dev/null || true
 rm -f .harness/codex-supervisor.pause
 
-# Gate evaluation is another long-lived child. It receives neither the private
-# supervisor lease nor the control/runner handoff locks retained by its parent.
-rm -rf .harness; mkdir -p .harness/logs
-MILESTONE_ID=TEST_GATE_RACE CHECK_S=0.1 bash bin/supervise-codex.sh > supervisor-gate-lease.out 2>&1 &
-gate_lease_sup=$!
-for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && break; sleep 0.05; done
-[ -e .harness/test-gate-entered ] || { echo "supervisor lease fixture gate did not start" >&2; exit 1; }
-gate_child=$(cat .harness/test-gate-child.pid)
-gate_parent=$(cat .harness/test-gate-parent.pid)
-kill -9 "$gate_lease_sup"
-wait "$gate_lease_sup" 2>/dev/null || true
-kill -0 "$gate_child" 2>/dev/null || { echo "gate child did not survive supervisor SIGKILL" >&2; exit 1; }
-for lock in codex-supervisor.lock codex-control.lock codex-runner.lock; do
-  flock -n ".harness/$lock" true >/dev/null 2>&1 || { echo "gate child inherited $lock" >&2; exit 1; }
-done
-touch .harness/test-gate-release
-kill "$gate_parent" "$gate_child" 2>/dev/null || true
+# Gate evaluation closes the private supervisor lease but retains the control and
+# runner handoff leases, preserving serialization after hard or graceful death.
+assert_gate_lease_boundary() {
+  signal=$1
+  rm -rf .harness; mkdir -p .harness/logs
+  MILESTONE_ID=TEST_GATE_RACE CHECK_S=0.1 bash bin/supervise-codex.sh > "supervisor-gate-${signal}.out" 2>&1 &
+  gate_lease_sup=$!
+  for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && break; sleep 0.05; done
+  [ -e .harness/test-gate-entered ] || { echo "supervisor $signal fixture gate did not start" >&2; exit 1; }
+  gate_child=$(cat .harness/test-gate-child.pid)
+  gate_parent=$(cat .harness/test-gate-parent.pid)
+  kill "-$signal" "$gate_lease_sup"
+  wait "$gate_lease_sup" 2>/dev/null || true
+  kill -0 "$gate_child" 2>/dev/null || { echo "gate child did not survive supervisor $signal" >&2; exit 1; }
+  kill -0 "$gate_parent" 2>/dev/null || { echo "gate evaluator did not survive supervisor $signal" >&2; exit 1; }
+  flock -n .harness/codex-supervisor.lock true >/dev/null 2>&1 || { echo "gate evaluator inherited the private supervisor lease after $signal" >&2; exit 1; }
+  for lock in codex-control.lock codex-runner.lock; do
+    if flock -n ".harness/$lock" true >/dev/null 2>&1; then
+      echo "live gate evaluator released $lock after supervisor $signal" >&2
+      exit 1
+    fi
+  done
+  touch .harness/test-gate-release
+  wait_lock_free .harness/codex-control.lock || { echo "completed $signal gate did not release the control lock" >&2; exit 1; }
+  wait_lock_free .harness/codex-runner.lock || { echo "completed $signal gate did not release the runner lock" >&2; exit 1; }
+}
+assert_gate_lease_boundary KILL
+assert_gate_lease_boundary TERM
 
 # 3) Manual restart preserves a thread that was already emitted by an interrupted first turn.
 rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"

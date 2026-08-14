@@ -1,5 +1,5 @@
 # Agent Plan
 
-1. Reproduce both reported private-lock leaks and the adjacent gate/control-wait SIGKILL paths.
-2. Keep supervisor fd 7 and restart fd 6 out of every child while preserving the intentional control/runner handoffs through one replacement launch.
-3. Run the focused lifecycle suite and complete H0 gate, record evidence, publish both fixes together, and request a fresh Codex review.
+1. Reproduce the lost gate-serialization leases after hard and graceful supervisor death.
+2. Close only private fd 7 for gate evaluation, retain fd 8/9 until the evaluator exits, and prove all three release at the correct boundaries.
+3. Run the focused lifecycle suite and complete H0 gate, record evidence, publish the fix, and request a fresh Codex review.
