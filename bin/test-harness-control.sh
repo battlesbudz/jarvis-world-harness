@@ -310,7 +310,14 @@ kill -0 "$orphan_wrapper" 2>/dev/null || { echo "wrapper did not retain the inhe
 FAKE_CODEX_SLEEP=5 bash bin/restart-codex.sh > orphan-restart.out 2>&1 || { cat orphan-restart.out >&2; exit 1; }
 replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 [ -n "$replacement" ] && kill -0 "$replacement" 2>/dev/null || { echo "orphan recovery replacement did not start" >&2; exit 1; }
-replacement_wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
+replacement_wrapper=""
+for _ in $(seq 1 100); do
+  replacement_wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
+  if [ -n "$replacement_wrapper" ] && [ "$replacement_wrapper" != "$orphan_wrapper" ] && kill -0 "$replacement_wrapper" 2>/dev/null; then
+    break
+  fi
+  sleep 0.05
+done
 [ -n "$replacement_wrapper" ] && [ "$replacement_wrapper" != "$orphan_wrapper" ] && kill -0 "$replacement_wrapper" 2>/dev/null || { echo "orphan recovery did not install a distinct live wrapper" >&2; exit 1; }
 set +e
 flock -n .harness/codex-runner.lock true >/dev/null 2>&1
