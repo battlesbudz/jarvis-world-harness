@@ -308,9 +308,15 @@ kill -9 "$orphan_shell"
 wait "$orphan_shell" 2>/dev/null || true
 kill -0 "$orphan_wrapper" 2>/dev/null || { echo "wrapper did not retain the inherited runner lock" >&2; exit 1; }
 FAKE_CODEX_SLEEP=5 bash bin/restart-codex.sh > orphan-restart.out 2>&1 || { cat orphan-restart.out >&2; exit 1; }
-kill -0 "$orphan_wrapper" 2>/dev/null && { echo "restart left orphaned wrapper alive" >&2; exit 1; }
 replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 [ -n "$replacement" ] && kill -0 "$replacement" 2>/dev/null || { echo "orphan recovery replacement did not start" >&2; exit 1; }
+replacement_wrapper=$(cat .harness/codex-wrapper.pid 2>/dev/null || true)
+[ -n "$replacement_wrapper" ] && [ "$replacement_wrapper" != "$orphan_wrapper" ] && kill -0 "$replacement_wrapper" 2>/dev/null || { echo "orphan recovery did not install a distinct live wrapper" >&2; exit 1; }
+set +e
+flock -n .harness/codex-runner.lock true >/dev/null 2>&1
+replacement_lock_probe=$?
+set -e
+[ "$replacement_lock_probe" -ne 0 ] || { echo "orphan recovery replacement does not own the runner lock" >&2; exit 1; }
 touch .harness/STOP
 kill "$replacement" 2>/dev/null || true
 wait_lock_free .harness/codex-runner.lock || { echo "orphan recovery replacement did not stop" >&2; exit 1; }
