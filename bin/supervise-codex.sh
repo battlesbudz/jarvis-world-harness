@@ -68,7 +68,7 @@ launch_runner_from_handoff() {
   runs=$((runs + 1))
   say "launching Codex runner (run $runs)"
   start=$(date +%s)
-  env JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1 bin/run-codex.sh >> "$OUT" 2>&1 &
+  env JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1 bin/run-codex.sh 7>&- >> "$OUT" 2>&1 &
   runner_pid=$!
   # Do not LOCK_UN here: the child inherited the same open file descriptions.
   exec 8>&- 2>/dev/null || true

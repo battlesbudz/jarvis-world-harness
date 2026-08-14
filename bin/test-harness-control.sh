@@ -161,6 +161,37 @@ kill "$sup_owner" 2>/dev/null || true
 wait "$sup_owner" 2>/dev/null || true
 rm -f .harness/codex-supervisor.pause
 
+# 2b) Supervisor lease isolation: killing a supervisor must release its kernel
+# lease even while the already-launched runner remains alive.
+rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
+supervised_release="$TMP/release-supervised-runner"
+rm -f "$supervised_release"
+MILESTONE_ID=TEST_INCOMPLETE CHECK_S=0.1 BACKOFF_MIN=0 FAST_DEATH_S=999 \
+  FAKE_CODEX_RELEASE_FILE="$supervised_release" bash bin/supervise-codex.sh > supervisor-lease.out 2>&1 &
+lease_sup=$!
+for _ in $(seq 1 100); do
+  runner=$(cat .harness/codex-runner.lock 2>/dev/null || true)
+  [ -n "$runner" ] && [ -s .harness/codex-wrapper.ready ] && break
+  sleep 0.05
+done
+[ -n "${runner:-}" ] && kill -0 "$runner" 2>/dev/null || { echo "supervisor lease fixture runner did not start" >&2; exit 1; }
+touch .harness/codex-supervisor.pause
+kill -9 "$lease_sup"
+wait "$lease_sup" 2>/dev/null || true
+kill -0 "$runner" 2>/dev/null || { echo "supervised runner did not survive supervisor SIGKILL" >&2; exit 1; }
+flock -n .harness/codex-supervisor.lock true >/dev/null 2>&1 || { echo "runner inherited the dead supervisor's kernel lease" >&2; exit 1; }
+MILESTONE_ID=TEST_INCOMPLETE CHECK_S=0.1 bash bin/supervise-codex.sh >/dev/null 2>&1 & replacement_sup=$!
+for _ in $(seq 1 100); do
+  [ "$(cat .harness/codex-supervisor.lock 2>/dev/null || true)" = "$replacement_sup" ] && break
+  sleep 0.05
+done
+[ "$(cat .harness/codex-supervisor.lock 2>/dev/null || true)" = "$replacement_sup" ] || { echo "replacement supervisor could not acquire its lease" >&2; exit 1; }
+kill "$replacement_sup" 2>/dev/null || true
+wait "$replacement_sup" 2>/dev/null || true
+touch "$supervised_release"
+wait_lock_free .harness/codex-runner.lock || { echo "supervisor lease fixture runner did not stop" >&2; exit 1; }
+rm -f .harness/codex-supervisor.pause
+
 # 3) Manual restart preserves a thread that was already emitted by an interrupted first turn.
 rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
 FAKE_CODEX_SLEEP=30 bash bin/run-codex.sh >/dev/null 2>&1 &
