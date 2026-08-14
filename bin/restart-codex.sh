@@ -21,12 +21,17 @@ runner_handoff=0
 control_handoff=0
 
 pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
-job_running() { [ -n "${1:-}" ] && jobs -pr | grep -Fxq -- "$1"; }
+job_running() { [ -n "${1:-}" ] && jobs -pr 6>&- | grep -Fxq -- "$1" 6>&-; }
+read_metadata() {
+  METADATA=
+  IFS= read -r METADATA < "$1" 2>/dev/null || true
+}
 
 # Only one restart coordinator at a time.
 exec 6<>"$RESTART_LOCK"
 if ! flock -n 6; then
-  owner=$(cat "$RESTART_LOCK" 2>/dev/null || true)
+  read_metadata "$RESTART_LOCK"
+  owner=$METADATA
   echo "Another Codex restart is already active${owner:+: pid $owner}" >&2
   exit 2
 fi
@@ -36,13 +41,13 @@ printf '%s\n' "$$" > "$RESTART_LOCK"
 cleanup() {
   rc=$?
   trap - EXIT
-  [ "$pause_created" -eq 1 ] && rm -f "$PAUSE"
+  [ "$pause_created" -eq 1 ] && rm -f "$PAUSE" 6>&-
   if [ "$runner_handoff" -eq 1 ]; then
-    flock -u 8 2>/dev/null || true
+    flock -u 8 6>&- 9>&- 2>/dev/null || true
     exec 8>&- 2>/dev/null || true
   fi
   if [ "$control_handoff" -eq 1 ]; then
-    flock -u 9 2>/dev/null || true
+    flock -u 9 6>&- 2>/dev/null || true
     exec 9>&- 2>/dev/null || true
   fi
   : > "$RESTART_LOCK" 2>/dev/null || true
@@ -55,10 +60,10 @@ trap cleanup EXIT
 # Take the shared control lock *before* creating PAUSE. If the supervisor is in a
 # gate/launch handoff, wait until that atomic region completes, then take control.
 exec 9>"$CONTROL_LOCK"
-flock 9
+flock 9 6>&-
 control_handoff=1
 if [ ! -e "$PAUSE" ]; then
-  touch "$PAUSE"
+  touch "$PAUSE" 6>&-
   pause_created=1
 fi
 echo "Codex supervisor paused"
@@ -66,20 +71,20 @@ echo "Codex supervisor paused"
 # Probe the kernel runner lock. Free lock => PID text is stale metadata and must
 # never be signaled. Held lock => the stored PID belongs to the active runner handoff.
 exec 8<>"$RUNNER_LOCK"
-if flock -n 8; then
+if flock -n 8 6>&- 9>&-; then
   runner_handoff=1
 else
-  runner_pid=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
-  wrapper_pid=$(cat "$WRAPPER_PID_FILE" 2>/dev/null || true)
+  read_metadata "$RUNNER_LOCK"; runner_pid=$METADATA
+  read_metadata "$WRAPPER_PID_FILE"; wrapper_pid=$METADATA
   # Re-probe immediately before trusting the PID; the runner may have exited since
   # the first probe. If the lock became free, we now own it and do not signal anyone.
-  if flock -n 8; then
+  if flock -n 8 6>&- 9>&-; then
     runner_handoff=1
   else
     if [ -n "$wrapper_pid" ]; then
       # Ask the process that actually watches this control file to stop itself.
       # Unlike signaling PID metadata, this cannot target an unrelated recycled PID.
-      touch "$WRAPPER_STOP_FILE"
+      touch "$WRAPPER_STOP_FILE" 6>&-
     elif pid_alive "$runner_pid"; then
       # Narrow startup fallback: the shell owns the lock but has not launched and
       # recorded its wrapper yet.
@@ -87,16 +92,19 @@ else
     fi
     # PID signalability is not exit evidence: an orphaned shell can remain a zombie
     # after releasing every file descriptor. The kernel lock is authoritative.
-    if ! flock -w 5 8; then
-      late_wrapper_pid=$(cat "$WRAPPER_PID_FILE" 2>/dev/null || true)
+    if ! flock -w 5 8 6>&- 9>&-; then
+      read_metadata "$WRAPPER_PID_FILE"; late_wrapper_pid=$METADATA
       if [ -n "$late_wrapper_pid" ]; then
         # The wrapper may have appeared after the initial startup-gap probe.
-        touch "$WRAPPER_STOP_FILE"
-      elif [ "$(cat "$RUNNER_LOCK" 2>/dev/null || true)" = "$runner_pid" ] && pid_alive "$runner_pid"; then
+        touch "$WRAPPER_STOP_FILE" 6>&-
+      else
+        read_metadata "$RUNNER_LOCK"
+      fi
+      if [ -z "$late_wrapper_pid" ] && [ "$METADATA" = "$runner_pid" ] && pid_alive "$runner_pid"; then
         # Last resort for a shell stuck before it can create a controllable wrapper.
         kill -KILL "$runner_pid" 2>/dev/null || true
       fi
-      if ! flock -w 5 8; then
+      if ! flock -w 5 8 6>&- 9>&-; then
         echo "runner lock is held but no safe owner could be stopped" >&2
         exit 2
       fi
@@ -107,17 +115,18 @@ fi
 
 # We own the runner lock now. Stale metadata can be cleared safely.
 : > "$RUNNER_LOCK"
-rm -f "$CHILD_PID_FILE"
-rm -f "$WRAPPER_PID_FILE"
-rm -f "$WRAPPER_READY_FILE"
-rm -f "$WRAPPER_STOP_FILE"
+rm -f "$CHILD_PID_FILE" "$WRAPPER_PID_FILE" "$WRAPPER_READY_FILE" "$WRAPPER_STOP_FILE" 6>&-
 
-OUT=".harness/logs/manual-restart-$(date +%Y%m%d-%H%M%S)-$$-${RANDOM:-0}.out"
+restart_stamp=$(
+  exec 6>&-
+  date +%Y%m%d-%H%M%S
+)
+OUT=".harness/logs/manual-restart-${restart_stamp}-$$-${RANDOM:-0}.out"
+runner_env=(JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1)
 if [ -n "$NOTE" ] && [ -f "$NOTE" ]; then
-  nohup env JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1 RESUME_NOTE_FILE="$NOTE" bin/run-codex.sh > "$OUT" 2>&1 &
-else
-  nohup env JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1 bin/run-codex.sh > "$OUT" 2>&1 &
+  runner_env+=(RESUME_NOTE_FILE="$NOTE")
 fi
+nohup env "${runner_env[@]}" bin/run-codex.sh 6>&- > "$OUT" 2>&1 &
 replacement_shell=$!
 
 # Transfer ownership: do not LOCK_UN; the child inherited both open descriptions.
@@ -128,8 +137,8 @@ control_handoff=0
 
 runner_lock_held() {
   exec 5<>"$RUNNER_LOCK"
-  if flock -n 5; then
-    flock -u 5 2>/dev/null || true
+  if flock -n 5 6>&-; then
+    flock -u 5 6>&- 2>/dev/null || true
     exec 5>&- 2>/dev/null || true
     return 1
   fi
@@ -139,8 +148,8 @@ runner_lock_held() {
 
 wrapper_lock_held() {
   exec 4<>"$WRAPPER_LOCK_FILE"
-  if flock -n 4; then
-    flock -u 4 2>/dev/null || true
+  if flock -n 4 6>&-; then
+    flock -u 4 6>&- 2>/dev/null || true
     exec 4>&- 2>/dev/null || true
     return 1
   fi
@@ -148,13 +157,13 @@ wrapper_lock_held() {
   return 0
 }
 
-for _ in $(seq 1 40); do
-  sleep 0.25
+for ((attempt = 0; attempt < 40; attempt++)); do
+  sleep 0.25 6>&-
   if runner_lock_held; then
-    p=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
-    wrapper=$(cat "$WRAPPER_PID_FILE" 2>/dev/null || true)
-    ready=$(cat "$WRAPPER_READY_FILE" 2>/dev/null || true)
-    child=$(cat "$CHILD_PID_FILE" 2>/dev/null || true)
+    read_metadata "$RUNNER_LOCK"; p=$METADATA
+    read_metadata "$WRAPPER_PID_FILE"; wrapper=$METADATA
+    read_metadata "$WRAPPER_READY_FILE"; ready=$METADATA
+    read_metadata "$CHILD_PID_FILE"; child=$METADATA
     if [ "$p" = "$replacement_shell" ] && job_running "$replacement_shell" && wrapper_lock_held \
       && [ -n "$wrapper" ] && [ "$ready" = "$wrapper" ] \
       && pid_alive "$wrapper" && [ -n "$child" ] && pid_alive "$child"; then

@@ -26,7 +26,16 @@ runs=0
 post_delay=0
 locks_held=0
 
-say() { echo "$(date '+%F %T')  $*" | tee -a "$LOG"; }
+say() {
+  local stamp line
+  stamp=$(
+    exec 7>&-
+    date '+%F %T'
+  )
+  line="$stamp  $*"
+  printf '%s\n' "$line"
+  printf '%s\n' "$line" >> "$LOG"
+}
 
 # Supervisor identity is protected by the kernel lock; stale PID text is metadata only.
 exec 7<>"$SUPERVISOR_LOCK"
@@ -40,11 +49,11 @@ printf '%s\n' "$$" > "$SUPERVISOR_LOCK"
 
 acquire_control_and_runner() {
   exec 9>"$CONTROL_LOCK"
-  flock 9 || return 2
+  flock 9 7>&- || return 2
   exec 8<>"$RUNNER_LOCK"
-  if ! flock -n 8; then
+  if ! flock -n 8 7>&- 9>&-; then
     exec 8>&- 2>/dev/null || true
-    flock -u 9 2>/dev/null || true
+    flock -u 9 7>&- 2>/dev/null || true
     exec 9>&- 2>/dev/null || true
     locks_held=0
     return 1
@@ -55,9 +64,9 @@ acquire_control_and_runner() {
 
 release_control_and_runner() {
   [ "$locks_held" -eq 1 ] || return 0
-  flock -u 8 2>/dev/null || true
+  flock -u 8 7>&- 9>&- 2>/dev/null || true
   exec 8>&- 2>/dev/null || true
-  flock -u 9 2>/dev/null || true
+  flock -u 9 7>&- 2>/dev/null || true
   exec 9>&- 2>/dev/null || true
   locks_held=0
 }
@@ -67,7 +76,7 @@ release_control_and_runner() {
 launch_runner_from_handoff() {
   runs=$((runs + 1))
   say "launching Codex runner (run $runs)"
-  start=$(date +%s)
+  start=$SECONDS
   env JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1 bin/run-codex.sh 7>&- >> "$OUT" 2>&1 &
   runner_pid=$!
   # Do not LOCK_UN here: the child inherited the same open file descriptions.
@@ -76,7 +85,7 @@ launch_runner_from_handoff() {
   locks_held=0
   wait "$runner_pid"
   rc=$?
-  dur=$(( $(date +%s) - start ))
+  dur=$((SECONDS - start))
   say "runner exited rc=$rc after ${dur}s"
   if [ "$rc" -ne 0 ] || [ "$dur" -lt "$FAST_DEATH_S" ]; then
     post_delay=$backoff
@@ -90,7 +99,7 @@ launch_runner_from_handoff() {
 }
 
 milestone_passed() {
-  python3 bin/milestone-gate.py >"$GATE_OUT" 2>"$GATE_ERR"
+  python3 bin/milestone-gate.py 7>&- 8>&- 9>&- >"$GATE_OUT" 2>"$GATE_ERR"
   gate_rc=$?
   case "$gate_rc" in
     0)
@@ -125,7 +134,7 @@ while true; do
     exit 0
   fi
   if [ -e "$PAUSE" ]; then
-    sleep "$CHECK_S"
+    sleep "$CHECK_S" 7>&-
     continue
   fi
 
@@ -135,7 +144,7 @@ while true; do
   lock_rc=$?
   if [ "$lock_rc" -eq 1 ]; then
     backoff=$BACKOFF_MIN
-    sleep "$CHECK_S"
+    sleep "$CHECK_S" 7>&-
     continue
   elif [ "$lock_rc" -ne 0 ]; then
     say "could not acquire control/runner handoff locks"
@@ -151,7 +160,7 @@ while true; do
   fi
   if [ -e "$PAUSE" ]; then
     release_control_and_runner
-    sleep "$CHECK_S"
+    sleep "$CHECK_S" 7>&-
     continue
   fi
 
@@ -174,7 +183,7 @@ while true; do
     post_delay=0
     release_control_and_runner
     say "milestone incomplete; delaying next launch ${delay}s"
-    sleep "$delay"
+    sleep "$delay" 7>&-
     continue
   fi
 
@@ -191,7 +200,7 @@ while true; do
   fi
   if [ -e "$PAUSE" ]; then
     release_control_and_runner
-    sleep "$CHECK_S"
+    sleep "$CHECK_S" 7>&-
     continue
   fi
 

@@ -9,7 +9,9 @@ cleanup_all() {
     child=$(cat "$TMP"/.harness/codex-child.pid 2>/dev/null || true)
     [ -n "$child" ] && kill -- "-$child" 2>/dev/null || true
     [ -n "$child" ] && kill -9 -- "-$child" 2>/dev/null || true
-    for f in "$TMP"/.harness/codex-runner.lock "$TMP"/.harness/codex-supervisor.lock "$TMP"/.harness/codex-restart.lock "$TMP"/.harness/codex-wrapper.pid; do
+    for f in "$TMP"/.harness/codex-runner.lock "$TMP"/.harness/codex-supervisor.lock "$TMP"/.harness/codex-restart.lock "$TMP"/.harness/codex-wrapper.pid \
+      "$TMP"/.harness/backoff-sleep.pid "$TMP"/.harness/restart-control-wait.pid \
+      "$TMP"/.harness/test-gate-child.pid "$TMP"/.harness/test-gate-parent.pid; do
       p=$(cat "$f" 2>/dev/null || true); [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
     for f in "$TMP"/.harness/zombie-child.pid "$TMP"/.harness/zombie-parent.pid; do
@@ -39,7 +41,7 @@ cat > "$TMP/milestones/TEST_BAD/gate.json" <<'JSON'
 {"milestone":"TEST_BAD","checks":[{"id":"missing-executable","command":["definitely-not-a-real-jwh-command"],"timeout_seconds":5}]}
 JSON
 cat > "$TMP/milestones/TEST_GATE_RACE/gate.json" <<'JSON'
-{"milestone":"TEST_GATE_RACE","checks":[{"id":"gate-window","command":["bash","-c","touch .harness/test-gate-entered; while [ ! -e .harness/test-gate-release ]; do sleep 0.05; done; exit 1"],"timeout_seconds":15}]}
+{"milestone":"TEST_GATE_RACE","checks":[{"id":"gate-window","command":["bash","-c","printf '%s\\n' \"$$\" > .harness/test-gate-child.pid; printf '%s\\n' \"$PPID\" > .harness/test-gate-parent.pid; touch .harness/test-gate-entered; while [ ! -e .harness/test-gate-release ]; do sleep 0.05; done; exit 1"],"timeout_seconds":15}]}
 JSON
 TRACE="$TMP/fake-codex.args"
 cat > "$TMP/fakebin/codex" <<'FAKE'
@@ -93,6 +95,26 @@ printf '%s\n' '{"type":"thread.started","thread_id":"redirected-fixture"}'
 wait
 FAKE
 chmod +x "$TMP/fakebin/codex-redirected"
+JWH_REAL_SLEEP=$(command -v sleep)
+JWH_REAL_FLOCK=$(command -v flock)
+export JWH_REAL_SLEEP JWH_REAL_FLOCK
+cat > "$TMP/fakebin/sleep" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ -n "${JWH_TEST_SLEEP_MARKER:-}" ] && [ "$#" -eq 1 ] && [ "$1" = "${JWH_TEST_SLEEP_ARG:-}" ]; then
+  printf '%s\n' "$$" > "$JWH_TEST_SLEEP_MARKER"
+fi
+exec "$JWH_REAL_SLEEP" "$@"
+FAKE
+cat > "$TMP/fakebin/flock" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ -n "${JWH_TEST_FLOCK_MARKER:-}" ] && [ "$#" -eq 1 ] && [ "$1" = "${JWH_TEST_FLOCK_FD:-}" ]; then
+  printf '%s\n' "$$" > "$JWH_TEST_FLOCK_MARKER"
+fi
+exec "$JWH_REAL_FLOCK" "$@"
+FAKE
+chmod +x "$TMP/fakebin/sleep" "$TMP/fakebin/flock"
 export PATH="$TMP/fakebin:$PATH"
 export FAKE_CODEX_TRACE="$TRACE"
 cd "$TMP"
@@ -191,6 +213,53 @@ wait "$replacement_sup" 2>/dev/null || true
 touch "$supervised_release"
 wait_lock_free .harness/codex-runner.lock || { echo "supervisor lease fixture runner did not stop" >&2; exit 1; }
 rm -f .harness/codex-supervisor.pause
+
+# The same private lease must not leak into a backoff sleep after a short run.
+rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
+JWH_TEST_SLEEP_MARKER=.harness/backoff-sleep.pid JWH_TEST_SLEEP_ARG=30 \
+  MILESTONE_ID=TEST_INCOMPLETE CHECK_S=0.1 BACKOFF_MIN=30 BACKOFF_MAX=30 FAST_DEATH_S=999 \
+  bash bin/supervise-codex.sh > supervisor-backoff.out 2>&1 &
+backoff_sup=$!
+for _ in $(seq 1 200); do
+  [ -s .harness/backoff-sleep.pid ] && break
+  sleep 0.05
+done
+[ -s .harness/backoff-sleep.pid ] || { echo "supervisor never entered its backoff child" >&2; exit 1; }
+backoff_sleep=$(cat .harness/backoff-sleep.pid)
+kill -0 "$backoff_sleep" 2>/dev/null || { echo "backoff sleep exited before supervisor kill" >&2; exit 1; }
+touch .harness/codex-supervisor.pause
+kill -9 "$backoff_sup"
+wait "$backoff_sup" 2>/dev/null || true
+kill -0 "$backoff_sleep" 2>/dev/null || { echo "backoff sleep did not survive supervisor SIGKILL" >&2; exit 1; }
+flock -n .harness/codex-supervisor.lock true >/dev/null 2>&1 || { echo "backoff child inherited the dead supervisor's kernel lease" >&2; exit 1; }
+kill "$backoff_sleep" 2>/dev/null || true
+MILESTONE_ID=TEST_INCOMPLETE CHECK_S=0.1 bash bin/supervise-codex.sh >/dev/null 2>&1 & replacement_sup=$!
+for _ in $(seq 1 100); do
+  [ "$(cat .harness/codex-supervisor.lock 2>/dev/null || true)" = "$replacement_sup" ] && break
+  sleep 0.05
+done
+[ "$(cat .harness/codex-supervisor.lock 2>/dev/null || true)" = "$replacement_sup" ] || { echo "replacement supervisor could not start during orphaned backoff" >&2; exit 1; }
+kill "$replacement_sup" 2>/dev/null || true
+wait "$replacement_sup" 2>/dev/null || true
+rm -f .harness/codex-supervisor.pause
+
+# Gate evaluation is another long-lived child. It receives neither the private
+# supervisor lease nor the control/runner handoff locks retained by its parent.
+rm -rf .harness; mkdir -p .harness/logs
+MILESTONE_ID=TEST_GATE_RACE CHECK_S=0.1 bash bin/supervise-codex.sh > supervisor-gate-lease.out 2>&1 &
+gate_lease_sup=$!
+for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && break; sleep 0.05; done
+[ -e .harness/test-gate-entered ] || { echo "supervisor lease fixture gate did not start" >&2; exit 1; }
+gate_child=$(cat .harness/test-gate-child.pid)
+gate_parent=$(cat .harness/test-gate-parent.pid)
+kill -9 "$gate_lease_sup"
+wait "$gate_lease_sup" 2>/dev/null || true
+kill -0 "$gate_child" 2>/dev/null || { echo "gate child did not survive supervisor SIGKILL" >&2; exit 1; }
+for lock in codex-supervisor.lock codex-control.lock codex-runner.lock; do
+  flock -n ".harness/$lock" true >/dev/null 2>&1 || { echo "gate child inherited $lock" >&2; exit 1; }
+done
+touch .harness/test-gate-release
+kill "$gate_parent" "$gate_child" 2>/dev/null || true
 
 # 3) Manual restart preserves a thread that was already emitted by an interrupted first turn.
 rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
@@ -459,13 +528,44 @@ replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 [ -n "$replacement" ] && kill "$replacement" 2>/dev/null || true
 wait_lock_free .harness/codex-runner.lock || { echo "concurrent restart replacement did not stop" >&2; exit 1; }
 
-# 14) Replacement identity: if the shell spawned by restart fails, a separate
-# direct runner must not satisfy that restart's readiness poll.
+# 14) Restart's private lease must not enter a child blocked on the control lock.
+rm -rf .harness; mkdir -p .harness/logs
+(
+  exec 9>.harness/codex-control.lock
+  flock 9
+  touch .harness/restart-control-held
+  while [ ! -e .harness/release-restart-control ]; do sleep 0.05; done
+) & control_holder=$!
+for _ in $(seq 1 100); do [ -e .harness/restart-control-held ] && break; sleep 0.05; done
+[ -e .harness/restart-control-held ] || { echo "restart control-lock fixture did not start" >&2; exit 1; }
+JWH_TEST_FLOCK_MARKER=.harness/restart-control-wait.pid JWH_TEST_FLOCK_FD=9 \
+  bash bin/restart-codex.sh > restart-control-lease.out 2>&1 & blocked_restart=$!
+for _ in $(seq 1 100); do [ -s .harness/restart-control-wait.pid ] && break; sleep 0.05; done
+[ -s .harness/restart-control-wait.pid ] || { echo "restart never entered its blocking control child" >&2; exit 1; }
+blocked_flock=$(cat .harness/restart-control-wait.pid)
+kill -0 "$blocked_flock" 2>/dev/null || { echo "restart control child exited before coordinator kill" >&2; exit 1; }
+kill -9 "$blocked_restart"
+wait "$blocked_restart" 2>/dev/null || true
+kill -0 "$blocked_flock" 2>/dev/null || { echo "blocking control child did not survive restart SIGKILL" >&2; exit 1; }
+flock -n .harness/codex-restart.lock true >/dev/null 2>&1 || { echo "control child inherited the dead restart coordinator's lease" >&2; exit 1; }
+kill "$blocked_flock" 2>/dev/null || true
+touch .harness/release-restart-control
+wait "$control_holder"
+
+# 15) Restart lease isolation: if the coordinator is SIGKILLed after spawning its
+# replacement, that child must not retain the coordinator's private fd 6 lease.
 rm -rf .harness; mkdir -p .harness/logs
 mv bin/run-codex.sh bin/run-codex.real.sh
 cat > bin/run-codex.sh <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${JWH_RUNNER_LOCK_HELD:-0}" = "1" ] && [ "${HOLD_RESTART_REPLACEMENT:-0}" = "1" ]; then
+  : > .harness/codex-runner.lock
+  printf '%s\n' "$$" > .harness/codex-runner.lock
+  touch .harness/restart-replacement-spawned
+  while [ ! -e .harness/release-restart-replacement ]; do /bin/sleep 0.05; done
+  exit 0
+fi
 if [ "${JWH_RUNNER_LOCK_HELD:-0}" = "1" ]; then
   touch .harness/intended-replacement-failed
   exit 23
@@ -473,6 +573,23 @@ fi
 exec "$(dirname "$0")/run-codex.real.sh" "$@"
 FAKE
 chmod +x bin/run-codex.sh
+HOLD_RESTART_REPLACEMENT=1 bash bin/restart-codex.sh > restart-lease.out 2>&1 & restart_coord=$!
+for _ in $(seq 1 100); do [ -e .harness/restart-replacement-spawned ] && break; sleep 0.05; done
+[ -e .harness/restart-replacement-spawned ] || { echo "restart lease fixture replacement did not start" >&2; exit 1; }
+lease_replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
+[ -n "$lease_replacement" ] && kill -0 "$lease_replacement" 2>/dev/null || { echo "restart lease fixture replacement is not alive" >&2; exit 1; }
+kill -9 "$restart_coord"
+wait "$restart_coord" 2>/dev/null || true
+kill -0 "$lease_replacement" 2>/dev/null || { echo "replacement did not survive restart coordinator SIGKILL" >&2; exit 1; }
+wait_lock_free .harness/codex-restart.lock || { echo "replacement inherited the dead restart coordinator's lease" >&2; exit 1; }
+kill -0 "$lease_replacement" 2>/dev/null || { echo "replacement exited before the restart lease was released" >&2; exit 1; }
+touch .harness/release-restart-replacement
+wait_lock_free .harness/codex-runner.lock || { echo "restart lease fixture replacement did not stop" >&2; exit 1; }
+rm -f .harness/codex-supervisor.pause
+
+# 16) Replacement identity: if the shell spawned by restart fails, a separate
+# direct runner must not satisfy that restart's readiness poll.
+rm -rf .harness; mkdir -p .harness/logs
 set +e
 FAKE_CODEX_SLEEP=30 bash bin/restart-codex.sh > identity-restart.out 2>&1 & identity_restart=$!
 set -e
