@@ -1,5 +1,6 @@
 # Agent Plan
 
-1. Reproduce H0 passing without a finalized, executable H1 Text Simulator contract.
-2. Finalize the H1 specification and future evidence manifest, then gate H0 on a deterministic contract check without implementing H1.
-3. Prove H0 passes and the unimplemented H1 gate remains safely incomplete, record evidence, publish the fix, and request a fresh Codex review.
+1. Reproduce the gate-evaluator death window and trace the control/runner lease through every spawned check boundary.
+2. Preserve explicit serialization leases in active checks, reject completed checks with live process groups, and require fresh lock acquisition before runner handoff.
+3. Add deterministic evaluator-death, background-descendant, and escaped-session regressions, then stress the focused lifecycle suites.
+4. Run the complete H0 gate, record evidence, publish the fix, and request a fresh Codex review.

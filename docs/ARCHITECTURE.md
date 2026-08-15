@@ -75,6 +75,8 @@ H0 deliberately keeps Codex orchestration separate from the game implementation.
 
 `bin/supervise-codex.sh` is the outer watchdog. It guarantees one supervisor, avoids racing an already-live runner, retries clean stops on the same thread, and exponentially backs off after short or failed runs.
 
+Milestone evaluation holds the control and runner kernel leases across the complete active process chain: supervisor, gate evaluator, and current evidence check. If an ancestor is hard-killed, the surviving check keeps serialization until it exits. A check that returns while leaving processes in its session is terminated and fails closed. Before an incomplete gate can launch Codex, the supervisor closes the evaluator-era descriptions and acquires both locks afresh; even a descendant that escaped into another session therefore blocks handoff instead of overlapping the runner.
+
 `bin/restart-codex.sh` is the operator-safe restart path. It pauses the supervisor before terminating the runner/child and releases the pause only after one replacement owns the runner lock, its wrapper owns a separate kernel lease, and matching shell/wrapper/readiness/child metadata exists. PID signalability is never treated as exit evidence because unreaped zombies remain signalable; kernel lock state is authoritative.
 
 `bin/health-codex.sh` treats process existence, recent Codex events, and recent `PROGRESS.md` updates as separate signals. A process that exists but has stopped producing events/progress is unhealthy.

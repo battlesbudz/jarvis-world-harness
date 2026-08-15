@@ -11,7 +11,8 @@ cleanup_all() {
     [ -n "$child" ] && kill -9 -- "-$child" 2>/dev/null || true
     for f in "$TMP"/.harness/codex-runner.lock "$TMP"/.harness/codex-supervisor.lock "$TMP"/.harness/codex-restart.lock "$TMP"/.harness/codex-wrapper.pid \
       "$TMP"/.harness/backoff-sleep.pid "$TMP"/.harness/restart-control-wait.pid \
-      "$TMP"/.harness/test-gate-child.pid "$TMP"/.harness/test-gate-parent.pid; do
+      "$TMP"/.harness/test-gate-child.pid "$TMP"/.harness/test-gate-parent.pid \
+      "$TMP"/.harness/test-background-child.pid "$TMP"/.harness/test-escaped-child.pid; do
       p=$(cat "$f" 2>/dev/null || true); [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
     for f in "$TMP"/.harness/zombie-child.pid "$TMP"/.harness/zombie-parent.pid; do
@@ -23,9 +24,11 @@ cleanup_all() {
 trap cleanup_all EXIT
 
 command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
+command -v setsid >/dev/null || { echo "setsid not found on PATH" >&2; exit 127; }
 mkdir -p "$TMP/bin" "$TMP/fakebin" "$TMP/spec" \
   "$TMP/milestones/TEST_INCOMPLETE" "$TMP/milestones/TEST_BAD" \
-  "$TMP/milestones/TEST_GATE_RACE"
+  "$TMP/milestones/TEST_GATE_RACE" "$TMP/milestones/TEST_GATE_BACKGROUND" \
+  "$TMP/milestones/TEST_GATE_ESCAPED"
 for f in run-codex.sh codex-process.py supervise-codex.sh restart-codex.sh health-codex.sh milestone-gate.py; do
   cp "$ROOT/bin/$f" "$TMP/bin/$f"
 done
@@ -42,6 +45,12 @@ cat > "$TMP/milestones/TEST_BAD/gate.json" <<'JSON'
 JSON
 cat > "$TMP/milestones/TEST_GATE_RACE/gate.json" <<'JSON'
 {"milestone":"TEST_GATE_RACE","checks":[{"id":"gate-window","command":["bash","-c","printf '%s\\n' \"$$\" > .harness/test-gate-child.pid; printf '%s\\n' \"$PPID\" > .harness/test-gate-parent.pid; touch .harness/test-gate-entered; while [ ! -e .harness/test-gate-release ]; do sleep 0.05; done; exit 1"],"timeout_seconds":15}]}
+JSON
+cat > "$TMP/milestones/TEST_GATE_BACKGROUND/gate.json" <<'JSON'
+{"milestone":"TEST_GATE_BACKGROUND","checks":[{"id":"background-after-exit","command":["bash","-c","(trap '' TERM HUP; printf '%s\\n' \"$BASHPID\" > .harness/test-background-child.pid; exec >/dev/null 2>&1; sleep 1; touch .harness/LEAKED_BACKGROUND_CHECK; sleep 30) & exit 0"],"timeout_seconds":5}]}
+JSON
+cat > "$TMP/milestones/TEST_GATE_ESCAPED/gate.json" <<'JSON'
+{"milestone":"TEST_GATE_ESCAPED","checks":[{"id":"escaped-after-exit","command":["bash","-c","if [ ! -e .harness/test-escaped-once ]; then touch .harness/test-escaped-once; setsid bash -c 'trap \"\" TERM HUP; printf \"%s\\n\" \"$BASHPID\" > .harness/test-escaped-child.pid; exec >/dev/null 2>&1; while [ ! -e .harness/test-escaped-release ]; do sleep 0.05; done' & fi; exit 1"],"timeout_seconds":5}]}
 JSON
 TRACE="$TMP/fake-codex.args"
 cat > "$TMP/fakebin/codex" <<'FAKE'
@@ -271,6 +280,66 @@ assert_gate_lease_boundary() {
 }
 assert_gate_lease_boundary KILL
 assert_gate_lease_boundary TERM
+
+# Killing the evaluator itself must not release serialization while its active
+# check survives. The delegated descriptors close naturally when that check exits.
+rm -rf .harness; mkdir -p .harness/logs
+MILESTONE_ID=TEST_GATE_RACE CHECK_S=0.1 bash bin/supervise-codex.sh > evaluator-lease.out 2>&1 &
+evaluator_lease_sup=$!
+for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && break; sleep 0.05; done
+[ -e .harness/test-gate-entered ] || { echo "evaluator lease fixture gate did not start" >&2; exit 1; }
+gate_child=$(cat .harness/test-gate-child.pid)
+gate_parent=$(cat .harness/test-gate-parent.pid)
+kill -9 "$gate_parent"
+wait "$evaluator_lease_sup" 2>/dev/null || true
+kill -0 "$gate_child" 2>/dev/null || { echo "active check did not survive evaluator SIGKILL" >&2; exit 1; }
+flock -n .harness/codex-supervisor.lock true >/dev/null 2>&1 || { echo "dead evaluator retained the supervisor lease" >&2; exit 1; }
+for lock in codex-control.lock codex-runner.lock; do
+  if flock -n ".harness/$lock" true >/dev/null 2>&1; then
+    echo "active check released $lock after evaluator SIGKILL" >&2
+    exit 1
+  fi
+done
+touch .harness/test-gate-release
+wait_lock_free .harness/codex-control.lock || { echo "completed orphan check did not release the control lock" >&2; exit 1; }
+wait_lock_free .harness/codex-runner.lock || { echo "completed orphan check did not release the runner lock" >&2; exit 1; }
+
+# A normally exiting check must not leave a same-session background process that
+# can overlap a runner through the shared lease. Terminate it and fail the gate.
+rm -rf .harness; mkdir -p .harness/logs
+set +e
+MILESTONE_ID=TEST_GATE_BACKGROUND python3 bin/milestone-gate.py --json --no-record > background-gate.out 2> background-gate.err
+background_gate_rc=$?
+set -e
+[ "$background_gate_rc" -eq 1 ] || { echo "background-descendant gate returned $background_gate_rc instead of 1" >&2; cat background-gate.out >&2; exit 1; }
+grep -q 'check exited while descendant processes remained' background-gate.out || { echo "background-descendant gate did not report fail-closed cleanup" >&2; cat background-gate.out >&2; exit 1; }
+sleep 2
+[ ! -e .harness/LEAKED_BACKGROUND_CHECK ] || { echo "completed check left a worktree-mutating descendant" >&2; exit 1; }
+
+# Even a descendant that creates a new session and escapes process-group cleanup
+# cannot overlap a runner: post-gate handoff must acquire a fresh lock description.
+rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
+escaped_release="$TMP/release-escaped-runner"
+rm -f "$escaped_release"
+MILESTONE_ID=TEST_GATE_ESCAPED CHECK_S=0.1 MAX_RUNS=1 BACKOFF_MIN=0 FAST_DEATH_S=999 \
+  FAKE_CODEX_RELEASE_FILE="$escaped_release" bash bin/supervise-codex.sh > escaped-gate.out 2>&1 &
+escaped_gate_sup=$!
+for _ in $(seq 1 100); do [ -s .harness/test-escaped-child.pid ] && break; sleep 0.05; done
+[ -s .harness/test-escaped-child.pid ] || { echo "escaped-session fixture did not start" >&2; exit 1; }
+escaped_child=$(cat .harness/test-escaped-child.pid)
+kill -0 "$escaped_child" 2>/dev/null || { echo "escaped-session child did not survive its check leader" >&2; exit 1; }
+sleep 0.3
+[ ! -s "$TRACE" ] || { echo "runner overlapped an escaped lease-holding check descendant" >&2; exit 1; }
+set +e
+flock -n .harness/codex-runner.lock true >/dev/null 2>&1
+escaped_lock_probe=$?
+set -e
+[ "$escaped_lock_probe" -ne 0 ] || { echo "escaped-session child did not retain serialization" >&2; exit 1; }
+touch .harness/test-escaped-release
+for _ in $(seq 1 100); do [ -s "$TRACE" ] && break; sleep 0.05; done
+[ -s "$TRACE" ] || { echo "runner did not start after escaped-session lease release" >&2; exit 1; }
+touch "$escaped_release"
+wait "$escaped_gate_sup"
 
 # 3) Manual restart preserves a thread that was already emitted by an interrupted first turn.
 rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"

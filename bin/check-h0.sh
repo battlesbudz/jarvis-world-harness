@@ -62,6 +62,9 @@ grep -q 'MAX_EVENT_AGE_MIN' bin/health-codex.sh
 ! grep -q 'pid-lock.py' bin/test-codex-lifecycle.sh
 
 grep -q 'start_new_session' bin/milestone-gate.py
+grep -q 'pass_fds' bin/milestone-gate.py
+grep -q 'JWH_GATE_LEASE_FDS=8,9' bin/supervise-codex.sh
+grep -q 'reacquire control/runner locks after milestone gate' bin/supervise-codex.sh
 grep -q 'os.killpg' bin/milestone-gate.py
 grep -q 'process tree terminated' bin/milestone-gate.py
 

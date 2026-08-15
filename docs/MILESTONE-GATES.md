@@ -37,6 +37,8 @@ runner exits -> evaluate again before deciding whether to relaunch
 
 This prevents an evaluation command from racing Codex while files are changing.
 
+The supervisor explicitly delegates its control/runner serialization leases to the gate evaluator and each active evidence check. The leases therefore survive a hard-killed supervisor or evaluator while worktree-reading or worktree-writing evidence is still running. If a check leader exits but leaves its process group alive, the evaluator terminates that group and rejects the check. After an incomplete evaluation, fresh lock acquisition is mandatory before runner handoff, so a lease-holding descendant that escaped the original session blocks safely rather than sharing the evaluator-era lock description with Codex.
+
 ## H0 evidence
 
 H0 deliberately uses tests that do not require a real Codex account or Unreal installation:

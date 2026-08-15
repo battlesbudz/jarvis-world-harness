@@ -99,8 +99,9 @@ launch_runner_from_handoff() {
 
 milestone_passed() {
   # The gate excludes private fd 7 but retains fd 8/9 so serialization survives
-  # supervisor death until the evaluator itself finishes.
-  python3 bin/milestone-gate.py 7>&- >"$GATE_OUT" 2>"$GATE_ERR"
+  # supervisor death. Tell the evaluator exactly which intentional leases each
+  # active check must retain; unrelated inherited descriptors remain closed.
+  JWH_GATE_LEASE_FDS=8,9 python3 bin/milestone-gate.py 7>&- >"$GATE_OUT" 2>"$GATE_ERR"
   gate_rc=$?
   case "$gate_rc" in
     0)
@@ -186,6 +187,21 @@ while true; do
     say "milestone incomplete; delaying next launch ${delay}s"
     sleep "$delay" 7>&-
     continue
+  fi
+
+  # Never hand the evaluator's shared open lock descriptions directly to a runner.
+  # Drop and reacquire fresh descriptions first: even a check that escaped its
+  # process group/session cannot overlap the runner if it retained either lease.
+  release_control_and_runner
+  acquire_control_and_runner
+  lock_rc=$?
+  if [ "$lock_rc" -eq 1 ]; then
+    backoff=$BACKOFF_MIN
+    sleep "$CHECK_S" 7>&-
+    continue
+  elif [ "$lock_rc" -ne 0 ]; then
+    say "could not reacquire control/runner locks after milestone gate"
+    exit 2
   fi
 
   if [ "$MAX_RUNS" -gt 0 ] && [ "$runs" -ge "$MAX_RUNS" ]; then

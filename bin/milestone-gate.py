@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+LEASE_FDS_ENV = "JWH_GATE_LEASE_FDS"
 
 
 class GateConfigurationError(RuntimeError):
@@ -51,6 +52,30 @@ def load_config(milestone: str) -> tuple[Path, list[dict]]:
     return config_path, checks
 
 
+def inherited_lease_fds() -> tuple[int, ...]:
+    """Return the explicitly delegated serialization leases, if any."""
+    raw = os.environ.get(LEASE_FDS_ENV, "").strip()
+    if not raw:
+        return ()
+    if os.name != "posix":
+        raise GateConfigurationError(f"{LEASE_FDS_ENV} is only supported on POSIX")
+
+    fds: list[int] = []
+    for value in raw.split(","):
+        value = value.strip()
+        if not value.isdecimal():
+            raise GateConfigurationError(f"{LEASE_FDS_ENV} contains invalid fd {value!r}")
+        fd = int(value)
+        if fd in fds:
+            raise GateConfigurationError(f"{LEASE_FDS_ENV} contains duplicate fd {fd}")
+        try:
+            os.fstat(fd)
+        except OSError as e:
+            raise GateConfigurationError(f"{LEASE_FDS_ENV} fd {fd} is not open: {e}") from e
+        fds.append(fd)
+    return tuple(fds)
+
+
 def signal_process_tree(proc: subprocess.Popen[str], sig: signal.Signals) -> None:
     """Signal the check's process group even after its original leader exits."""
     try:
@@ -62,6 +87,37 @@ def signal_process_tree(proc: subprocess.Popen[str], sig: signal.Signals) -> Non
             proc.send_signal(sig)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+def process_group_exists(proc: subprocess.Popen[str]) -> bool:
+    if os.name != "posix":
+        return proc.poll() is None
+    try:
+        os.killpg(proc.pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def terminate_completed_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 0.2) -> bool:
+    """Remove descendants left behind after the check leader has exited.
+
+    A check result is not trustworthy while its process group can still mutate the
+    worktree. This also prevents a lease-inheriting background process from sharing
+    the supervisor's open lock description with the next runner handoff.
+    """
+    if not process_group_exists(proc):
+        return False
+    signal_process_tree(proc, signal.SIGTERM)
+    deadline = time.monotonic() + grace_seconds
+    while time.monotonic() < deadline:
+        if not process_group_exists(proc):
+            return True
+        time.sleep(0.01)
+    signal_process_tree(proc, signal.SIGKILL)
+    return True
 
 
 def terminate_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 2.0) -> tuple[str, str]:
@@ -113,7 +169,7 @@ def terminate_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 2
         ) from e
 
 
-def run_check(check: dict) -> dict:
+def run_check(check: dict, lease_fds: tuple[int, ...] = ()) -> dict:
     cid = str(check.get("id") or "unnamed")
     command = check.get("command")
     if not isinstance(command, list) or not command or not all(isinstance(x, str) and x for x in command):
@@ -138,6 +194,7 @@ def run_check(check: dict) -> dict:
         }
         if os.name == "posix":
             popen_kwargs["start_new_session"] = True
+            popen_kwargs["pass_fds"] = lease_fds
         proc = subprocess.Popen(command, **popen_kwargs)
         try:
             stdout, stderr = proc.communicate(timeout=timeout)
@@ -154,10 +211,17 @@ def run_check(check: dict) -> dict:
     except (FileNotFoundError, PermissionError, OSError) as e:
         raise GateConfigurationError(f"check {cid!r} could not execute {command[0]!r}: {e}") from e
 
+    leftover_tree = terminate_completed_process_tree(proc)
+
     return {
         "id": cid,
-        "passed": proc.returncode == 0,
+        "passed": proc.returncode == 0 and not leftover_tree,
         "exit_code": proc.returncode,
+        **(
+            {"error": "check exited while descendant processes remained; process tree terminated"}
+            if leftover_tree
+            else {}
+        ),
         "duration_seconds": round(time.time() - started, 3),
         "stdout": (stdout or "")[-12000:],
         "stderr": (stderr or "")[-12000:],
@@ -188,7 +252,8 @@ def main() -> int:
     try:
         milestone = current_milestone()
         _config_path, checks = load_config(milestone)
-        results = [run_check(check) for check in checks]
+        lease_fds = inherited_lease_fds()
+        results = [run_check(check, lease_fds) for check in checks]
     except GateConfigurationError as e:
         payload = {
             "milestone": milestone,
