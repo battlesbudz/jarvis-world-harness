@@ -17,9 +17,10 @@
 - [ ] Upstream AAABench MIT license and attribution remain present.
 - [ ] H1 Text Simulator specification exists before H0 closes.
 
-## H1 — Text Simulator (draft acceptance target)
+## H1 — Text Simulator
 
 The simulator must run without Unreal and demonstrate causal world behavior.
+H1 implementation is not authorized until H0 is deliberately closed; `milestones/H1/SPEC.md` defines the finalized scope and evidence contract.
 
 - [ ] Supports Bio, Thinker, and Non-Thinker actor categories.
 - [ ] Stores append-only world events with actor, target, time, location/context, witnesses, and causal metadata.

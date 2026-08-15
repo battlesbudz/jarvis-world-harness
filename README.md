@@ -94,6 +94,7 @@ Runtime state, logs, PIDs, thread IDs, and last-run metadata live under `.harnes
 - `spec/CORE-LAWS.md` — protected design invariants.
 - `MILESTONE.md` — the currently authorized milestone.
 - `ACCEPTANCE-TESTS.md` — evidence required before advancing.
+- `milestones/H1/SPEC.md` — finalized scope and evidence contract for the next milestone; it does not authorize H1 during H0.
 - `HARNESS-RULES.md` — operator/agent boundaries.
 - `docs/ARCHITECTURE.md` — intended split between Unreal and World OS.
 - `bin/run-codex.sh` — resumable Codex runner with structured events.

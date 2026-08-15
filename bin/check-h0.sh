@@ -6,9 +6,10 @@ cd "$(dirname "$0")/.."
 required=(
   AGENTS.md MILESTONE.md ACCEPTANCE-TESTS.md HARNESS-RULES.md
   spec/CORE-LAWS.md spec/WORLD-VISION.md docs/ARCHITECTURE.md docs/MILESTONE-GATES.md
-  milestones/H0/gate.json
+  milestones/H0/gate.json milestones/H1/SPEC.md milestones/H1/gate.json
   bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh
   bin/milestone-gate.py bin/codex-process.py
+  bin/check-h1-spec.sh
   bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh
   bin/test-gate-timeout-tree.sh
 )
@@ -16,7 +17,7 @@ for f in "${required[@]}"; do
   [ -f "$f" ] || { echo "missing: $f" >&2; exit 1; }
 done
 
-for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh bin/test-gate-timeout-tree.sh; do
+for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/check-h1-spec.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh bin/test-gate-timeout-tree.sh; do
   bash -n "$f"
 done
 python3 -m py_compile bin/milestone-gate.py bin/codex-process.py
@@ -25,8 +26,10 @@ import json
 p='milestones/H0/gate.json'
 d=json.load(open(p, encoding='utf-8'))
 assert d.get('milestone') == 'H0'
-ids={c.get('id') for c in d.get('checks', [])}
-assert {'h0-static','codex-lifecycle','harness-control','lock-races','gate-timeout-tree'} <= ids, ids
+checks={c.get('id'): c for c in d.get('checks', [])}
+ids=set(checks)
+assert {'h0-static','h1-spec','codex-lifecycle','harness-control','lock-races','gate-timeout-tree'} <= ids, ids
+assert checks['h1-spec'].get('command') == ['bash','bin/check-h1-spec.sh']
 PY
 
 grep -q -- '--sandbox "$SANDBOX"' bin/run-codex.sh

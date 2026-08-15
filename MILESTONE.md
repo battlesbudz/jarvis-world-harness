@@ -17,7 +17,7 @@ Convert the AAABench long-horizon Unreal harness into a Codex-first development 
    - headless World OS simulation/evals
    - Unreal/MCP visual/gameplay work
 9. AAABench's useful Unreal control surface, QA tooling, supervision lessons, and MIT attribution are preserved.
-10. The next milestone, **H1 Text Simulator**, is fully specified before any large open-world content generation begins.
+10. The next milestone, **H1 Text Simulator**, is fully specified in `milestones/H1/SPEC.md`, has a committed executable evidence manifest at `milestones/H1/gate.json`, and has finalized acceptance criteria before any implementation or large open-world content generation begins.
 
 ## Stop condition
 
