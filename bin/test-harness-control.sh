@@ -369,12 +369,20 @@ MILESTONE_ID=TEST_GATE_RACE CHECK_S=0.1 BACKOFF_MIN=0 FAST_DEATH_S=999 bash bin/
 race_sup=$!
 for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && break; sleep 0.05; done
 [ -e .harness/test-gate-entered ] || { echo "restart race fixture never entered" >&2; exit 1; }
-FAKE_CODEX_SLEEP=30 bash bin/restart-codex.sh restart-note.txt > restart-race-restart.out 2>&1 & restart_job=$!
-sleep 0.2
-# Restart is blocked on the control lock while the gate is active; no Codex turn can be its replacement yet.
+JWH_TEST_FLOCK_MARKER=.harness/restart-control-wait.pid JWH_TEST_FLOCK_FD=9 FAKE_CODEX_SLEEP=30 \
+  bash bin/restart-codex.sh restart-note.txt > restart-race-restart.out 2>&1 & restart_job=$!
+for _ in $(seq 1 100); do [ -s .harness/restart-control-wait.pid ] && break; sleep 0.05; done
+[ -s .harness/restart-control-wait.pid ] || { echo "restart did not block on the gate-held control lock" >&2; exit 1; }
+restart_waiter=$(cat .harness/restart-control-wait.pid)
+kill -0 "$restart_waiter" 2>/dev/null || { echo "restart control-lock waiter exited before gate release" >&2; exit 1; }
+# The confirmed control-lock waiter cannot launch Codex until the gate releases.
 touch .harness/test-gate-release
+if ! wait "$restart_job"; then
+  echo "restart handoff failed before replacement readiness" >&2
+  cat restart-race-restart.out >&2
+  exit 1
+fi
 wait_trace 'UNIQUE_RESTART_NOTE' || { echo "restart handoff lost RESUME_NOTE_FILE" >&2; cat restart-race-restart.out >&2; exit 1; }
-wait "$restart_job"
 touch .harness/STOP
 current=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 [ -n "$current" ] && kill "$current" 2>/dev/null || true
