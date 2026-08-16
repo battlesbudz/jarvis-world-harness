@@ -12,7 +12,8 @@ cleanup_all() {
     for f in "$TMP"/.harness/codex-runner.lock "$TMP"/.harness/codex-supervisor.lock "$TMP"/.harness/codex-restart.lock "$TMP"/.harness/codex-wrapper.pid \
       "$TMP"/.harness/backoff-sleep.pid "$TMP"/.harness/restart-control-wait.pid \
       "$TMP"/.harness/test-gate-child.pid "$TMP"/.harness/test-gate-parent.pid \
-      "$TMP"/.harness/test-background-child.pid "$TMP"/.harness/test-escaped-child.pid; do
+      "$TMP"/.harness/test-background-child.pid "$TMP"/.harness/test-escaped-child.pid \
+      "$TMP"/.harness/evaluator-detached.pid; do
       p=$(cat "$f" 2>/dev/null || true); [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
     for f in "$TMP"/.harness/zombie-child.pid "$TMP"/.harness/zombie-parent.pid; do
@@ -28,7 +29,7 @@ command -v setsid >/dev/null || { echo "setsid not found on PATH" >&2; exit 127;
 mkdir -p "$TMP/bin" "$TMP/fakebin" "$TMP/spec" \
   "$TMP/milestones/TEST_INCOMPLETE" "$TMP/milestones/TEST_BAD" \
   "$TMP/milestones/TEST_GATE_RACE" "$TMP/milestones/TEST_GATE_BACKGROUND" \
-  "$TMP/milestones/TEST_GATE_ESCAPED"
+  "$TMP/milestones/TEST_GATE_ESCAPED" "$TMP/milestones/TEST_GATE_EVALUATOR_DEATH"
 for f in run-codex.sh codex-process.py process_group.py supervise-codex.sh restart-codex.sh health-codex.sh milestone-gate.py; do
   cp "$ROOT/bin/$f" "$TMP/bin/$f"
 done
@@ -52,6 +53,45 @@ JSON
 cat > "$TMP/milestones/TEST_GATE_ESCAPED/gate.json" <<'JSON'
 {"milestone":"TEST_GATE_ESCAPED","checks":[{"id":"escaped-after-exit","command":["bash","-c","if [ ! -e .harness/test-escaped-once ]; then touch .harness/test-escaped-once; setsid bash -c 'trap \"\" TERM HUP; printf \"%s\\n\" \"$BASHPID\" > .harness/test-escaped-child.pid; exec >/dev/null 2>&1; sleep 1; touch .harness/LEAKED_ESCAPED_CHECK; sleep 30' & fi; exit 1"],"timeout_seconds":5}]}
 JSON
+cat > "$TMP/milestones/TEST_GATE_EVALUATOR_DEATH/gate.json" <<'JSON'
+{"milestone":"TEST_GATE_EVALUATOR_DEATH","checks":[{"id":"close-fds-after-evaluator-death","command":["python3","evaluator-death-check.py"],"timeout_seconds":30}]}
+JSON
+cat > "$TMP/evaluator-death-check.py" <<'PY'
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+child_code = r'''
+import os
+import signal
+import time
+from pathlib import Path
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+Path(".harness/evaluator-detached.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+time.sleep(5)
+Path(".harness/LEAKED_EVALUATOR_CHILD").touch()
+time.sleep(30)
+'''
+subprocess.Popen(
+    [sys.executable, "-c", child_code],
+    close_fds=True,
+    start_new_session=True,
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+Path(".harness/test-gate-child.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+Path(".harness/test-gate-parent.pid").write_text(f"{os.getppid()}\n", encoding="utf-8")
+while not Path(".harness/evaluator-detached.pid").exists():
+    time.sleep(0.01)
+Path(".harness/test-gate-entered").touch()
+while True:
+    time.sleep(1)
+PY
 TRACE="$TMP/fake-codex.args"
 cat > "$TMP/fakebin/codex" <<'FAKE'
 #!/usr/bin/env bash
@@ -285,28 +325,37 @@ assert_gate_lease_boundary() {
 assert_gate_lease_boundary KILL
 assert_gate_lease_boundary TERM
 
-# Killing the evaluator itself must not release serialization while its active
-# check survives. The delegated descriptors close naturally when that check exits.
+# Killing the evaluator itself must not release serialization even when an active
+# check created a detached child with close_fds=True. The supervisor remains the
+# outer subreaper, adopts and kills the whole tree, then releases both leases.
 rm -rf .harness; mkdir -p .harness/logs
-MILESTONE_ID=TEST_GATE_RACE CHECK_S=0.1 bash bin/supervise-codex.sh > evaluator-lease.out 2>&1 &
+MILESTONE_ID=TEST_GATE_EVALUATOR_DEATH CHECK_S=0.1 bash bin/supervise-codex.sh > evaluator-lease.out 2>&1 &
 evaluator_lease_sup=$!
 for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && break; sleep 0.05; done
 [ -e .harness/test-gate-entered ] || { echo "evaluator lease fixture gate did not start" >&2; exit 1; }
 gate_child=$(cat .harness/test-gate-child.pid)
 gate_parent=$(cat .harness/test-gate-parent.pid)
+detached_child=$(cat .harness/evaluator-detached.pid)
 kill -9 "$gate_parent"
-wait "$evaluator_lease_sup" 2>/dev/null || true
-kill -0 "$gate_child" 2>/dev/null || { echo "active check did not survive evaluator SIGKILL" >&2; exit 1; }
-flock -n .harness/codex-supervisor.lock true >/dev/null 2>&1 || { echo "dead evaluator retained the supervisor lease" >&2; exit 1; }
+sleep 0.1
 for lock in codex-control.lock codex-runner.lock; do
   if flock -n ".harness/$lock" true >/dev/null 2>&1; then
-    echo "active check released $lock after evaluator SIGKILL" >&2
+    echo "supervisor released $lock before evaluator-orphan cleanup" >&2
     exit 1
   fi
 done
-touch .harness/test-gate-release
-wait_lock_free .harness/codex-control.lock || { echo "completed orphan check did not release the control lock" >&2; exit 1; }
-wait_lock_free .harness/codex-runner.lock || { echo "completed orphan check did not release the runner lock" >&2; exit 1; }
+set +e
+wait "$evaluator_lease_sup"
+evaluator_sup_rc=$?
+set -e
+[ "$evaluator_sup_rc" -eq 2 ] || { echo "evaluator-death supervisor returned $evaluator_sup_rc instead of 2" >&2; cat evaluator-lease.out >&2; exit 1; }
+state=$(awk '{print $3}' "/proc/$detached_child/stat" 2>/dev/null || true)
+{ [ -z "$state" ] || [ "$state" = "Z" ]; } || { echo "close-fds child survived evaluator fallback cleanup" >&2; exit 1; }
+sleep 5
+[ ! -e .harness/LEAKED_EVALUATOR_CHILD ] || { echo "close-fds child mutated worktree after evaluator death" >&2; exit 1; }
+wait_lock_free .harness/codex-control.lock || { echo "evaluator fallback did not release the control lock" >&2; exit 1; }
+wait_lock_free .harness/codex-runner.lock || { echo "evaluator fallback did not release the runner lock" >&2; exit 1; }
+grep -q 'gate evaluator exited while executable descendants remained' evaluator-lease.out || { echo "evaluator fallback was not reported fail-closed" >&2; cat evaluator-lease.out >&2; exit 1; }
 
 # A normally exiting check must not leave a same-session background process that
 # can overlap a runner through the shared lease. Terminate it and fail the gate.

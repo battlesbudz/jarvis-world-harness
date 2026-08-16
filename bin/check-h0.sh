@@ -42,6 +42,9 @@ grep -q 'CONTROL_LOCK=.harness/codex-control.lock' bin/supervise-codex.sh
 grep -q 'acquire_control_and_runner' bin/supervise-codex.sh
 grep -q 'JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1' bin/supervise-codex.sh
 grep -q 'milestone-gate.py' bin/supervise-codex.sh
+grep -q 'exec-subreaper' bin/supervise-codex.sh
+grep -q 'terminate-descendants-strict' bin/supervise-codex.sh
+grep -q 'unset JWH_SUBREAPER_ACTIVE' bin/supervise-codex.sh
 grep -q 'BACKOFF_MAX' bin/supervise-codex.sh
 
 grep -q 'CONTROL_LOCK=.harness/codex-control.lock' bin/restart-codex.sh
@@ -60,6 +63,8 @@ grep -q 'enable_child_subreaper' bin/codex-process.py
 grep -q 'terminate_executable_descendants' bin/codex-process.py
 grep -q 'exec-subreaper' bin/run-codex.sh
 grep -q 'terminate-descendants' bin/run-codex.sh
+! grep -q 'kill -TERM -- "-\$child_pid"' bin/run-codex.sh
+! grep -q 'kill -KILL -- "-\$child_pid"' bin/run-codex.sh
 
 grep -q 'lock_held "$RUNNER_LOCK"' bin/health-codex.sh
 grep -q 'MAX_EVENT_AGE_MIN' bin/health-codex.sh

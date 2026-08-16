@@ -191,17 +191,26 @@ def _main() -> int:
         enable_child_subreaper()
         os.environ["JWH_SUBREAPER_ACTIVE"] = "1"
         os.execvp(sys.argv[2], sys.argv[2:])
-    if len(sys.argv) == 3 and sys.argv[1] == "terminate-descendants":
+    if len(sys.argv) == 3 and sys.argv[1] in {
+        "terminate-descendants",
+        "terminate-descendants-strict",
+    }:
         try:
             ancestor_pid = int(sys.argv[2])
         except ValueError as e:
             raise ProcessTreeError(f"invalid ancestor PID {sys.argv[2]!r}") from e
-        terminate_executable_descendants(
+        found = terminate_executable_descendants(
             ancestor_pid=ancestor_pid,
             exclude_pids={os.getpid()},
         )
-        return 0
-    raise ProcessTreeError("usage: process_group.py exec-subreaper COMMAND... | terminate-descendants PID")
+        # The strict form lets a persistent ancestor distinguish a clean return
+        # from a child that died or returned while executable work was still
+        # attached. Cleanup succeeded in both cases; status 3 rejects the result.
+        return 3 if found and sys.argv[1] == "terminate-descendants-strict" else 0
+    raise ProcessTreeError(
+        "usage: process_group.py exec-subreaper COMMAND... | "
+        "terminate-descendants[-strict] PID"
+    )
 
 
 if __name__ == "__main__":

@@ -97,15 +97,6 @@ cleanup() {
     rc=2
   fi
 
-  child_pid=$(cat "$CHILD_PID_FILE" 2>/dev/null || true)
-  if [ -n "$child_pid" ]; then
-    # codex-process.py creates a new session whose process-group id is the child
-    # leader PID. If the wrapper was SIGKILLed, clean the group independently of
-    # leader liveness so redirected/TERM-ignoring descendants cannot escape.
-    kill -TERM -- "-$child_pid" 2>/dev/null || true
-    sleep 1
-    kill -KILL -- "-$child_pid" 2>/dev/null || true
-  fi
   rm -f "$CHILD_PID_FILE"
   rm -f "$WRAPPER_PID_FILE"
   rm -f "$WRAPPER_READY_FILE"

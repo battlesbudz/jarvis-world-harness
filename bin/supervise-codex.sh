@@ -6,6 +6,18 @@ cd "$(dirname "$0")/.."
 
 command -v python3 >/dev/null || { echo "python3 not found on PATH" >&2; exit 127; }
 command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
+
+# Stay alive as the outer process owner for gate evaluation. If the evaluator is
+# SIGKILLed, its active check and any close_fds/setsid descendants reparent here;
+# the supervisor keeps both serialization leases until that tree is gone.
+if [ "${JWH_SUPERVISOR_SUBREAPER_ACTIVE:-0}" != "1" ]; then
+  exec env JWH_SUPERVISOR_SUBREAPER_ACTIVE=1 \
+    python3 bin/process_group.py exec-subreaper bash "$0" "$@"
+fi
+# These markers describe this exec boundary only. Do not let descendants inherit
+# either one: run-codex.sh and any nested supervisor need their own subreaper.
+unset JWH_SUBREAPER_ACTIVE JWH_SUPERVISOR_SUBREAPER_ACTIVE
+
 mkdir -p .harness/logs
 SUPERVISOR_LOCK=.harness/codex-supervisor.lock
 CONTROL_LOCK=.harness/codex-control.lock
@@ -70,6 +82,10 @@ release_control_and_runner() {
   locks_held=0
 }
 
+clean_owned_descendants_strict() {
+  python3 bin/process_group.py terminate-descendants-strict "$$" 7>&-
+}
+
 # Launch transfers the already-held runner/control file descriptions to the child.
 # The child releases control immediately after writing its PID but retains runner ownership.
 launch_runner_from_handoff() {
@@ -103,6 +119,19 @@ milestone_passed() {
   # active check must retain; unrelated inherited descriptors remain closed.
   JWH_GATE_LEASE_FDS=8,9 python3 bin/milestone-gate.py 7>&- >"$GATE_OUT" 2>"$GATE_ERR"
   gate_rc=$?
+  clean_owned_descendants_strict
+  cleanup_rc=$?
+  case "$cleanup_rc" in
+    0) ;;
+    3)
+      say "gate evaluator exited while executable descendants remained; tree terminated"
+      gate_rc=2
+      ;;
+    *)
+      say "could not verify gate descendant cleanup (rc=$cleanup_rc)"
+      gate_rc=2
+      ;;
+  esac
   case "$gate_rc" in
     0)
       while IFS= read -r line; do say "gate: $line"; done < "$GATE_OUT"
