@@ -11,6 +11,8 @@ import threading
 import time
 from pathlib import Path
 
+from process_group import has_executable_members
+
 
 def atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -209,6 +211,16 @@ def main() -> int:
             if remaining > 0:
                 time.sleep(remaining)
         signal_tree(signal.SIGKILL)
+    elif os.name == "posix" and has_executable_members(proc.pid):
+        # A successful Codex leader can still leave redirected background work.
+        # Clean the whole session before releasing the runner lease; zombie-only
+        # groups are harmless because they hold no descriptors and cannot execute.
+        signal_tree(signal.SIGTERM)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and has_executable_members(proc.pid):
+            time.sleep(0.01)
+        if has_executable_members(proc.pid):
+            signal_tree(signal.SIGKILL)
     if timer is not None:
         timer.cancel()
         timer.join()

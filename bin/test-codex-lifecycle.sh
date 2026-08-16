@@ -3,11 +3,17 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/jwh-lifecycle.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+cleanup() {
+  set +e
+  descendant=$(cat "$TMP/.harness/normal-descendant.pid" 2>/dev/null || true)
+  [ -n "$descendant" ] && kill -9 "$descendant" 2>/dev/null || true
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
 mkdir -p "$TMP/bin" "$TMP/fakebin"
-for f in run-codex.sh codex-process.py; do cp "$ROOT/bin/$f" "$TMP/bin/$f"; done
+for f in run-codex.sh codex-process.py process_group.py; do cp "$ROOT/bin/$f" "$TMP/bin/$f"; done
 chmod +x "$TMP/bin/"*
 TRACE="$TMP/fake-codex.args"
 
@@ -30,6 +36,16 @@ for arg in "$@"; do
   prev="$arg"
 done
 [ -n "$last" ] && printf 'fake completed\n' > "$last"
+if [ -n "${FAKE_CODEX_NORMAL_DESCENDANT_MARKER:-}" ]; then
+  (
+    trap '' TERM HUP
+    printf '%s\n' "$BASHPID" > .harness/normal-descendant.pid
+    exec >/dev/null 2>&1
+    sleep 4
+    touch "$FAKE_CODEX_NORMAL_DESCENDANT_MARKER"
+    sleep 30
+  ) &
+fi
 if printf '%s\n' "$*" | grep -q ' resume fixture-thread-123 '; then
   printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
 else
@@ -70,4 +86,15 @@ lines=$(wc -l < "$TRACE" | tr -d ' ')
 [ "$lines" -eq 2 ] || { echo "expected 2 fake Codex invocations, got $lines" >&2; exit 1; }
 sed -n '2p' "$TRACE" | grep -q 'resume fixture-thread-123'
 
-echo "Codex lifecycle test passed: exact thread persisted/resumed and logs remained distinct"
+# A normally successful Codex leader cannot leave a redirected descendant that
+# writes after the wrapper releases the runner lock.
+normal_marker="$TMP/NORMAL_DESCENDANT_LEAKED"
+(
+  cd "$TMP"
+  FAKE_CODEX_NORMAL_DESCENDANT_MARKER="$normal_marker" bash bin/run-codex.sh >/dev/null
+)
+sleep 3
+[ ! -e "$normal_marker" ] || { echo "normal Codex exit leaked a worktree-mutating descendant" >&2; exit 1; }
+flock -n "$TMP/.harness/codex-runner.lock" true >/dev/null 2>&1 || { echo "normal-exit cleanup did not release the runner lock" >&2; exit 1; }
+
+echo "Codex lifecycle test passed: exact thread resume, distinct logs, and normal-exit tree cleanup"

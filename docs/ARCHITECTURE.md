@@ -71,7 +71,7 @@ Milestone-specific tests collect evidence from A and B. No milestone passes sole
 
 H0 deliberately keeps Codex orchestration separate from the game implementation.
 
-`bin/run-codex.sh` owns one Codex turn. It records JSONL events, captures stderr separately, persists the Codex thread id, and resumes the same thread on subsequent runs. The Python wrapper publishes readiness only after its dedicated Codex process group, PID metadata, signal handlers, stop monitor, and stream consumers exist. If the wrapper is hard-killed, shell fallback cleanup still terminates that whole process group.
+`bin/run-codex.sh` owns one Codex turn. It records JSONL events, captures stderr separately, persists the Codex thread id, and resumes the same thread on subsequent runs. The Python wrapper publishes readiness only after its dedicated Codex process group, PID metadata, signal handlers, stop monitor, and stream consumers exist. It cleans executable descendants after both interrupted and normal leader exits; if the wrapper is hard-killed, shell fallback cleanup still terminates the whole process group. Linux process-state checks distinguish executable members from zombie-only groups, which hold no descriptors and cannot mutate the worktree.
 
 `bin/supervise-codex.sh` is the outer watchdog. It guarantees one supervisor, avoids racing an already-live runner, retries clean stops on the same thread, and exponentially backs off after short or failed runs.
 

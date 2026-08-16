@@ -21,8 +21,9 @@ trap cleanup EXIT
 command -v timeout >/dev/null || { echo "timeout not found on PATH" >&2; exit 127; }
 
 mkdir -p "$TMP/bin" "$TMP/milestones/TEST_TIMEOUT" \
-  "$TMP/milestones/TEST_TIMEOUT_REDIRECTED" "$TMP/.harness"
-cp "$ROOT/bin/milestone-gate.py" "$TMP/bin/milestone-gate.py"
+  "$TMP/milestones/TEST_TIMEOUT_REDIRECTED" "$TMP/milestones/TEST_ZOMBIE_ONLY" \
+  "$TMP/.harness"
+cp "$ROOT/bin/milestone-gate.py" "$ROOT/bin/process_group.py" "$TMP/bin/"
 chmod +x "$TMP/bin/milestone-gate.py"
 
 cat > "$TMP/milestones/TEST_TIMEOUT/gate.json" <<'JSON'
@@ -37,6 +38,23 @@ cat > "$TMP/milestones/TEST_TIMEOUT/gate.json" <<'JSON'
         "trap 'exit 0' TERM; (trap '' TERM HUP; printf '%s\\n' \"$BASHPID\" > .harness/stubborn.pid; sleep 5; touch .harness/LEAKED_DESCENDANT; sleep 60) & wait"
       ],
       "timeout_seconds": 1
+    }
+  ]
+}
+JSON
+
+cat > "$TMP/milestones/TEST_ZOMBIE_ONLY/gate.json" <<'JSON'
+{
+  "milestone": "TEST_ZOMBIE_ONLY",
+  "checks": [
+    {
+      "id": "successful-leader-with-orphan-zombie",
+      "command": [
+        "python3",
+        "-c",
+        "import os,time; child=os.fork(); os._exit(0) if child == 0 else time.sleep(0.1)"
+      ],
+      "timeout_seconds": 5
     }
   ]
 }
@@ -143,7 +161,9 @@ python3 - "$ROOT/bin/milestone-gate.py" <<'PY'
 import importlib.util
 import subprocess
 import sys
+from pathlib import Path
 
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
 spec = importlib.util.spec_from_file_location("milestone_gate", sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
@@ -183,5 +203,44 @@ else:
 assert proc.calls == 2, proc.calls
 assert proc.stdout.closed and proc.stderr.closed
 PY
+
+# Zombie-only groups are not executable and hold no descriptors. Exercise the
+# /proc parser deterministically so slow container PID 1 reaping cannot fail gates.
+python3 - "$ROOT/bin/process_group.py" <<'PY'
+import importlib.util
+import tempfile
+import sys
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("process_group", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    zombie = root / "101"
+    zombie.mkdir()
+    (zombie / "status").write_text(
+        "Name:\tzombie fixture\nState:\tZ (zombie)\nNSpgid:\t5000\t777\n",
+        encoding="utf-8",
+    )
+    assert not module.has_executable_members(777, root)
+
+    live = root / "102"
+    live.mkdir()
+    (live / "status").write_text(
+        "Name:\tlive fixture\nState:\tS (sleeping)\nNSpgid:\t5000\t777\n",
+        encoding="utf-8",
+    )
+    assert module.has_executable_members(777, root)
+PY
+
+MILESTONE_ID=TEST_ZOMBIE_ONLY python3 bin/milestone-gate.py --json --no-record > zombie-only.out
+grep -q '"passed": true' zombie-only.out || {
+  echo "zombie-only process group falsely failed a successful gate check" >&2
+  cat zombie-only.out >&2
+  exit 1
+}
 
 echo "Gate timeout-tree test passed: timed-out descendants cannot outlive the gate"

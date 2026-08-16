@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+from process_group import has_executable_members
+
 ROOT = Path(__file__).resolve().parent.parent
 LEASE_FDS_ENV = "JWH_GATE_LEASE_FDS"
 
@@ -89,16 +91,10 @@ def signal_process_tree(proc: subprocess.Popen[str], sig: signal.Signals) -> Non
         pass
 
 
-def process_group_exists(proc: subprocess.Popen[str]) -> bool:
+def process_group_is_executable(proc: subprocess.Popen[str]) -> bool:
     if os.name != "posix":
         return proc.poll() is None
-    try:
-        os.killpg(proc.pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
+    return has_executable_members(proc.pid)
 
 
 def terminate_completed_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 0.2) -> bool:
@@ -108,12 +104,12 @@ def terminate_completed_process_tree(proc: subprocess.Popen[str], grace_seconds:
     worktree. This also prevents a lease-inheriting background process from sharing
     the supervisor's open lock description with the next runner handoff.
     """
-    if not process_group_exists(proc):
+    if not process_group_is_executable(proc):
         return False
     signal_process_tree(proc, signal.SIGTERM)
     deadline = time.monotonic() + grace_seconds
     while time.monotonic() < deadline:
-        if not process_group_exists(proc):
+        if not process_group_is_executable(proc):
             return True
         time.sleep(0.01)
     signal_process_tree(proc, signal.SIGKILL)

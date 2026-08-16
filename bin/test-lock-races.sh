@@ -17,7 +17,7 @@ trap cleanup EXIT
 
 command -v flock >/dev/null || { echo "flock is required" >&2; exit 1; }
 mkdir -p "$TMP/bin" "$TMP/fakebin" "$TMP/spec" "$TMP/milestones/TEST_SLOW"
-for f in run-codex.sh codex-process.py supervise-codex.sh milestone-gate.py; do
+for f in run-codex.sh codex-process.py process_group.py supervise-codex.sh milestone-gate.py; do
   cp "$ROOT/bin/$f" "$TMP/bin/$f"
 done
 chmod +x "$TMP/bin/"*

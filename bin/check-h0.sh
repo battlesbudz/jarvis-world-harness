@@ -8,7 +8,7 @@ required=(
   spec/CORE-LAWS.md spec/WORLD-VISION.md docs/ARCHITECTURE.md docs/MILESTONE-GATES.md
   milestones/H0/gate.json milestones/H1/SPEC.md milestones/H1/gate.json
   bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh
-  bin/milestone-gate.py bin/codex-process.py
+  bin/milestone-gate.py bin/codex-process.py bin/process_group.py
   bin/check-h1-spec.sh
   bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh
   bin/test-gate-timeout-tree.sh
@@ -20,7 +20,7 @@ done
 for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/check-h1-spec.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh bin/test-gate-timeout-tree.sh; do
   bash -n "$f"
 done
-python3 -m py_compile bin/milestone-gate.py bin/codex-process.py
+python3 -m py_compile bin/milestone-gate.py bin/codex-process.py bin/process_group.py
 python3 - <<'PY'
 import json
 p='milestones/H0/gate.json'
@@ -56,6 +56,7 @@ grep -q -- '--wrapper-lock-file' bin/run-codex.sh
 grep -q -- '--stop-file' bin/run-codex.sh
 grep -q -- '--ready-file' bin/run-codex.sh
 grep -q 'timer.join' bin/codex-process.py
+grep -q 'has_executable_members' bin/codex-process.py
 
 grep -q 'lock_held "$RUNNER_LOCK"' bin/health-codex.sh
 grep -q 'MAX_EVENT_AGE_MIN' bin/health-codex.sh
@@ -63,6 +64,7 @@ grep -q 'MAX_EVENT_AGE_MIN' bin/health-codex.sh
 
 grep -q 'start_new_session' bin/milestone-gate.py
 grep -q 'pass_fds' bin/milestone-gate.py
+grep -q 'has_executable_members' bin/milestone-gate.py
 grep -q 'JWH_GATE_LEASE_FDS=8,9' bin/supervise-codex.sh
 grep -q 'reacquire control/runner locks after milestone gate' bin/supervise-codex.sh
 grep -q 'os.killpg' bin/milestone-gate.py

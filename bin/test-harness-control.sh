@@ -29,7 +29,7 @@ mkdir -p "$TMP/bin" "$TMP/fakebin" "$TMP/spec" \
   "$TMP/milestones/TEST_INCOMPLETE" "$TMP/milestones/TEST_BAD" \
   "$TMP/milestones/TEST_GATE_RACE" "$TMP/milestones/TEST_GATE_BACKGROUND" \
   "$TMP/milestones/TEST_GATE_ESCAPED"
-for f in run-codex.sh codex-process.py supervise-codex.sh restart-codex.sh health-codex.sh milestone-gate.py; do
+for f in run-codex.sh codex-process.py process_group.py supervise-codex.sh restart-codex.sh health-codex.sh milestone-gate.py; do
   cp "$ROOT/bin/$f" "$TMP/bin/$f"
 done
 chmod +x "$TMP/bin/"*
