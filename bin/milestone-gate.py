@@ -9,7 +9,13 @@ import sys
 import time
 from pathlib import Path
 
-from process_group import has_executable_members
+from process_group import (
+    ProcessTreeError,
+    enable_child_subreaper,
+    executable_descendant_pids,
+    reap_exited_children,
+    terminate_executable_descendants,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 LEASE_FDS_ENV = "JWH_GATE_LEASE_FDS"
@@ -91,12 +97,6 @@ def signal_process_tree(proc: subprocess.Popen[str], sig: signal.Signals) -> Non
         pass
 
 
-def process_group_is_executable(proc: subprocess.Popen[str]) -> bool:
-    if os.name != "posix":
-        return proc.poll() is None
-    return has_executable_members(proc.pid)
-
-
 def terminate_completed_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 0.2) -> bool:
     """Remove descendants left behind after the check leader has exited.
 
@@ -104,15 +104,13 @@ def terminate_completed_process_tree(proc: subprocess.Popen[str], grace_seconds:
     worktree. This also prevents a lease-inheriting background process from sharing
     the supervisor's open lock description with the next runner handoff.
     """
-    if not process_group_is_executable(proc):
+    if not executable_descendant_pids():
         return False
-    signal_process_tree(proc, signal.SIGTERM)
-    deadline = time.monotonic() + grace_seconds
-    while time.monotonic() < deadline:
-        if not process_group_is_executable(proc):
-            return True
-        time.sleep(0.01)
-    signal_process_tree(proc, signal.SIGKILL)
+    terminate_executable_descendants(
+        term_grace_seconds=grace_seconds,
+        kill_grace_seconds=max(grace_seconds, 0.2),
+    )
+    reap_exited_children()
     return True
 
 
@@ -124,30 +122,15 @@ def terminate_process_tree(proc: subprocess.Popen[str], grace_seconds: float = 2
     stubborn descendants from surviving after the supervisor releases the runner lock.
     """
     signal_process_tree(proc, signal.SIGTERM)
-
-    grace_deadline = time.monotonic() + grace_seconds
-    stdout = ""
-    stderr = ""
-    streams_drained = False
-    try:
-        stdout, stderr = proc.communicate(timeout=grace_seconds)
-        streams_drained = True
-    except subprocess.TimeoutExpired:
-        pass
-
-    # Pipe EOF proves only that no survivor still owns these particular streams.
-    # Preserve the full cooperative grace period, then always escalate against the
-    # process group so a redirected descendant cannot outlive the gate.
-    remaining_grace = grace_deadline - time.monotonic()
-    if remaining_grace > 0:
-        time.sleep(remaining_grace)
+    terminate_executable_descendants(
+        term_grace_seconds=grace_seconds,
+        kill_grace_seconds=grace_seconds,
+    )
     signal_process_tree(proc, signal.SIGKILL)
 
-    if streams_drained:
-        return stdout or "", stderr or ""
-
     try:
         stdout, stderr = proc.communicate(timeout=grace_seconds)
+        reap_exited_children()
         return stdout or "", stderr or ""
     except subprocess.TimeoutExpired as e:
         for stream in (proc.stdout, proc.stderr):
@@ -182,6 +165,7 @@ def run_check(check: dict, lease_fds: tuple[int, ...] = ()) -> dict:
 
     started = time.time()
     try:
+        enable_child_subreaper()
         popen_kwargs = {
             "cwd": ROOT,
             "text": True,
@@ -204,10 +188,15 @@ def run_check(check: dict, lease_fds: tuple[int, ...] = ()) -> dict:
                 "stdout": stdout[-12000:],
                 "stderr": stderr[-12000:],
             }
+    except ProcessTreeError as e:
+        raise GateConfigurationError(f"check {cid!r} cannot guarantee descendant cleanup: {e}") from e
     except (FileNotFoundError, PermissionError, OSError) as e:
         raise GateConfigurationError(f"check {cid!r} could not execute {command[0]!r}: {e}") from e
 
-    leftover_tree = terminate_completed_process_tree(proc)
+    try:
+        leftover_tree = terminate_completed_process_tree(proc)
+    except ProcessTreeError as e:
+        raise GateConfigurationError(f"check {cid!r} could not verify descendant cleanup: {e}") from e
 
     return {
         "id": cid,

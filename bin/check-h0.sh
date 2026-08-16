@@ -56,7 +56,10 @@ grep -q -- '--wrapper-lock-file' bin/run-codex.sh
 grep -q -- '--stop-file' bin/run-codex.sh
 grep -q -- '--ready-file' bin/run-codex.sh
 grep -q 'timer.join' bin/codex-process.py
-grep -q 'has_executable_members' bin/codex-process.py
+grep -q 'enable_child_subreaper' bin/codex-process.py
+grep -q 'terminate_executable_descendants' bin/codex-process.py
+grep -q 'exec-subreaper' bin/run-codex.sh
+grep -q 'terminate-descendants' bin/run-codex.sh
 
 grep -q 'lock_held "$RUNNER_LOCK"' bin/health-codex.sh
 grep -q 'MAX_EVENT_AGE_MIN' bin/health-codex.sh
@@ -64,7 +67,8 @@ grep -q 'MAX_EVENT_AGE_MIN' bin/health-codex.sh
 
 grep -q 'start_new_session' bin/milestone-gate.py
 grep -q 'pass_fds' bin/milestone-gate.py
-grep -q 'has_executable_members' bin/milestone-gate.py
+grep -q 'enable_child_subreaper' bin/milestone-gate.py
+grep -q 'terminate_executable_descendants' bin/milestone-gate.py
 grep -q 'JWH_GATE_LEASE_FDS=8,9' bin/supervise-codex.sh
 grep -q 'reacquire control/runner locks after milestone gate' bin/supervise-codex.sh
 grep -q 'os.killpg' bin/milestone-gate.py

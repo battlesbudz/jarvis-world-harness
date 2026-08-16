@@ -24,7 +24,7 @@ pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 job_running() { [ -n "${1:-}" ] && jobs -pr 6>&- | grep -Fxq -- "$1" 6>&-; }
 read_metadata() {
   METADATA=
-  IFS= read -r METADATA < "$1" 2>/dev/null || true
+  IFS= read -r METADATA 2>/dev/null < "$1" || true
 }
 
 # Only one restart coordinator at a time.
@@ -44,15 +44,15 @@ cleanup() {
   [ "$pause_created" -eq 1 ] && rm -f "$PAUSE" 6>&-
   if [ "$runner_handoff" -eq 1 ]; then
     flock -u 8 6>&- 9>&- 2>/dev/null || true
-    exec 8>&- 2>/dev/null || true
+    { exec 8>&-; } 2>/dev/null || true
   fi
   if [ "$control_handoff" -eq 1 ]; then
     flock -u 9 6>&- 2>/dev/null || true
-    exec 9>&- 2>/dev/null || true
+    { exec 9>&-; } 2>/dev/null || true
   fi
   : > "$RESTART_LOCK" 2>/dev/null || true
   flock -u 6 2>/dev/null || true
-  exec 6>&- 2>/dev/null || true
+  { exec 6>&-; } 2>/dev/null || true
   exit "$rc"
 }
 trap cleanup EXIT
@@ -130,19 +130,19 @@ nohup env "${runner_env[@]}" bin/run-codex.sh 6>&- > "$OUT" 2>&1 &
 replacement_shell=$!
 
 # Transfer ownership: do not LOCK_UN; the child inherited both open descriptions.
-exec 8>&- 2>/dev/null || true
+{ exec 8>&-; } 2>/dev/null || true
 runner_handoff=0
-exec 9>&- 2>/dev/null || true
+{ exec 9>&-; } 2>/dev/null || true
 control_handoff=0
 
 runner_lock_held() {
   exec 5<>"$RUNNER_LOCK"
   if flock -n 5 6>&-; then
     flock -u 5 6>&- 2>/dev/null || true
-    exec 5>&- 2>/dev/null || true
+    { exec 5>&-; } 2>/dev/null || true
     return 1
   fi
-  exec 5>&- 2>/dev/null || true
+  { exec 5>&-; } 2>/dev/null || true
   return 0
 }
 
@@ -150,10 +150,10 @@ wrapper_lock_held() {
   exec 4<>"$WRAPPER_LOCK_FILE"
   if flock -n 4 6>&-; then
     flock -u 4 6>&- 2>/dev/null || true
-    exec 4>&- 2>/dev/null || true
+    { exec 4>&-; } 2>/dev/null || true
     return 1
   fi
-  exec 4>&- 2>/dev/null || true
+  { exec 4>&-; } 2>/dev/null || true
   return 0
 }
 

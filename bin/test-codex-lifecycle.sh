@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/jwh-lifecycle.XXXXXX")
 cleanup() {
   set +e
-  for pid_file in normal-descendant.pid pipe-descendant.pid; do
+  for pid_file in normal-descendant.pid pipe-descendant.pid detached-descendant.pid; do
     descendant=$(cat "$TMP/.harness/$pid_file" 2>/dev/null || true)
     [ -n "$descendant" ] && kill -9 "$descendant" 2>/dev/null || true
   done
@@ -55,6 +55,20 @@ if [ "${FAKE_CODEX_PIPE_DESCENDANT:-0}" = "1" ]; then
     printf '%s\n' "$BASHPID" > .harness/pipe-descendant.pid
     sleep 30
   ) &
+fi
+if [ -n "${FAKE_CODEX_DETACHED_MARKER:-}" ]; then
+  setsid python3 -c '
+import os, signal, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+Path(".harness/detached-descendant.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+fd = os.open(os.devnull, os.O_RDWR)
+os.dup2(fd, 0); os.dup2(fd, 1); os.dup2(fd, 2)
+time.sleep(4)
+Path(os.environ["FAKE_CODEX_DETACHED_MARKER"]).touch()
+time.sleep(30)
+' &
 fi
 if printf '%s\n' "$*" | grep -q ' resume fixture-thread-123 '; then
   printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
@@ -121,4 +135,15 @@ if kill -0 "$pipe_descendant" 2>/dev/null; then
 fi
 flock -n "$TMP/.harness/codex-runner.lock" true >/dev/null 2>&1 || { echo "pipe cleanup did not release the runner lock" >&2; exit 1; }
 
-echo "Codex lifecycle test passed: exact thread resume, distinct logs, and pre-join normal-exit tree cleanup"
+# A new session/process group must not escape wrapper ownership when its streams
+# are redirected. Child-subreaper adoption keeps it in the wrapper's full tree.
+detached_marker="$TMP/DETACHED_DESCENDANT_LEAKED"
+(
+  cd "$TMP"
+  FAKE_CODEX_DETACHED_MARKER="$detached_marker" timeout 8 bash bin/run-codex.sh >/dev/null
+) || { echo "normal-exit cleanup failed for a detached Codex descendant" >&2; exit 1; }
+sleep 3
+[ ! -e "$detached_marker" ] || { echo "detached Codex descendant modified the worktree after wrapper return" >&2; exit 1; }
+flock -n "$TMP/.harness/codex-runner.lock" true >/dev/null 2>&1 || { echo "detached cleanup did not release the runner lock" >&2; exit 1; }
+
+echo "Codex lifecycle test passed: exact resume plus same-group, inherited-pipe, and detached tree cleanup"

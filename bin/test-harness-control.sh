@@ -50,7 +50,7 @@ cat > "$TMP/milestones/TEST_GATE_BACKGROUND/gate.json" <<'JSON'
 {"milestone":"TEST_GATE_BACKGROUND","checks":[{"id":"background-after-exit","command":["bash","-c","(trap '' TERM HUP; printf '%s\\n' \"$BASHPID\" > .harness/test-background-child.pid; exec >/dev/null 2>&1; sleep 1; touch .harness/LEAKED_BACKGROUND_CHECK; sleep 30) & exit 0"],"timeout_seconds":5}]}
 JSON
 cat > "$TMP/milestones/TEST_GATE_ESCAPED/gate.json" <<'JSON'
-{"milestone":"TEST_GATE_ESCAPED","checks":[{"id":"escaped-after-exit","command":["bash","-c","if [ ! -e .harness/test-escaped-once ]; then touch .harness/test-escaped-once; setsid bash -c 'trap \"\" TERM HUP; printf \"%s\\n\" \"$BASHPID\" > .harness/test-escaped-child.pid; exec >/dev/null 2>&1; while [ ! -e .harness/test-escaped-release ]; do sleep 0.05; done' & fi; exit 1"],"timeout_seconds":5}]}
+{"milestone":"TEST_GATE_ESCAPED","checks":[{"id":"escaped-after-exit","command":["bash","-c","if [ ! -e .harness/test-escaped-once ]; then touch .harness/test-escaped-once; setsid bash -c 'trap \"\" TERM HUP; printf \"%s\\n\" \"$BASHPID\" > .harness/test-escaped-child.pid; exec >/dev/null 2>&1; sleep 1; touch .harness/LEAKED_ESCAPED_CHECK; sleep 30' & fi; exit 1"],"timeout_seconds":5}]}
 JSON
 TRACE="$TMP/fake-codex.args"
 cat > "$TMP/fakebin/codex" <<'FAKE'
@@ -74,13 +74,17 @@ fi
 if [ -n "${FAKE_CODEX_RELEASE_FILE:-}" ]; then
   while [ ! -e "$FAKE_CODEX_RELEASE_FILE" ]; do sleep 0.05; done
 elif [ -n "${FAKE_CODEX_ESCAPE_MARKER:-}" ]; then
-  (
-    trap '' TERM HUP
-    exec >/dev/null 2>&1
-    sleep 4
-    touch "$FAKE_CODEX_ESCAPE_MARKER"
-    sleep 30
-  ) &
+  setsid python3 -c '
+import os, signal, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+fd = os.open(os.devnull, os.O_RDWR)
+os.dup2(fd, 0); os.dup2(fd, 1); os.dup2(fd, 2)
+time.sleep(4)
+Path(os.environ["FAKE_CODEX_ESCAPE_MARKER"]).touch()
+time.sleep(30)
+' &
   wait
 elif [ -n "${FAKE_CODEX_SLEEP:-}" ]; then
   sleep "$FAKE_CODEX_SLEEP"
@@ -316,8 +320,7 @@ grep -q 'check exited while descendant processes remained' background-gate.out |
 sleep 2
 [ ! -e .harness/LEAKED_BACKGROUND_CHECK ] || { echo "completed check left a worktree-mutating descendant" >&2; exit 1; }
 
-# Even a descendant that creates a new session and escapes process-group cleanup
-# cannot overlap a runner: post-gate handoff must acquire a fresh lock description.
+# A completed check's detached session is terminated before the next runner starts.
 rm -rf .harness; mkdir -p .harness/logs; : > "$TRACE"
 escaped_release="$TMP/release-escaped-runner"
 rm -f "$escaped_release"
@@ -327,16 +330,14 @@ escaped_gate_sup=$!
 for _ in $(seq 1 100); do [ -s .harness/test-escaped-child.pid ] && break; sleep 0.05; done
 [ -s .harness/test-escaped-child.pid ] || { echo "escaped-session fixture did not start" >&2; exit 1; }
 escaped_child=$(cat .harness/test-escaped-child.pid)
-kill -0 "$escaped_child" 2>/dev/null || { echo "escaped-session child did not survive its check leader" >&2; exit 1; }
-sleep 0.3
-[ ! -s "$TRACE" ] || { echo "runner overlapped an escaped lease-holding check descendant" >&2; exit 1; }
-set +e
-flock -n .harness/codex-runner.lock true >/dev/null 2>&1
-escaped_lock_probe=$?
-set -e
-[ "$escaped_lock_probe" -ne 0 ] || { echo "escaped-session child did not retain serialization" >&2; exit 1; }
-touch .harness/test-escaped-release
-for _ in $(seq 1 100); do [ -s "$TRACE" ] && break; sleep 0.05; done
+for _ in $(seq 1 100); do
+  state=$(awk '{print $3}' "/proc/$escaped_child/stat" 2>/dev/null || true)
+  { [ -z "$state" ] || [ "$state" = "Z" ]; } && break
+  sleep 0.05
+done
+{ [ -z "${state:-}" ] || [ "$state" = "Z" ]; } || { echo "gate left a detached executable child alive" >&2; exit 1; }
+[ ! -e .harness/LEAKED_ESCAPED_CHECK ] || { echo "detached check modified the worktree after leader exit" >&2; exit 1; }
+for _ in $(seq 1 120); do [ -s "$TRACE" ] && break; sleep 0.05; done
 [ -s "$TRACE" ] || { echo "runner did not start after escaped-session lease release" >&2; exit 1; }
 touch "$escaped_release"
 wait "$escaped_gate_sup"
@@ -580,7 +581,7 @@ wait "$zombie_parent"
 # must kill the entire Codex session even after its leader exits on TERM.
 rm -rf .harness; mkdir -p .harness/logs
 escape_marker="$TMP/wrapper-kill-descendant-survived"
-FAKE_CODEX_ESCAPE_MARKER="$escape_marker" bash bin/run-codex.sh >/dev/null 2>&1 &
+FAKE_CODEX_ESCAPE_MARKER="$escape_marker" bash bin/run-codex.sh > wrapper-death.out 2>&1 &
 escaped_runner=$!
 for _ in $(seq 1 100); do
   escaped_wrapper=$(cat .harness/codex-wrapper.ready 2>/dev/null || true)
@@ -591,7 +592,7 @@ done
 kill -9 "$escaped_wrapper"
 wait "$escaped_runner" 2>/dev/null || true
 sleep 4
-[ ! -e "$escape_marker" ] || { echo "wrapper SIGKILL left a Codex descendant alive" >&2; exit 1; }
+[ ! -e "$escape_marker" ] || { echo "wrapper SIGKILL left a Codex descendant alive" >&2; cat wrapper-death.out >&2; exit 1; }
 wait_lock_free .harness/codex-runner.lock || { echo "wrapper-kill runner lock was not released" >&2; exit 1; }
 
 # 13) Restart coordinator lock: concurrent restart requests yield exactly one
@@ -603,7 +604,7 @@ restart_jobs=()
 for i in 1 2; do
   (
     set +e
-    FAKE_CODEX_SLEEP=5 bash bin/restart-codex.sh > "concurrent-restart.$i.out" 2>&1
+    FAKE_CODEX_SLEEP=30 bash bin/restart-codex.sh > "concurrent-restart.$i.out" 2>&1
     printf '%s\n' "$?" > "concurrent-restart.$i.status"
   ) &
   restart_jobs+=("$!")
@@ -664,7 +665,13 @@ if [ "${JWH_RUNNER_LOCK_HELD:-0}" = "1" ] && [ "${HOLD_RESTART_REPLACEMENT:-0}" 
   exit 0
 fi
 if [ "${JWH_RUNNER_LOCK_HELD:-0}" = "1" ]; then
+  # Leave the intended job alive while releasing its transferred descriptions.
+  # This creates a deterministic window in which an unrelated runner can become
+  # ready, without racing that runner against locks the fixture still owns.
+  exec 8>&-
+  exec 9>&-
   touch .harness/intended-replacement-failed
+  /bin/sleep 8
   exit 23
 fi
 exec "$(dirname "$0")/run-codex.real.sh" "$@"
@@ -692,17 +699,43 @@ FAKE_CODEX_SLEEP=30 bash bin/restart-codex.sh > identity-restart.out 2>&1 & iden
 set -e
 for _ in $(seq 1 100); do [ -e .harness/intended-replacement-failed ] && break; sleep 0.05; done
 [ -e .harness/intended-replacement-failed ] || { echo "identity fixture did not fail the intended replacement" >&2; exit 1; }
-FAKE_CODEX_SLEEP=30 bash bin/run-codex.sh >/dev/null 2>&1 & unrelated_runner=$!
+wait_lock_free .harness/codex-runner.lock || { echo "identity fixture did not release transferred runner ownership" >&2; exit 1; }
+kill -0 "$identity_restart" 2>/dev/null || { echo "identity coordinator exited before unrelated-runner test window" >&2; exit 1; }
+FAKE_CODEX_SLEEP=30 bash bin/run-codex.sh > identity-direct.out 2>&1 & unrelated_runner=$!
 set +e
 wait "$identity_restart"
 identity_rc=$?
 set -e
 [ "$identity_rc" -ne 0 ] || { echo "restart accepted an unrelated ready runner" >&2; exit 1; }
-for _ in $(seq 1 100); do
+for _ in $(seq 1 240); do
   [ "$(cat .harness/codex-runner.lock 2>/dev/null || true)" = "$unrelated_runner" ] && [ -s .harness/codex-wrapper.ready ] && break
   sleep 0.05
 done
-[ "$(cat .harness/codex-runner.lock 2>/dev/null || true)" = "$unrelated_runner" ] || { echo "identity fixture direct runner did not start" >&2; exit 1; }
+[ "$(cat .harness/codex-runner.lock 2>/dev/null || true)" = "$unrelated_runner" ] || {
+  echo "identity fixture direct runner did not start" >&2
+  echo "--- failed restart" >&2; cat identity-restart.out >&2
+  echo "--- direct runner" >&2; cat identity-direct.out >&2
+  python3 - .harness/codex-runner.lock <<'PY' >&2
+import os, sys
+from pathlib import Path
+target = os.stat(sys.argv[1])
+for entry in Path('/proc').iterdir():
+    if not entry.name.isdecimal():
+        continue
+    try:
+        for fd in (entry / 'fd').iterdir():
+            try:
+                stat = fd.stat()
+            except OSError:
+                continue
+            if (stat.st_dev, stat.st_ino) == (target.st_dev, target.st_ino):
+                command = (entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode(errors='replace')
+                print(f'lock fd holder mount-pid={entry.name} fd={fd.name} command={command}')
+    except OSError:
+        continue
+PY
+  exit 1
+}
 kill "$unrelated_runner" 2>/dev/null || true
 wait "$unrelated_runner" 2>/dev/null || true
 wait_lock_free .harness/codex-runner.lock || { echo "identity fixture runner did not stop" >&2; exit 1; }

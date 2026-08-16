@@ -8,6 +8,13 @@ command -v codex >/dev/null || { echo "codex CLI not found on PATH" >&2; exit 12
 command -v python3 >/dev/null || { echo "python3 not found on PATH" >&2; exit 127; }
 command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
 
+# Re-exec this same shell process as a Linux child subreaper. If the Python
+# wrapper is hard-killed, detached/double-forked Codex descendants reparent here
+# and remain cleanable before the runner lock is released.
+if [ "${JWH_SUBREAPER_ACTIVE:-0}" != "1" ]; then
+  exec python3 bin/process_group.py exec-subreaper bash "$0" "$@"
+fi
+
 mkdir -p .harness/logs
 CONTROL_LOCK=.harness/codex-control.lock
 RUNNER_LOCK=.harness/codex-runner.lock
@@ -66,6 +73,10 @@ job_running() {
   [ -n "$p" ] && jobs -pr | grep -Fxq -- "$p"
 }
 
+clean_descendants() {
+  python3 bin/process_group.py terminate-descendants "$$"
+}
+
 cleanup() {
   rc=$?
   trap - EXIT INT TERM HUP
@@ -78,6 +89,13 @@ cleanup() {
     job_running "$process_pid" && kill -9 "$process_pid" 2>/dev/null || true
   fi
   [ -n "${process_pid:-}" ] && wait "$process_pid" 2>/dev/null || true
+
+  # Verify the wrapper did not leave descendants in another session/process
+  # group. This is also the hard-wrapper-death fallback cleanup boundary.
+  if ! clean_descendants; then
+    echo "failed to clean complete Codex descendant tree" >&2
+    rc=2
+  fi
 
   child_pid=$(cat "$CHILD_PID_FILE" 2>/dev/null || true)
   if [ -n "$child_pid" ]; then
@@ -181,6 +199,10 @@ process_pid=$!
 wait "$process_pid"
 rc=$?
 process_pid=""
+if ! clean_descendants; then
+  echo "failed to clean complete Codex descendant tree before post-processing" >&2
+  rc=2
+fi
 set -e
 
 if [ -s "$SESSION_FILE" ]; then

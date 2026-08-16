@@ -22,9 +22,39 @@ command -v timeout >/dev/null || { echo "timeout not found on PATH" >&2; exit 12
 
 mkdir -p "$TMP/bin" "$TMP/milestones/TEST_TIMEOUT" \
   "$TMP/milestones/TEST_TIMEOUT_REDIRECTED" "$TMP/milestones/TEST_ZOMBIE_ONLY" \
+  "$TMP/milestones/TEST_DETACHED_SUCCESS" \
   "$TMP/.harness"
 cp "$ROOT/bin/milestone-gate.py" "$ROOT/bin/process_group.py" "$TMP/bin/"
 chmod +x "$TMP/bin/milestone-gate.py"
+
+cat > "$TMP/bin/detached-check.py" <<'PY'
+#!/usr/bin/env python3
+import os
+import signal
+import sys
+import time
+from pathlib import Path
+
+pid_path, marker_path = map(Path, sys.argv[1:])
+child = os.fork()
+if child > 0:
+    os.waitpid(child, 0)
+    raise SystemExit(0)
+os.setsid()
+grandchild = os.fork()
+if grandchild > 0:
+    os._exit(0)
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+fd = os.open(os.devnull, os.O_RDWR)
+os.dup2(fd, 0)
+os.dup2(fd, 1)
+os.dup2(fd, 2)
+pid_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+time.sleep(4)
+marker_path.touch()
+time.sleep(30)
+PY
+chmod +x "$TMP/bin/detached-check.py"
 
 cat > "$TMP/milestones/TEST_TIMEOUT/gate.json" <<'JSON'
 {
@@ -53,6 +83,24 @@ cat > "$TMP/milestones/TEST_ZOMBIE_ONLY/gate.json" <<'JSON'
         "python3",
         "-c",
         "import os,time; child=os.fork(); os._exit(0) if child == 0 else time.sleep(0.1)"
+      ],
+      "timeout_seconds": 5
+    }
+  ]
+}
+JSON
+
+cat > "$TMP/milestones/TEST_DETACHED_SUCCESS/gate.json" <<'JSON'
+{
+  "milestone": "TEST_DETACHED_SUCCESS",
+  "checks": [
+    {
+      "id": "successful-leader-with-double-fork",
+      "command": [
+        "python3",
+        "bin/detached-check.py",
+        ".harness/detached-check.pid",
+        ".harness/LEAKED_DETACHED_CHECK"
       ],
       "timeout_seconds": 5
     }
@@ -156,7 +204,7 @@ sleep 3
 }
 
 # If SIGKILL still cannot close inherited pipes, cleanup must raise a fail-closed
-# infrastructure error after a second bounded communicate call—never wait forever.
+# infrastructure error after a bounded communicate call—never wait forever.
 python3 - "$ROOT/bin/milestone-gate.py" <<'PY'
 import importlib.util
 import subprocess
@@ -200,7 +248,7 @@ except module.GateConfigurationError:
 else:
     raise AssertionError("undrainable pipes did not fail closed")
 
-assert proc.calls == 2, proc.calls
+assert proc.calls == 1, proc.calls
 assert proc.stdout.closed and proc.stderr.closed
 PY
 
@@ -252,6 +300,28 @@ with tempfile.TemporaryDirectory() as tmp:
     )
     assert module.has_executable_members(777, root)
     assert not module.has_executable_members(5000, root)
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    self_dir = root / "self"
+    self_dir.mkdir()
+    (self_dir / "status").write_text(
+        "Name:\tcaller fixture\nPid:\t9000\nPPid:\t8000\nNSpid:\t9000\t42\n",
+        encoding="utf-8",
+    )
+    for mount_pid, mount_ppid, caller_pid, state in (
+        (9100, 9000, 43, "S (sleeping)"),
+        (9200, 9100, 44, "R (running)"),
+        (9300, 9000, 45, "Z (zombie)"),
+    ):
+        entry = root / str(mount_pid)
+        entry.mkdir()
+        (entry / "status").write_text(
+            f"Name:\tdescendant fixture\nPid:\t{mount_pid}\nPPid:\t{mount_ppid}\n"
+            f"State:\t{state}\nNSpid:\t{mount_pid}\t{caller_pid}\n",
+            encoding="utf-8",
+        )
+    assert module.executable_descendant_pids(root) == {43, 44}
 PY
 
 MILESTONE_ID=TEST_ZOMBIE_ONLY python3 bin/milestone-gate.py --json --no-record > zombie-only.out
@@ -261,4 +331,17 @@ grep -q '"passed": true' zombie-only.out || {
   exit 1
 }
 
-echo "Gate timeout-tree test passed: timed-out descendants cannot outlive the gate"
+set +e
+MILESTONE_ID=TEST_DETACHED_SUCCESS python3 bin/milestone-gate.py --json --no-record > detached-success.out
+detached_success_rc=$?
+set -e
+[ "$detached_success_rc" -eq 1 ] || { echo "detached-descendant gate returned $detached_success_rc instead of 1" >&2; cat detached-success.out >&2; exit 1; }
+grep -q 'check exited while descendant processes remained' detached-success.out || {
+  echo "successful check with detached descendant was not rejected" >&2
+  cat detached-success.out >&2
+  exit 1
+}
+sleep 3
+[ ! -e .harness/LEAKED_DETACHED_CHECK ] || { echo "detached gate descendant modified the worktree after cleanup" >&2; exit 1; }
+
+echo "Gate timeout-tree test passed: timed-out, detached, and zombie-only trees are handled safely"

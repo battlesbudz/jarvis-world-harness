@@ -37,7 +37,7 @@ runner exits -> evaluate again before deciding whether to relaunch
 
 This prevents an evaluation command from racing Codex while files are changing.
 
-The supervisor explicitly delegates its control/runner serialization leases to the gate evaluator and each active evidence check. The leases therefore survive a hard-killed supervisor or evaluator while worktree-reading or worktree-writing evidence is still running. If a check leader exits but leaves executable members in its process group, the evaluator terminates that group and rejects the check; zombie-only groups are ignored because they hold no descriptors and cannot execute. After an incomplete evaluation, fresh lock acquisition is mandatory before runner handoff, so a lease-holding descendant that escaped the original session blocks safely rather than sharing the evaluator-era lock description with Codex.
+The supervisor explicitly delegates its control/runner serialization leases to the gate evaluator and each active evidence check. The leases therefore survive a hard-killed supervisor or evaluator while evidence is still running. The Linux evaluator acts as a child subreaper, so `setsid` and double-forked work is adopted, tracked across PID namespaces, terminated, and causes the check to fail; zombie-only descendants are ignored and reaped because they hold no descriptors and cannot execute. After an incomplete evaluation, fresh lock acquisition remains mandatory before runner handoff, so lease-bearing work still blocks safely if the evaluator itself is hard-killed before cleanup.
 
 ## H0 evidence
 

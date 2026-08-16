@@ -11,7 +11,12 @@ import threading
 import time
 from pathlib import Path
 
-from process_group import has_executable_members
+from process_group import (
+    ProcessTreeError,
+    enable_child_subreaper,
+    reap_exited_children,
+    terminate_executable_descendants,
+)
 
 
 def atomic_write(path: Path, text: str) -> None:
@@ -57,6 +62,11 @@ def main() -> int:
         command = command[1:]
     if not command:
         parser.error("missing command after --")
+
+    try:
+        enable_child_subreaper()
+    except ProcessTreeError as e:
+        raise RuntimeError(f"cannot guarantee Codex descendant cleanup: {e}") from e
 
     log_path = Path(args.log)
     err_path = Path(args.errlog)
@@ -196,31 +206,21 @@ def main() -> int:
         atomic_write(ready_path, f"{wrapper_pid}\n")
 
     rc = proc.wait()
-    if interrupted["signal"] is None and os.name == "posix" and has_executable_members(proc.pid):
-        # A normally exiting leader may leave descendants holding inherited output
-        # pipes open. Clean the group before joining the pumps; otherwise those
-        # joins can wait forever for EOF while the runner lease remains held.
-        signal_tree(signal.SIGTERM)
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and has_executable_members(proc.pid):
-            time.sleep(0.01)
-        if has_executable_members(proc.pid):
-            signal_tree(signal.SIGKILL)
+    # Subreaper ownership makes same-group, setsid, and double-forked children all
+    # remain descendants of this wrapper. Clean them before joining stream pumps;
+    # otherwise an inherited pipe can hold both the join and runner lease forever.
+    if interrupted["signal"] is None:
+        terminate_executable_descendants()
+    else:
+        deadline = escalation_deadline["value"]
+        remaining = max(0.0, deadline - time.monotonic()) if deadline is not None else 0.0
+        terminate_executable_descendants(term_grace_seconds=remaining)
     out_thread.join()
     err_thread.join()
+    reap_exited_children()
     stop_monitor_done.set()
     stop_thread.join()
     timer = escalation_timer["timer"]
-    if interrupted["signal"] is not None:
-        # Pump completion proves only pipe EOF. A redirected descendant may still be
-        # alive, so preserve the full grace period and always signal the process group
-        # before the wrapper returns and releases the inherited runner lock.
-        deadline = escalation_deadline["value"]
-        if deadline is not None:
-            remaining = deadline - time.monotonic()
-            if remaining > 0:
-                time.sleep(remaining)
-        signal_tree(signal.SIGKILL)
     if timer is not None:
         timer.cancel()
         timer.join()
