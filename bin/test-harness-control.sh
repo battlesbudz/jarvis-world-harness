@@ -449,6 +449,7 @@ touch .harness/test-gate-release
 if ! wait "$restart_job"; then
   echo "restart handoff failed before replacement readiness" >&2
   cat restart-race-restart.out >&2
+  find .harness/logs -maxdepth 1 -name 'manual-restart-*.out' -type f -exec sh -c 'echo "--- $1" >&2; cat "$1" >&2' _ {} \;
   exit 1
 fi
 wait_trace 'UNIQUE_RESTART_NOTE' || { echo "restart handoff lost RESUME_NOTE_FILE" >&2; cat restart-race-restart.out >&2; exit 1; }
@@ -608,9 +609,17 @@ for i in 1 2; do
   restart_jobs+=("$!")
 done
 for p in "${restart_jobs[@]}"; do wait "$p"; done
-restart_zeros=$(grep -l '^0$' concurrent-restart.*.status | wc -l | tr -d ' ')
-restart_twos=$(grep -l '^2$' concurrent-restart.*.status | wc -l | tr -d ' ')
-[ "$restart_zeros" -eq 1 ] && [ "$restart_twos" -eq 1 ] || { echo "concurrent restart results: success=$restart_zeros rejected=$restart_twos" >&2; exit 1; }
+restart_zeros=$(awk '$0 == "0" { count++ } END { print count + 0 }' concurrent-restart.*.status)
+restart_twos=$(awk '$0 == "2" { count++ } END { print count + 0 }' concurrent-restart.*.status)
+if [ "$restart_zeros" -ne 1 ] || [ "$restart_twos" -ne 1 ]; then
+  echo "concurrent restart results: success=$restart_zeros rejected=$restart_twos" >&2
+  for i in 1 2; do
+    echo "--- restart $i status=$(cat "concurrent-restart.$i.status")" >&2
+    cat "concurrent-restart.$i.out" >&2
+  done
+  find .harness/logs -maxdepth 1 -name 'manual-restart-*.out' -type f -exec sh -c 'echo "--- $1" >&2; cat "$1" >&2' _ {} \;
+  exit 1
+fi
 wait "$concurrent_runner" 2>/dev/null || true
 replacement=$(cat .harness/codex-runner.lock 2>/dev/null || true)
 [ -n "$replacement" ] && kill "$replacement" 2>/dev/null || true

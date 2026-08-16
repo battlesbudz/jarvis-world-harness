@@ -5,13 +5,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/jwh-lifecycle.XXXXXX")
 cleanup() {
   set +e
-  descendant=$(cat "$TMP/.harness/normal-descendant.pid" 2>/dev/null || true)
-  [ -n "$descendant" ] && kill -9 "$descendant" 2>/dev/null || true
+  for pid_file in normal-descendant.pid pipe-descendant.pid; do
+    descendant=$(cat "$TMP/.harness/$pid_file" 2>/dev/null || true)
+    [ -n "$descendant" ] && kill -9 "$descendant" 2>/dev/null || true
+  done
   rm -rf "$TMP"
 }
 trap cleanup EXIT
 
 command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
+command -v timeout >/dev/null || { echo "timeout not found on PATH" >&2; exit 127; }
 mkdir -p "$TMP/bin" "$TMP/fakebin"
 for f in run-codex.sh codex-process.py process_group.py; do cp "$ROOT/bin/$f" "$TMP/bin/$f"; done
 chmod +x "$TMP/bin/"*
@@ -43,6 +46,13 @@ if [ -n "${FAKE_CODEX_NORMAL_DESCENDANT_MARKER:-}" ]; then
     exec >/dev/null 2>&1
     sleep 4
     touch "$FAKE_CODEX_NORMAL_DESCENDANT_MARKER"
+    sleep 30
+  ) &
+fi
+if [ "${FAKE_CODEX_PIPE_DESCENDANT:-0}" = "1" ]; then
+  (
+    trap '' TERM HUP
+    printf '%s\n' "$BASHPID" > .harness/pipe-descendant.pid
     sleep 30
   ) &
 fi
@@ -97,4 +107,18 @@ sleep 3
 [ ! -e "$normal_marker" ] || { echo "normal Codex exit leaked a worktree-mutating descendant" >&2; exit 1; }
 flock -n "$TMP/.harness/codex-runner.lock" true >/dev/null 2>&1 || { echo "normal-exit cleanup did not release the runner lock" >&2; exit 1; }
 
-echo "Codex lifecycle test passed: exact thread resume, distinct logs, and normal-exit tree cleanup"
+# Cleanup must precede the stdout/stderr joins. This descendant deliberately keeps
+# both inherited pipes open and ignores TERM, so the wrapper must escalate and
+# return instead of waiting forever for EOF.
+(
+  cd "$TMP"
+  FAKE_CODEX_PIPE_DESCENDANT=1 timeout 8 bash bin/run-codex.sh >/dev/null
+) || { echo "normal-exit cleanup blocked on inherited Codex pipes" >&2; exit 1; }
+pipe_descendant=$(cat "$TMP/.harness/pipe-descendant.pid")
+if kill -0 "$pipe_descendant" 2>/dev/null; then
+  state=$(awk '{print $3}' "/proc/$pipe_descendant/stat" 2>/dev/null || true)
+  [ "$state" = "Z" ] || { echo "inherited-pipe descendant survived wrapper cleanup" >&2; exit 1; }
+fi
+flock -n "$TMP/.harness/codex-runner.lock" true >/dev/null 2>&1 || { echo "pipe cleanup did not release the runner lock" >&2; exit 1; }
+
+echo "Codex lifecycle test passed: exact thread resume, distinct logs, and pre-join normal-exit tree cleanup"

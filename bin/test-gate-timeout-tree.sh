@@ -222,7 +222,7 @@ with tempfile.TemporaryDirectory() as tmp:
     zombie = root / "101"
     zombie.mkdir()
     (zombie / "status").write_text(
-        "Name:\tzombie fixture\nState:\tZ (zombie)\nNSpgid:\t5000\t777\n",
+        "Name:\tzombie fixture\nState:\tZ (zombie)\nNSpgid:\t777\t1\n",
         encoding="utf-8",
     )
     assert not module.has_executable_members(777, root)
@@ -230,10 +230,28 @@ with tempfile.TemporaryDirectory() as tmp:
     live = root / "102"
     live.mkdir()
     (live / "status").write_text(
-        "Name:\tlive fixture\nState:\tS (sleeping)\nNSpgid:\t5000\t777\n",
+        "Name:\tlive fixture\nState:\tS (sleeping)\nNSpgid:\t777\t1\n",
         encoding="utf-8",
     )
     assert module.has_executable_members(777, root)
+    assert not module.has_executable_members(1, root)
+
+with tempfile.TemporaryDirectory() as tmp:
+    root = Path(tmp)
+    self_dir = root / "self"
+    self_dir.mkdir()
+    (self_dir / "status").write_text(
+        "Name:\tcaller fixture\nNSpid:\t9000\t42\n",
+        encoding="utf-8",
+    )
+    nested = root / "103"
+    nested.mkdir()
+    (nested / "status").write_text(
+        "Name:\tnested fixture\nState:\tS (sleeping)\nNSpgid:\t5000\t777\n",
+        encoding="utf-8",
+    )
+    assert module.has_executable_members(777, root)
+    assert not module.has_executable_members(5000, root)
 PY
 
 MILESTONE_ID=TEST_ZOMBIE_ONLY python3 bin/milestone-gate.py --json --no-record > zombie-only.out

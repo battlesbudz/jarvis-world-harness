@@ -3,6 +3,27 @@ import os
 from pathlib import Path
 
 
+def caller_namespace_index(proc_root: Path) -> int:
+    """Return the NSpgid index that is visible to this process.
+
+    Namespace IDs in procfs start at the namespace that mounted procfs. The
+    caller may itself be nested below that mount, so neither the first nor last
+    entry is universally correct. NSpid for /proc/self has one entry per level
+    from the mount namespace through the caller's namespace.
+    """
+    try:
+        status = (proc_root / "self" / "status").read_text(encoding="utf-8")
+        for line in status.splitlines():
+            if line.startswith("NSpid:"):
+                values = line.split(":", 1)[1].split()
+                return max(0, len(values) - 1)
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        pass
+    # A synthetic proc tree, or procfs without namespace metadata, represents
+    # the namespace at its own mount point.
+    return 0
+
+
 def has_executable_members(pgid: int, proc_root: Path = Path("/proc")) -> bool:
     """Return whether a POSIX process group contains a non-zombie process.
 
@@ -12,6 +33,7 @@ def has_executable_members(pgid: int, proc_root: Path = Path("/proc")) -> bool:
     """
     if os.name == "posix" and proc_root.is_dir():
         try:
+            namespace_index = caller_namespace_index(proc_root)
             entries = proc_root.iterdir()
             for entry in entries:
                 if not entry.name.isdecimal():
@@ -25,9 +47,11 @@ def has_executable_members(pgid: int, proc_root: Path = Path("/proc")) -> bool:
                         for key, value in [line.split(":", 1)]
                     }
                     state = values["State"].split()[0]
-                    # The last NSpgid value is the process-group id visible in the
-                    # innermost PID namespace, matching Popen.pid/killpg arguments.
-                    member_pgid = int(values["NSpgid"].split()[-1])
+                    # NSpgid is ordered from the PID namespace that mounted this
+                    # procfs toward nested namespaces. Select the caller's level,
+                    # which may be the mount namespace or a nested container.
+                    namespace_pgids = values["NSpgid"].split()
+                    member_pgid = int(namespace_pgids[namespace_index])
                 except KeyError:
                     try:
                         stat = (entry / "stat").read_text(encoding="utf-8")

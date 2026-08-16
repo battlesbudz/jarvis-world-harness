@@ -196,6 +196,16 @@ def main() -> int:
         atomic_write(ready_path, f"{wrapper_pid}\n")
 
     rc = proc.wait()
+    if interrupted["signal"] is None and os.name == "posix" and has_executable_members(proc.pid):
+        # A normally exiting leader may leave descendants holding inherited output
+        # pipes open. Clean the group before joining the pumps; otherwise those
+        # joins can wait forever for EOF while the runner lease remains held.
+        signal_tree(signal.SIGTERM)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and has_executable_members(proc.pid):
+            time.sleep(0.01)
+        if has_executable_members(proc.pid):
+            signal_tree(signal.SIGKILL)
     out_thread.join()
     err_thread.join()
     stop_monitor_done.set()
@@ -211,16 +221,6 @@ def main() -> int:
             if remaining > 0:
                 time.sleep(remaining)
         signal_tree(signal.SIGKILL)
-    elif os.name == "posix" and has_executable_members(proc.pid):
-        # A successful Codex leader can still leave redirected background work.
-        # Clean the whole session before releasing the runner lease; zombie-only
-        # groups are harmless because they hold no descriptors and cannot execute.
-        signal_tree(signal.SIGTERM)
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and has_executable_members(proc.pid):
-            time.sleep(0.01)
-        if has_executable_members(proc.pid):
-            signal_tree(signal.SIGKILL)
     if timer is not None:
         timer.cancel()
         timer.join()
