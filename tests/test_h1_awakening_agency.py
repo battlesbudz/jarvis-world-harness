@@ -97,6 +97,10 @@ class AwakeningAgencyTest(unittest.TestCase):
         self.assertEqual(refusal.payload["decision"], "refuse")
         trace = world.trace(refusal.id)
         self.assertEqual(trace["causes"][0]["event"]["event_type"], "request")
+        goal_cause = next(
+            cause for cause in trace["causes"] if cause["event"]["event_type"] == "independent_goal_formed"
+        )
+        self.assertEqual(goal_cause["causes"][0]["event"]["event_type"], "awakening_transition")
         self.assertTrue(world.trace(transition_id)["causes"])
 
         thinker_refusal = world.decide_request("bio", "mara", "abandon_town", root_input="captain-order")
@@ -104,6 +108,11 @@ class AwakeningAgencyTest(unittest.TestCase):
         self.assertTrue(all(world.goals(actor_id) for actor_id in ("mara", "orin", "tavi")))
         self.assertEqual(thinker_refusal.payload["goals"], tuple(world.goals("mara")))
         self.assertEqual(thinker_refusal.payload["validation"]["authority"], "world_validator")
+
+        impossible = world.decide_request(
+            "bio", "mara", "be_in_two_locations_at_once", root_input="impossible-order"
+        )
+        self.assertEqual(impossible.event_type, "proposal_rejected")
 
 
 if __name__ == "__main__":

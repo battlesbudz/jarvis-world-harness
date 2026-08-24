@@ -35,6 +35,7 @@ AWAKENING_WEIGHTS = {
     "betrayal": 1,
 }
 AWAKENING_THRESHOLD = 12
+FEASIBLE_REQUEST_ACTIONS = {"abandon_town", "read", "wait"}
 
 
 class ValidationError(ValueError):
@@ -308,17 +309,21 @@ class World:
                 return "requests require exactly one recipient"
             if not isinstance(proposal.payload.get("action"), str) or not proposal.payload["action"]:
                 return "requests require a non-empty action"
+            if proposal.payload["action"] not in FEASIBLE_REQUEST_ACTIONS:
+                return "request action has no established physical-possibility rule"
         return None
 
     def _validate_internal_rules(self, proposal: Proposal) -> str | None:
-        if len(proposal.parents) != 1:
-            return "internal action requires exactly one causal parent"
+        if not proposal.parents:
+            return "internal action requires causal evidence"
         parent = self._event(proposal.parents[0])
         if proposal.event_type == "crisis_changed":
             expected_severity = min(5, self.tick)
             phases = ("warning", "strain", "danger", "collapse", "aftermath")
             if proposal.actor != self.crisis_actor:
                 return "only the configured crisis authority may change world pressure"
+            if len(proposal.parents) != 1:
+                return "crisis change requires exactly one logical-tick parent"
             if proposal.targets or proposal.witnesses or proposal.location != "albion-town":
                 return "crisis change violates the Albion World Anchor boundary"
             if parent.event_type != "time_advanced" or parent.tick != self.tick:
@@ -339,7 +344,8 @@ class World:
         if proposal.event_type == "routine_action":
             actor = self.actors[proposal.actor]
             if (
-                actor.category != "non_thinker"
+                len(proposal.parents) != 1
+                or actor.category != "non_thinker"
                 or self.cognition(actor.id) != "routine"
                 or proposal.targets
                 or proposal.witnesses
@@ -354,6 +360,10 @@ class World:
 
         if parent.event_type != "request" or len(parent.targets) != 1:
             return "actor decision must answer one request"
+        goal_events = self._goal_events(proposal.actor)
+        expected_parents = (parent.id, *(event.id for event in goal_events))
+        if proposal.parents != expected_parents:
+            return "actor decision must parent the request and every consulted persistent goal"
         if (
             proposal.actor != parent.targets[0]
             or tuple(proposal.targets) != (parent.actor,)
@@ -386,6 +396,13 @@ class World:
         actor = self.actors[actor_id]
         return action == "abandon_town" and (
             "protect_community" in actor.values or any("protect" in goal for goal in self.goals(actor_id))
+        )
+
+    def _goal_events(self, actor_id: str) -> tuple[Event, ...]:
+        return tuple(
+            event
+            for event in self.events
+            if event.event_type == "independent_goal_formed" and event.actor == actor_id
         )
 
     def _reject(self, proposal: Proposal, reason: str) -> Event:
@@ -698,6 +715,7 @@ class World:
             )
         conflicts = self._action_conflicts_with_goals(actor_id, action)
         event_type = "values_refusal" if conflicts else "independent_choice"
+        goal_events = self._goal_events(actor_id)
         return self._apply_internal(
             Proposal(
                 event_type,
@@ -705,7 +723,7 @@ class World:
                 (bio_id,),
                 "albion",
                 (),
-                (request.id,),
+                (request.id, *(event.id for event in goal_events)),
                 None,
                 {
                     "action": action,
@@ -857,11 +875,17 @@ class World:
                 )
             elif event.event_type == "request":
                 next_event = saved_events[index + 1] if index + 1 < len(saved_events) else None
-                if next_event and next_event.parents == (event.id,) and next_event.event_type in {
-                    "routine_response",
-                    "values_refusal",
-                    "independent_choice",
-                }:
+                if (
+                    next_event
+                    and next_event.parents
+                    and next_event.parents[0] == event.id
+                    and next_event.event_type
+                    in {
+                        "routine_response",
+                        "values_refusal",
+                        "independent_choice",
+                    }
+                ):
                     world.decide_request(
                         event.actor,
                         event.targets[0],
