@@ -15,6 +15,8 @@ WRAPPER_PID_FILE=.harness/codex-wrapper.pid
 WRAPPER_LOCK_FILE=.harness/codex-wrapper.lock
 WRAPPER_READY_FILE=.harness/codex-wrapper.ready
 WRAPPER_STOP_FILE=.harness/codex-wrapper.stop
+GATE_ACTIVE=.harness/GATE-ACTIVE
+GATE_QUARANTINE=.harness/GATE-TIMEOUT-BLOCKED
 NOTE="${1:-}"
 pause_created=0
 runner_handoff=0
@@ -62,6 +64,10 @@ trap cleanup EXIT
 exec 9>"$CONTROL_LOCK"
 flock 9 6>&-
 control_handoff=1
+if [ -e "$GATE_ACTIVE" ] || [ -e "$GATE_QUARANTINE" ]; then
+  echo "unverified milestone gate ownership blocks Codex restart" >&2
+  exit 2
+fi
 if [ ! -e "$PAUSE" ]; then
   touch "$PAUSE" 6>&-
   pause_created=1

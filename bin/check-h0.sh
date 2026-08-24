@@ -9,6 +9,7 @@ required=(
   milestones/H0/gate.json milestones/H1/SPEC.md milestones/H1/gate.json
   bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh
   bin/milestone-gate.py bin/codex-process.py bin/process_group.py
+  bin/milestone-gate-watchdog.sh
   bin/check-h1-spec.sh
   bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh
   bin/test-gate-timeout-tree.sh
@@ -16,8 +17,9 @@ required=(
 for f in "${required[@]}"; do
   [ -f "$f" ] || { echo "missing: $f" >&2; exit 1; }
 done
+[ -x bin/milestone-gate-watchdog.sh ] || { echo "not executable: bin/milestone-gate-watchdog.sh" >&2; exit 1; }
 
-for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/check-h1-spec.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh bin/test-gate-timeout-tree.sh; do
+for f in bin/run-codex.sh bin/health-codex.sh bin/supervise-codex.sh bin/restart-codex.sh bin/milestone-gate-watchdog.sh bin/check-h1-spec.sh bin/test-codex-lifecycle.sh bin/test-harness-control.sh bin/test-lock-races.sh bin/test-gate-timeout-tree.sh; do
   bash -n "$f"
 done
 python3 -m py_compile bin/milestone-gate.py bin/codex-process.py bin/process_group.py
@@ -41,11 +43,14 @@ grep -q 'codex-process.py' bin/run-codex.sh
 grep -q 'CONTROL_LOCK=.harness/codex-control.lock' bin/supervise-codex.sh
 grep -q 'acquire_control_and_runner' bin/supervise-codex.sh
 grep -q 'JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1' bin/supervise-codex.sh
-grep -q 'milestone-gate.py' bin/supervise-codex.sh
+grep -q 'milestone-gate-watchdog.sh' bin/supervise-codex.sh
 grep -q 'exec-subreaper' bin/supervise-codex.sh
 grep -q 'terminate-descendants-strict' bin/supervise-codex.sh
 grep -q 'unset JWH_SUBREAPER_ACTIVE' bin/supervise-codex.sh
 grep -q 'BACKOFF_MAX' bin/supervise-codex.sh
+grep -q 'GATE_ACTIVE=.harness/GATE-ACTIVE' bin/supervise-codex.sh
+grep -q 'cleanup_until_verified' bin/milestone-gate-watchdog.sh
+grep -q 'terminate-descendants-strict' bin/milestone-gate-watchdog.sh
 
 grep -q 'CONTROL_LOCK=.harness/codex-control.lock' bin/restart-codex.sh
 grep -q 'flock -w 5 8' bin/restart-codex.sh
@@ -53,6 +58,8 @@ grep -q 'WRAPPER_STOP_FILE=.harness/codex-wrapper.stop' bin/restart-codex.sh
 grep -q 'WRAPPER_READY_FILE=.harness/codex-wrapper.ready' bin/restart-codex.sh
 grep -q 'WRAPPER_LOCK_FILE=.harness/codex-wrapper.lock' bin/restart-codex.sh
 grep -q 'JWH_CONTROL_LOCK_HELD=1 JWH_RUNNER_LOCK_HELD=1' bin/restart-codex.sh
+grep -q 'GATE_ACTIVE=.harness/GATE-ACTIVE' bin/run-codex.sh
+grep -q 'GATE_ACTIVE=.harness/GATE-ACTIVE' bin/restart-codex.sh
 
 grep -q -- '--wrapper-pid-file' bin/run-codex.sh
 grep -q -- '--wrapper-lock-file' bin/run-codex.sh

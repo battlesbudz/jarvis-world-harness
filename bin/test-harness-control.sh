@@ -13,7 +13,7 @@ cleanup_all() {
       "$TMP"/.harness/backoff-sleep.pid "$TMP"/.harness/restart-control-wait.pid \
       "$TMP"/.harness/test-gate-child.pid "$TMP"/.harness/test-gate-parent.pid \
       "$TMP"/.harness/test-background-child.pid "$TMP"/.harness/test-escaped-child.pid \
-      "$TMP"/.harness/evaluator-detached.pid; do
+      "$TMP"/.harness/evaluator-detached.pid "$TMP"/.harness/GATE-ACTIVE; do
       p=$(cat "$f" 2>/dev/null || true); [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
     for f in "$TMP"/.harness/zombie-child.pid "$TMP"/.harness/zombie-parent.pid; do
@@ -30,7 +30,7 @@ mkdir -p "$TMP/bin" "$TMP/fakebin" "$TMP/spec" \
   "$TMP/milestones/TEST_INCOMPLETE" "$TMP/milestones/TEST_BAD" \
   "$TMP/milestones/TEST_GATE_RACE" "$TMP/milestones/TEST_GATE_BACKGROUND" \
   "$TMP/milestones/TEST_GATE_ESCAPED" "$TMP/milestones/TEST_GATE_EVALUATOR_DEATH"
-for f in run-codex.sh codex-process.py process_group.py supervise-codex.sh restart-codex.sh health-codex.sh milestone-gate.py; do
+for f in run-codex.sh codex-process.py process_group.py supervise-codex.sh restart-codex.sh health-codex.sh milestone-gate.py milestone-gate-watchdog.sh; do
   cp "$ROOT/bin/$f" "$TMP/bin/$f"
 done
 chmod +x "$TMP/bin/"*
@@ -150,7 +150,8 @@ FAKE
 chmod +x "$TMP/fakebin/codex-redirected"
 JWH_REAL_SLEEP=$(command -v sleep)
 JWH_REAL_FLOCK=$(command -v flock)
-export JWH_REAL_SLEEP JWH_REAL_FLOCK
+JWH_REAL_PYTHON=$(command -v python3)
+export JWH_REAL_SLEEP JWH_REAL_FLOCK JWH_REAL_PYTHON
 cat > "$TMP/fakebin/sleep" <<'FAKE'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -167,7 +168,20 @@ if [ -n "${JWH_TEST_FLOCK_MARKER:-}" ] && [ "$#" -eq 1 ] && [ "$1" = "${JWH_TEST
 fi
 exec "$JWH_REAL_FLOCK" "$@"
 FAKE
-chmod +x "$TMP/fakebin/sleep" "$TMP/fakebin/flock"
+cat > "$TMP/fakebin/python3" <<'FAKE'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ -n "${JWH_TEST_CLEANUP_HELPER_PID:-}" ] \
+  && [ "${1:-}" = "bin/process_group.py" ] \
+  && [ "${2:-}" = "terminate-descendants-strict" ] \
+  && [ ! -e "$JWH_TEST_CLEANUP_ONCE" ]; then
+  : > "$JWH_TEST_CLEANUP_ONCE"
+  printf '%s\n' "$$" > "$JWH_TEST_CLEANUP_HELPER_PID"
+  while true; do "$JWH_REAL_SLEEP" 1; done
+fi
+exec "$JWH_REAL_PYTHON" "$@"
+FAKE
+chmod +x "$TMP/fakebin/sleep" "$TMP/fakebin/flock" "$TMP/fakebin/python3"
 export PATH="$TMP/fakebin:$PATH"
 export FAKE_CODEX_TRACE="$TRACE"
 cd "$TMP"
@@ -356,6 +370,86 @@ sleep 5
 wait_lock_free .harness/codex-control.lock || { echo "evaluator fallback did not release the control lock" >&2; exit 1; }
 wait_lock_free .harness/codex-runner.lock || { echo "evaluator fallback did not release the runner lock" >&2; exit 1; }
 grep -q 'gate evaluator exited while executable descendants remained' evaluator-lease.out || { echo "evaluator fallback was not reported fail-closed" >&2; cat evaluator-lease.out >&2; exit 1; }
+
+# Supervisor and evaluator double death must still leave a living gate owner that
+# holds both leases until the close-fds detached child has been adopted and killed.
+rm -rf .harness; mkdir -p .harness/logs
+MILESTONE_ID=TEST_GATE_EVALUATOR_DEATH CHECK_S=0.1 bash bin/supervise-codex.sh > double-death.out 2>&1 &
+double_death_sup=$!
+for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && [ -s .harness/GATE-ACTIVE ] && break; sleep 0.05; done
+[ -e .harness/test-gate-entered ] || { echo "double-death fixture gate did not start" >&2; exit 1; }
+gate_parent=$(cat .harness/test-gate-parent.pid)
+detached_child=$(cat .harness/evaluator-detached.pid)
+gate_watchdog=$(cat .harness/GATE-ACTIVE)
+kill -9 "$double_death_sup"
+wait "$double_death_sup" 2>/dev/null || true
+kill -0 "$gate_watchdog" 2>/dev/null || { echo "gate watchdog did not survive supervisor SIGKILL" >&2; exit 1; }
+kill -9 "$gate_parent"
+sleep 0.1
+for lock in codex-control.lock codex-runner.lock; do
+  if flock -n ".harness/$lock" true >/dev/null 2>&1; then
+    echo "gate watchdog released $lock before double-death cleanup" >&2
+    exit 1
+  fi
+done
+wait_lock_free .harness/codex-control.lock || { echo "double-death cleanup did not release the control lock" >&2; exit 1; }
+wait_lock_free .harness/codex-runner.lock || { echo "double-death cleanup did not release the runner lock" >&2; exit 1; }
+[ ! -e .harness/GATE-ACTIVE ] || { echo "verified double-death cleanup left the active marker" >&2; exit 1; }
+state=$(awk '{print $3}' "/proc/$detached_child/stat" 2>/dev/null || true)
+{ [ -z "$state" ] || [ "$state" = "Z" ]; } || { echo "double-death cleanup left detached work executable" >&2; exit 1; }
+sleep 5
+[ ! -e .harness/LEAKED_EVALUATOR_CHILD ] || { echo "double-death child mutated the worktree" >&2; exit 1; }
+
+# If strict cleanup itself is killed, the watchdog must quarantine execution and
+# retry while retaining both leases. This remains safe even if the supervisor then dies.
+rm -rf .harness; mkdir -p .harness/logs
+JWH_TEST_CLEANUP_HELPER_PID=.harness/test-cleanup-helper.pid \
+  JWH_TEST_CLEANUP_ONCE=.harness/test-cleanup-once \
+  MILESTONE_ID=TEST_GATE_EVALUATOR_DEATH CHECK_S=0.1 \
+  bash bin/supervise-codex.sh > cleanup-retry.out 2>&1 &
+cleanup_retry_sup=$!
+for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && [ -s .harness/GATE-ACTIVE ] && break; sleep 0.05; done
+[ -e .harness/test-gate-entered ] || { echo "cleanup-retry fixture gate did not start" >&2; exit 1; }
+gate_parent=$(cat .harness/test-gate-parent.pid)
+detached_child=$(cat .harness/evaluator-detached.pid)
+gate_watchdog=$(cat .harness/GATE-ACTIVE)
+kill -9 "$gate_parent"
+for _ in $(seq 1 200); do [ -s .harness/test-cleanup-helper.pid ] && break; sleep 0.01; done
+[ -s .harness/test-cleanup-helper.pid ] || { echo "strict cleanup helper was not observable" >&2; exit 1; }
+cleanup_helper=$(cat .harness/test-cleanup-helper.pid)
+kill -9 "$cleanup_helper"
+for _ in $(seq 1 100); do [ -e .harness/GATE-TIMEOUT-BLOCKED ] && break; sleep 0.02; done
+[ -e .harness/GATE-TIMEOUT-BLOCKED ] || { echo "failed cleanup did not quarantine autonomous execution" >&2; exit 1; }
+kill -9 "$cleanup_retry_sup"
+wait "$cleanup_retry_sup" 2>/dev/null || true
+for lock in codex-control.lock codex-runner.lock; do
+  if flock -n ".harness/$lock" true >/dev/null 2>&1; then
+    echo "cleanup retry released $lock before verification" >&2
+    exit 1
+  fi
+done
+wait_lock_free .harness/codex-control.lock || { echo "retried cleanup did not release the control lock" >&2; exit 1; }
+wait_lock_free .harness/codex-runner.lock || { echo "retried cleanup did not release the runner lock" >&2; exit 1; }
+[ ! -e .harness/GATE-ACTIVE ] || { echo "verified cleanup retry left the active marker" >&2; exit 1; }
+[ -e .harness/STOP ] || { echo "cleanup failure did not leave STOP fail-closed" >&2; exit 1; }
+state=$(awk '{print $3}' "/proc/$detached_child/stat" 2>/dev/null || true)
+{ [ -z "$state" ] || [ "$state" = "Z" ]; } || { echo "cleanup retry left detached work executable" >&2; exit 1; }
+
+# A stale active marker is the durable boundary after watchdog death. Every path
+# capable of starting or replacing Codex must reject it even when both locks are free.
+rm -rf .harness; mkdir -p .harness/logs
+printf '%s\n' 99999999 > .harness/GATE-ACTIVE
+set +e
+bash bin/run-codex.sh >/dev/null 2>&1
+stale_run_rc=$?
+bash bin/restart-codex.sh >/dev/null 2>&1
+stale_restart_rc=$?
+MILESTONE_ID=TEST_INCOMPLETE CHECK_S=0.1 bash bin/supervise-codex.sh >/dev/null 2>&1
+stale_supervisor_rc=$?
+set -e
+[ "$stale_run_rc" -eq 2 ] || { echo "runner ignored stale gate ownership" >&2; exit 1; }
+[ "$stale_restart_rc" -eq 2 ] || { echo "restart ignored stale gate ownership" >&2; exit 1; }
+[ "$stale_supervisor_rc" -eq 2 ] || { echo "supervisor ignored stale gate ownership" >&2; exit 1; }
 
 # A normally exiting check must not leave a same-session background process that
 # can overlap a runner through the shared lease. Terminate it and fail the gate.

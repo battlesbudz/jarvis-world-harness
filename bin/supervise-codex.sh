@@ -7,9 +7,8 @@ cd "$(dirname "$0")/.."
 command -v python3 >/dev/null || { echo "python3 not found on PATH" >&2; exit 127; }
 command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
 
-# Stay alive as the outer process owner for gate evaluation. If the evaluator is
-# SIGKILLed, its active check and any close_fds/setsid descendants reparent here;
-# the supervisor keeps both serialization leases until that tree is gone.
+# Remain a fallback subreaper if the dedicated gate watchdog itself dies. Normal
+# evaluation ownership belongs to that watchdog so it survives supervisor death.
 if [ "${JWH_SUPERVISOR_SUBREAPER_ACTIVE:-0}" != "1" ]; then
   exec env JWH_SUPERVISOR_SUBREAPER_ACTIVE=1 \
     python3 bin/process_group.py exec-subreaper bash "$0" "$@"
@@ -24,6 +23,8 @@ CONTROL_LOCK=.harness/codex-control.lock
 RUNNER_LOCK=.harness/codex-runner.lock
 PAUSE=.harness/codex-supervisor.pause
 STOP=.harness/STOP
+GATE_ACTIVE=.harness/GATE-ACTIVE
+GATE_QUARANTINE=.harness/GATE-TIMEOUT-BLOCKED
 LOG=.harness/logs/codex-supervisor.log
 OUT=.harness/logs/codex-supervised-runner.out
 GATE_OUT=.harness/logs/milestone-gate.stdout.tmp
@@ -114,10 +115,10 @@ launch_runner_from_handoff() {
 }
 
 milestone_passed() {
-  # The gate excludes private fd 7 but retains fd 8/9 so serialization survives
-  # supervisor death. Tell the evaluator exactly which intentional leases each
-  # active check must retain; unrelated inherited descriptors remain closed.
-  JWH_GATE_LEASE_FDS=8,9 python3 bin/milestone-gate.py 7>&- >"$GATE_OUT" 2>"$GATE_ERR"
+  # The dedicated watchdog excludes private fd 7 but retains fd 8/9. It remains
+  # the gate-tree subreaper and lease owner if this supervisor and the evaluator
+  # both die, and retries cleanup rather than releasing unverified state.
+  JWH_GATE_LEASE_FDS=8,9 bin/milestone-gate-watchdog.sh 7>&- >"$GATE_OUT" 2>"$GATE_ERR"
   gate_rc=$?
   clean_owned_descendants_strict
   cleanup_rc=$?
@@ -160,6 +161,10 @@ trap cleanup EXIT
 
 say "supervisor started (pid $$)"
 while true; do
+  if [ -e "$GATE_QUARANTINE" ]; then
+    say "gate quarantine marker present; supervisor exiting"
+    exit 2
+  fi
   if [ -e "$STOP" ]; then
     say "STOP marker present; supervisor exiting"
     exit 0
@@ -168,7 +173,6 @@ while true; do
     sleep "$CHECK_S" 7>&-
     continue
   fi
-
   # Acquire control first, then the runner lock. This both proves whether a runner
   # actually exists and prevents manual startup/restart from racing gate evaluation.
   acquire_control_and_runner
@@ -193,6 +197,11 @@ while true; do
     release_control_and_runner
     sleep "$CHECK_S" 7>&-
     continue
+  fi
+  if [ -e "$GATE_ACTIVE" ] || [ -e "$GATE_QUARANTINE" ]; then
+    release_control_and_runner
+    say "unverified gate ownership marker appeared before launch; supervisor exiting"
+    exit 2
   fi
 
   milestone_passed
@@ -230,6 +239,12 @@ while true; do
     continue
   elif [ "$lock_rc" -ne 0 ]; then
     say "could not reacquire control/runner locks after milestone gate"
+    exit 2
+  fi
+
+  if [ -e "$GATE_ACTIVE" ] || [ -e "$GATE_QUARANTINE" ]; then
+    release_control_and_runner
+    say "unverified gate ownership marker present after gate; supervisor exiting"
     exit 2
   fi
 

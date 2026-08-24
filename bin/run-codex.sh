@@ -18,6 +18,8 @@ fi
 mkdir -p .harness/logs
 CONTROL_LOCK=.harness/codex-control.lock
 RUNNER_LOCK=.harness/codex-runner.lock
+GATE_ACTIVE=.harness/GATE-ACTIVE
+GATE_QUARANTINE=.harness/GATE-TIMEOUT-BLOCKED
 CHILD_PID_FILE=.harness/codex-child.pid
 WRAPPER_PID_FILE=.harness/codex-wrapper.pid
 WRAPPER_LOCK_FILE=.harness/codex-wrapper.lock
@@ -37,6 +39,15 @@ if [ "${JWH_CONTROL_LOCK_HELD:-0}" = "1" ]; then
 else
   exec 9>"$CONTROL_LOCK"
   flock 9
+fi
+
+# A stale active marker means the lease-owning gate boundary died before it could
+# verify cleanup. The control lock closes the marker-removal/startup race.
+if [ -e "$GATE_ACTIVE" ] || [ -e "$GATE_QUARANTINE" ]; then
+  echo "unverified milestone gate ownership blocks Codex startup" >&2
+  flock -u 9 2>/dev/null || true
+  exec 9>&- 2>/dev/null || true
+  exit 2
 fi
 
 # The runner kernel lock, not PID text in the file, is authoritative.

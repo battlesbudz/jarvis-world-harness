@@ -37,7 +37,7 @@ runner exits -> evaluate again before deciding whether to relaunch
 
 This prevents an evaluation command from racing Codex while files are changing.
 
-The supervisor explicitly delegates its control/runner serialization leases to the gate evaluator and each active evidence check. Both the Linux supervisor and evaluator are child subreapers: if either inner process dies, `setsid`, double-forked, or descriptor-closing work reparents to the next living harness owner. Namespace-aware cleanup terminates executable descendants and rejects the evidence before the supervisor releases either lease; zombie-only descendants are ignored and reaped because they hold no descriptors and cannot execute. After an incomplete evaluation, fresh lock acquisition remains mandatory before runner handoff.
+The supervisor explicitly delegates its control/runner serialization leases through a dedicated gate watchdog to the evaluator and each active evidence check. The watchdog and evaluator are Linux child subreapers: if the supervisor and evaluator both die, `setsid`, double-forked, or descriptor-closing work reparents to the still-live watchdog. Namespace-aware cleanup terminates executable descendants and rejects the evidence before either lease is released; a failed cleanup verifier is retried while ownership remains held. A persistent active marker blocks all Codex startup paths if the watchdog itself dies before verification. Zombie-only descendants are ignored and reaped because they hold no descriptors and cannot execute. After an incomplete evaluation, fresh lock acquisition remains mandatory before runner handoff.
 
 ## H0 evidence
 
