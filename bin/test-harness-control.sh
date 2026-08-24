@@ -13,7 +13,8 @@ cleanup_all() {
       "$TMP"/.harness/backoff-sleep.pid "$TMP"/.harness/restart-control-wait.pid \
       "$TMP"/.harness/test-gate-child.pid "$TMP"/.harness/test-gate-parent.pid \
       "$TMP"/.harness/test-background-child.pid "$TMP"/.harness/test-escaped-child.pid \
-      "$TMP"/.harness/evaluator-detached.pid "$TMP"/.harness/GATE-ACTIVE; do
+      "$TMP"/.harness/evaluator-detached.pid "$TMP"/.harness/GATE-ACTIVE \
+      "$TMP"/.harness/gate-watchdog-child.pid; do
       p=$(cat "$f" 2>/dev/null || true); [ -n "$p" ] && kill "$p" 2>/dev/null || true
     done
     for f in "$TMP"/.harness/zombie-child.pid "$TMP"/.harness/zombie-parent.pid; do
@@ -376,15 +377,18 @@ grep -q 'gate evaluator exited while executable descendants remained' evaluator-
 rm -rf .harness; mkdir -p .harness/logs
 MILESTONE_ID=TEST_GATE_EVALUATOR_DEATH CHECK_S=0.1 bash bin/supervise-codex.sh > double-death.out 2>&1 &
 double_death_sup=$!
-for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && [ -s .harness/GATE-ACTIVE ] && break; sleep 0.05; done
+for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && [ -s .harness/GATE-ACTIVE ] && [ -s .harness/gate-watchdog-child.pid ] && break; sleep 0.05; done
 [ -e .harness/test-gate-entered ] || { echo "double-death fixture gate did not start" >&2; exit 1; }
 gate_parent=$(cat .harness/test-gate-parent.pid)
 detached_child=$(cat .harness/evaluator-detached.pid)
 gate_watchdog=$(cat .harness/GATE-ACTIVE)
+gate_guard=$(cat .harness/gate-watchdog-child.pid)
 kill -9 "$double_death_sup"
 wait "$double_death_sup" 2>/dev/null || true
 kill -0 "$gate_watchdog" 2>/dev/null || { echo "gate watchdog did not survive supervisor SIGKILL" >&2; exit 1; }
+kill -STOP "$gate_guard"
 kill -9 "$gate_parent"
+kill -9 "$gate_guard"
 sleep 0.1
 for lock in codex-control.lock codex-runner.lock; do
   if flock -n ".harness/$lock" true >/dev/null 2>&1; then
@@ -408,12 +412,15 @@ JWH_TEST_CLEANUP_HELPER_PID=.harness/test-cleanup-helper.pid \
   MILESTONE_ID=TEST_GATE_EVALUATOR_DEATH CHECK_S=0.1 \
   bash bin/supervise-codex.sh > cleanup-retry.out 2>&1 &
 cleanup_retry_sup=$!
-for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && [ -s .harness/GATE-ACTIVE ] && break; sleep 0.05; done
+for _ in $(seq 1 100); do [ -e .harness/test-gate-entered ] && [ -s .harness/GATE-ACTIVE ] && [ -s .harness/gate-watchdog-child.pid ] && break; sleep 0.05; done
 [ -e .harness/test-gate-entered ] || { echo "cleanup-retry fixture gate did not start" >&2; exit 1; }
 gate_parent=$(cat .harness/test-gate-parent.pid)
 detached_child=$(cat .harness/evaluator-detached.pid)
 gate_watchdog=$(cat .harness/GATE-ACTIVE)
+gate_guard=$(cat .harness/gate-watchdog-child.pid)
+kill -STOP "$gate_guard"
 kill -9 "$gate_parent"
+kill -9 "$gate_guard"
 for _ in $(seq 1 200); do [ -s .harness/test-cleanup-helper.pid ] && break; sleep 0.01; done
 [ -s .harness/test-cleanup-helper.pid ] || { echo "strict cleanup helper was not observable" >&2; exit 1; }
 cleanup_helper=$(cat .harness/test-cleanup-helper.pid)

@@ -23,6 +23,7 @@ STAMP="$(date +%Y%m%d-%H%M%S)-$$"
 OUT=".harness/logs/gate-watchdog-$STAMP.stdout.tmp"
 ERR=".harness/logs/gate-watchdog-$STAMP.stderr.tmp"
 CLEANUP_FAILED=".harness/gate-watchdog-$STAMP.cleanup-failed"
+GATE_CHILD_PID=.harness/gate-watchdog-child.pid
 descendants_found=0
 
 case "$WATCHDOG_S" in
@@ -71,9 +72,13 @@ cleanup_until_verified() {
 
 set +e
 timeout --signal=TERM --kill-after="${KILL_GRACE_S}s" "${WATCHDOG_S}s" \
-  python3 bin/milestone-gate.py "$@" >"$OUT" 2>"$ERR"
+  python3 bin/milestone-gate.py "$@" >"$OUT" 2>"$ERR" &
+gate_guard_pid=$!
+printf '%s\n' "$gate_guard_pid" > "$GATE_CHILD_PID"
+wait "$gate_guard_pid"
 gate_rc=$?
 set -e
+rm -f "$GATE_CHILD_PID"
 if [ "$gate_rc" -eq 124 ]; then
   quarantine "Milestone gate watchdog expired after ${WATCHDOG_S}s."
 fi
