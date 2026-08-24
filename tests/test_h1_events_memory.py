@@ -40,6 +40,22 @@ class EventsMemoryTest(unittest.TestCase):
         self.assertEqual(bad_parent.parents, ())
         self.assertEqual(bad_parent.payload["proposal"]["parents"], ("evt-999999",))
 
+        malformed = world.apply(
+            Proposal(
+                "meaningful_interaction",
+                "bio",
+                ("elias",),
+                root_input="malformed-factors",
+                payload={"factors": [{}]},
+            )
+        )
+        self.assertEqual(malformed.event_type, "proposal_rejected")
+
+        before = len(world.events)
+        unknown_bio = world.decide_request("missing-bio", "elias", "wait", root_input="bad-request")
+        self.assertEqual(unknown_bio.event_type, "proposal_rejected")
+        self.assertEqual(len(world.events), before + 1)
+
     def test_simultaneous_proposals_have_stable_order(self):
         proposals = [
             Proposal("request", "bio", ("mara",), root_input="b", payload={"action": "wait"}),

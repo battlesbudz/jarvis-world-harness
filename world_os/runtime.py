@@ -204,7 +204,11 @@ class World:
             if len(proposal.targets) != 1:
                 return "meaningful interactions require exactly one target"
             factors = proposal.payload.get("factors")
-            if not isinstance(factors, list) or not factors or any(value not in FACTOR_EFFECTS for value in factors):
+            if (
+                not isinstance(factors, list)
+                or not factors
+                or any(not isinstance(value, str) or value not in FACTOR_EFFECTS for value in factors)
+            ):
                 return "meaningful interaction factors are missing or invalid"
             if len(factors) != len(set(factors)):
                 return "meaningful interaction factors must be distinct within one event"
@@ -507,6 +511,8 @@ class World:
         request = self.apply(
             Proposal("request", bio_id, (actor_id,), root_input=root_input, payload={"action": action})
         )
+        if request.event_type != "request":
+            return request
         actor = self.actors[actor_id]
         if not self.is_awakened(actor_id):
             return self._record(
@@ -594,16 +600,6 @@ class World:
             "events": [event.to_dict() for event in self.events],
         }
 
-    def genesis_digest(self) -> str:
-        return _digest(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "seed": self.seed,
-                "crisis_actor": self.crisis_actor,
-                "actors": [self.actors[key].to_dict() for key in sorted(self.actors)],
-            }
-        )
-
     def state_digest(self) -> str:
         return _digest(self.state())
 
@@ -653,11 +649,17 @@ class World:
                     )
                 )
             elif event.event_type == "rumor_shared":
-                world.share_rumor(
-                    event.actor,
-                    event.targets[0],
-                    event.payload["source_event"],
-                    root_input=event.root_input or "replayed-rumor",
+                world.apply(
+                    Proposal(
+                        event.event_type,
+                        event.actor,
+                        event.targets,
+                        event.location,
+                        event.witnesses,
+                        event.parents,
+                        event.root_input,
+                        _thaw(event.payload),
+                    )
                 )
             elif event.event_type == "request":
                 next_event = saved_events[index + 1] if index + 1 < len(saved_events) else None
@@ -703,7 +705,7 @@ class World:
         return world
 
     @classmethod
-    def load(cls, path: Path, *, expected_genesis_digest: str) -> World:
+    def load(cls, path: Path, *, expected_state_digest: str) -> World:
         try:
             envelope = json.loads(path.read_text(encoding="utf-8"))
             state = envelope["state"]
@@ -711,14 +713,8 @@ class World:
             raise ValidationError(f"invalid persisted world: {error}") from error
         if envelope.get("format") != "jarvis-world-h1" or state.get("schema_version") != SCHEMA_VERSION:
             raise ValidationError("incompatible persisted world")
-        claimed_genesis = {
-            "schema_version": state.get("schema_version"),
-            "seed": state.get("seed"),
-            "crisis_actor": state.get("crisis_actor"),
-            "actors": state.get("actors"),
-        }
-        if not expected_genesis_digest or _digest(claimed_genesis) != expected_genesis_digest:
-            raise ValidationError("persisted world genesis does not match the trusted scenario")
+        if not expected_state_digest or _digest(state) != expected_state_digest:
+            raise ValidationError("persisted world does not match the trusted snapshot boundary")
         if envelope.get("digest") != _digest(state):
             raise ValidationError("persisted world digest mismatch")
         return cls._replay(state)

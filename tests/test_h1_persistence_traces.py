@@ -13,10 +13,10 @@ class PersistenceTracesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "world.json"
             resumed = albion_world(123)
-            genesis = resumed.genesis_digest()
             resumed.advance(2)
+            trusted = resumed.state_digest()
             resumed.save(path)
-            resumed = type(resumed).load(path, expected_genesis_digest=genesis)
+            resumed = type(resumed).load(path, expected_state_digest=trusted)
             resumed.advance(2)
 
             uninterrupted = albion_world(123)
@@ -27,33 +27,56 @@ class PersistenceTracesTest(unittest.TestCase):
             awakened = albion_world(321)
             awaken_elias(awakened)
             awakened.decide_request("bio", "elias", "abandon_town", root_input="bio-order")
+            trusted = awakened.state_digest()
             awakened.save(path)
-            loaded = type(awakened).load(path, expected_genesis_digest=awakened.genesis_digest())
+            loaded = type(awakened).load(path, expected_state_digest=trusted)
             self.assertEqual(loaded.state(), awakened.state())
+
+            rumor_world = albion_world(654)
+            source = rumor_world.meaningful_interaction(
+                "bio", "mara", ["attention"], witnesses=("mara",), root_input="market-event"
+            )
+            rumor = rumor_world.apply(
+                Proposal(
+                    "rumor_shared",
+                    "mara",
+                    ("orin",),
+                    "tavern",
+                    ("tavi",),
+                    (source.id,),
+                    "custom-rumor",
+                    {"source_event": source.id, "provenance": ["bio", "mara", "orin"], "confidence": 0.8},
+                )
+            )
+            self.assertEqual(rumor.event_type, "rumor_shared")
+            trusted = rumor_world.state_digest()
+            rumor_world.save(path)
+            loaded = type(rumor_world).load(path, expected_state_digest=trusted)
+            self.assertEqual(loaded.state(), rumor_world.state())
 
     def test_tampered_and_incompatible_state_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "world.json"
             world = albion_world()
-            genesis = world.genesis_digest()
+            trusted = world.state_digest()
             world.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
             payload["state"]["tick"] = 999
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
-                type(world).load(path, expected_genesis_digest=genesis)
+                type(world).load(path, expected_state_digest=trusted)
 
             world = albion_world()
             rejected = world.apply(
                 Proposal("request", "bio", ("mara",), parents=("evt-999999",), payload={"action": "wait"})
             )
             self.assertEqual(rejected.event_type, "proposal_rejected")
+            trusted = world.state_digest()
             world.save(path)
-            self.assertEqual(
-                type(world).load(path, expected_genesis_digest=genesis).state_digest(), world.state_digest()
-            )
+            self.assertEqual(type(world).load(path, expected_state_digest=trusted).state_digest(), trusted)
 
             world.advance()
+            trusted = world.state_digest()
             world.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
             payload["state"]["events"][-1]["parents"] = ["evt-999999"]
@@ -61,10 +84,11 @@ class PersistenceTracesTest(unittest.TestCase):
             payload["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
-                type(world).load(path, expected_genesis_digest=genesis)
+                type(world).load(path, expected_state_digest=trusted)
 
             world = albion_world()
             world.meaningful_interaction("bio", "elias", ["attention"], root_input="hello")
+            trusted = world.state_digest()
             world.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
             event = payload["state"]["events"][-1]
@@ -79,14 +103,14 @@ class PersistenceTracesTest(unittest.TestCase):
             payload["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
-                type(world).load(path, expected_genesis_digest=genesis)
+                type(world).load(path, expected_state_digest=trusted)
 
             world.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
             payload["format"] = "future-format"
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
-                type(world).load(path, expected_genesis_digest=genesis)
+                type(world).load(path, expected_state_digest=trusted)
 
             world.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -95,7 +119,34 @@ class PersistenceTracesTest(unittest.TestCase):
             payload["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
-                type(world).load(path, expected_genesis_digest=genesis)
+                type(world).load(path, expected_state_digest=trusted)
+
+            world = albion_world()
+            trusted = world.state_digest()
+            world.save(path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            events = payload["state"]["events"]
+            events.append(
+                {
+                    "id": f"evt-{len(events) + 1:06d}",
+                    "schema_version": 1,
+                    "tick": 0,
+                    "event_type": "request",
+                    "actor": "bio",
+                    "targets": ["mara"],
+                    "location": "unknown",
+                    "witnesses": [],
+                    "parents": [],
+                    "root_input": "forged-request",
+                    "order": len(events),
+                    "payload": {"action": "wait"},
+                }
+            )
+            canonical = json.dumps(payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            payload["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(ValidationError):
+                type(world).load(path, expected_state_digest=trusted)
 
     def test_machine_readable_causal_evidence(self):
         world = albion_world(808)
