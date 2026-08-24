@@ -20,8 +20,10 @@ def albion_world(seed: int = 1701) -> World:
 
 def awaken_elias(world: World) -> str:
     world.meaningful_interaction("bio", "elias", ["attention", "vulnerability"], root_input="conversation:1")
+    world.advance()
     world.meaningful_interaction(
         "bio", "elias", ["shared_danger", "protection"], witnesses=("mara",), root_input="flood-rescue:1"
     )
+    world.advance()
     world.meaningful_interaction("bio", "elias", ["attention", "vulnerability"], root_input="conversation:2")
     return next(event.id for event in world.events if event.event_type == "awakening_transition")

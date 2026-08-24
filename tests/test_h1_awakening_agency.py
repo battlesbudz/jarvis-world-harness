@@ -35,7 +35,17 @@ class AwakeningAgencyTest(unittest.TestCase):
         world.meaningful_interaction("mara", "elias", ["protection", "shared_danger"], root_input="captain-rescue")
         world.meaningful_interaction("bio", "elias", ["protection", "shared_danger"], root_input="bio-rescue")
         world.meaningful_interaction("bio", "elias", ["attention", "vulnerability"], root_input="bio-talk")
+        world.meaningful_interaction("bio", "elias", ["protection"], root_input="bio-protection")
         self.assertFalse(world.is_awakened("elias"))
+
+        replay = albion_world()
+        first = replay.meaningful_interaction("bio", "elias", ["protection"], root_input="same-contact")
+        second = replay.meaningful_interaction("bio", "elias", ["protection"], root_input="same-contact")
+        third = replay.meaningful_interaction("bio", "elias", ["protection"], root_input="same-contact")
+        self.assertEqual(first.event_type, "meaningful_interaction")
+        self.assertEqual(second.event_type, "proposal_rejected")
+        self.assertEqual(third.event_type, "proposal_rejected")
+        self.assertFalse(replay.is_awakened("elias"))
 
     def test_awakened_actor_can_refuse_bio_on_values(self):
         world = albion_world()

@@ -13,9 +13,10 @@ class PersistenceTracesTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "world.json"
             resumed = albion_world(123)
+            genesis = resumed.genesis_digest()
             resumed.advance(2)
             resumed.save(path)
-            resumed = type(resumed).load(path)
+            resumed = type(resumed).load(path, expected_genesis_digest=genesis)
             resumed.advance(2)
 
             uninterrupted = albion_world(123)
@@ -23,16 +24,24 @@ class PersistenceTracesTest(unittest.TestCase):
             self.assertEqual(resumed.state(), uninterrupted.state())
             self.assertEqual(resumed.state_digest(), uninterrupted.state_digest())
 
+            awakened = albion_world(321)
+            awaken_elias(awakened)
+            awakened.decide_request("bio", "elias", "abandon_town", root_input="bio-order")
+            awakened.save(path)
+            loaded = type(awakened).load(path, expected_genesis_digest=awakened.genesis_digest())
+            self.assertEqual(loaded.state(), awakened.state())
+
     def test_tampered_and_incompatible_state_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "world.json"
             world = albion_world()
+            genesis = world.genesis_digest()
             world.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
             payload["state"]["tick"] = 999
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
-                type(world).load(path)
+                type(world).load(path, expected_genesis_digest=genesis)
 
             world = albion_world()
             rejected = world.apply(
@@ -40,7 +49,9 @@ class PersistenceTracesTest(unittest.TestCase):
             )
             self.assertEqual(rejected.event_type, "proposal_rejected")
             world.save(path)
-            self.assertEqual(type(world).load(path).state_digest(), world.state_digest())
+            self.assertEqual(
+                type(world).load(path, expected_genesis_digest=genesis).state_digest(), world.state_digest()
+            )
 
             world.advance()
             world.save(path)
@@ -50,7 +61,7 @@ class PersistenceTracesTest(unittest.TestCase):
             payload["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
-                type(world).load(path)
+                type(world).load(path, expected_genesis_digest=genesis)
 
             world = albion_world()
             world.meaningful_interaction("bio", "elias", ["attention"], root_input="hello")
@@ -68,14 +79,23 @@ class PersistenceTracesTest(unittest.TestCase):
             payload["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
-                type(world).load(path)
+                type(world).load(path, expected_genesis_digest=genesis)
 
             world.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
             payload["format"] = "future-format"
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
-                type(world).load(path)
+                type(world).load(path, expected_genesis_digest=genesis)
+
+            world.save(path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["state"]["seed"] = world.seed + 1
+            canonical = json.dumps(payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            payload["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(ValidationError):
+                type(world).load(path, expected_genesis_digest=genesis)
 
     def test_machine_readable_causal_evidence(self):
         world = albion_world(808)

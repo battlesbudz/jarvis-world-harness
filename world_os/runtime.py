@@ -208,6 +208,11 @@ class World:
                 return "meaningful interaction factors are missing or invalid"
             if len(factors) != len(set(factors)):
                 return "meaningful interaction factors must be distinct within one event"
+            if any(
+                event.event_type == "meaningful_interaction" and event.root_input == proposal.root_input
+                for event in self.events
+            ):
+                return "meaningful interaction root input has already been consumed"
         if proposal.event_type == "rumor_shared":
             if len(proposal.targets) != 1:
                 return "rumor sharing requires exactly one listener"
@@ -219,13 +224,15 @@ class World:
                 return str(error)
             if knowledge is None:
                 return "teller has no traceable knowledge of the source event"
-            chain, confidence = knowledge
+            chain, confidence, parent = knowledge
             if chain[-1] != proposal.actor:
                 chain.append(proposal.actor)
             chain.append(proposal.targets[0])
             relationship = self.relationship(proposal.targets[0], proposal.actor)
             credibility = max(0.5, min(1.0, 0.8 + 0.02 * (relationship["trust"] - relationship["resentment"])))
             expected_confidence = round(confidence * credibility, 6)
+            if proposal.parents != (parent,):
+                return "rumor must parent the evidence through which the teller learned it"
             if list(proposal.payload["provenance"]) != chain or proposal.payload["confidence"] != expected_confidence:
                 return "rumor provenance or confidence is not derivable"
         if proposal.event_type == "request" and len(proposal.targets) != 1:
@@ -244,7 +251,7 @@ class World:
                 proposal.location,
                 (),
                 (),
-                proposal.root_input or f"invalid-proposal:{len(self.events) + 1}",
+                f"invalid-proposal:{len(self.events) + 1}",
                 {"proposal": _thaw(_freeze(asdict(proposal))), "reason": reason},
             )
         event = self._record(
@@ -353,6 +360,7 @@ class World:
         if (
             self.actors[bio_id].category != "bio"
             or len(qualifying) < 3
+            or len({event.tick for event in qualifying}) < 3
             or self.awakening_score(actor_id) < AWAKENING_THRESHOLD
         ):
             return
@@ -445,14 +453,25 @@ class World:
                 beliefs.append({"source_event": event.id, "provenance": [event.actor, actor_id], "confidence": 1.0})
         return beliefs
 
-    def _knows(self, actor_id: str, source_event: str) -> tuple[list[str], float] | None:
+    def _knows(self, actor_id: str, source_event: str) -> tuple[list[str], float, str] | None:
         source = self._event(source_event)
+        candidates: list[tuple[int, list[str], float, str]] = []
         if actor_id in (source.actor, *source.targets, *source.witnesses):
-            return [source.actor, actor_id] if source.actor != actor_id else [actor_id], 1.0
-        for belief in reversed(self.beliefs(actor_id)):
-            if belief["source_event"] == source_event:
-                return list(belief["provenance"]), float(belief["confidence"])
-        return None
+            chain = [source.actor, actor_id] if source.actor != actor_id else [actor_id]
+            candidates.append((source.order, chain, 1.0, source.id))
+        for event in self.events:
+            if (
+                event.event_type == "rumor_shared"
+                and actor_id in event.targets
+                and event.payload["source_event"] == source_event
+            ):
+                candidates.append(
+                    (event.order, list(event.payload["provenance"]), float(event.payload["confidence"]), event.id)
+                )
+        if not candidates:
+            return None
+        _order, chain, confidence, parent = max(candidates, key=lambda candidate: candidate[0])
+        return chain, confidence, parent
 
     def share_rumor(self, teller: str, listener: str, source_event: str, *, root_input: str) -> Event:
         try:
@@ -463,20 +482,10 @@ class World:
             return self.apply(
                 Proposal("rumor_shared", teller, (listener,), root_input=root_input, payload={"source_event": source_event})
             )
-        chain, confidence = knowledge
+        chain, confidence, parent = knowledge
         if chain[-1] != teller:
             chain.append(teller)
         chain.append(listener)
-        parent = next(
-            (
-                event.id
-                for event in reversed(self.events)
-                if event.event_type == "rumor_shared"
-                and teller in event.targets
-                and event.payload.get("source_event") == source_event
-            ),
-            source_event,
-        )
         relationship = self.relationship(listener, teller)
         credibility = max(0.5, min(1.0, 0.8 + 0.02 * (relationship["trust"] - relationship["resentment"])))
         return self.apply(
@@ -585,6 +594,16 @@ class World:
             "events": [event.to_dict() for event in self.events],
         }
 
+    def genesis_digest(self) -> str:
+        return _digest(
+            {
+                "schema_version": SCHEMA_VERSION,
+                "seed": self.seed,
+                "crisis_actor": self.crisis_actor,
+                "actors": [self.actors[key].to_dict() for key in sorted(self.actors)],
+            }
+        )
+
     def state_digest(self) -> str:
         return _digest(self.state())
 
@@ -684,7 +703,7 @@ class World:
         return world
 
     @classmethod
-    def load(cls, path: Path) -> World:
+    def load(cls, path: Path, *, expected_genesis_digest: str) -> World:
         try:
             envelope = json.loads(path.read_text(encoding="utf-8"))
             state = envelope["state"]
@@ -692,6 +711,14 @@ class World:
             raise ValidationError(f"invalid persisted world: {error}") from error
         if envelope.get("format") != "jarvis-world-h1" or state.get("schema_version") != SCHEMA_VERSION:
             raise ValidationError("incompatible persisted world")
+        claimed_genesis = {
+            "schema_version": state.get("schema_version"),
+            "seed": state.get("seed"),
+            "crisis_actor": state.get("crisis_actor"),
+            "actors": state.get("actors"),
+        }
+        if not expected_genesis_digest or _digest(claimed_genesis) != expected_genesis_digest:
+            raise ValidationError("persisted world genesis does not match the trusted scenario")
         if envelope.get("digest") != _digest(state):
             raise ValidationError("persisted world digest mismatch")
         return cls._replay(state)
