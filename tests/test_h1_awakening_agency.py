@@ -101,6 +101,9 @@ class AwakeningAgencyTest(unittest.TestCase):
 
         thinker_refusal = world.decide_request("bio", "mara", "abandon_town", root_input="captain-order")
         self.assertEqual(thinker_refusal.event_type, "values_refusal")
+        self.assertTrue(all(world.goals(actor_id) for actor_id in ("mara", "orin", "tavi")))
+        self.assertEqual(thinker_refusal.payload["goals"], tuple(world.goals("mara")))
+        self.assertEqual(thinker_refusal.payload["validation"]["authority"], "world_validator")
 
 
 if __name__ == "__main__":

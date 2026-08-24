@@ -12,6 +12,13 @@ from typing import Any, Iterable
 SCHEMA_VERSION = 1
 ACTOR_CATEGORIES = {"bio", "thinker", "non_thinker"}
 PUBLIC_EVENT_TYPES = {"meaningful_interaction", "rumor_shared", "request"}
+INTERNAL_PROPOSAL_TYPES = {
+    "crisis_changed",
+    "independent_choice",
+    "routine_action",
+    "routine_response",
+    "values_refusal",
+}
 RELATIONSHIP_DIMENSIONS = ("trust", "fear", "respect", "resentment", "affection")
 FACTOR_EFFECTS = {
     "attention": {"trust": 1, "affection": 1},
@@ -174,6 +181,22 @@ class World:
                     f"bio-origin:{actor.id}",
                     {"memory": "Earth", "rule": "bio_remembers_earth_immediately"},
                 )
+            elif actor.category == "thinker":
+                value = actor.values[0] if actor.values else actor.role
+                self._record(
+                    "independent_goal_formed",
+                    actor.id,
+                    (),
+                    "genesis",
+                    (),
+                    (),
+                    f"thinker-goal:{actor.id}",
+                    {
+                        "goal": f"uphold {value} while serving as {actor.role}",
+                        "values": list(actor.values),
+                        "rule": "conscious_thinker_genesis_goal",
+                    },
+                )
 
     @property
     def events(self) -> tuple[Event, ...]:
@@ -185,10 +208,11 @@ class World:
                 return event
         raise ValidationError(f"unknown causal parent: {event_id}")
 
-    def _validate(self, proposal: Proposal) -> str | None:
+    def _validate(self, proposal: Proposal, *, internal: bool = False) -> str | None:
         if not isinstance(proposal.event_type, str):
             return "event type must be a string"
-        if proposal.event_type not in PUBLIC_EVENT_TYPES:
+        allowed_types = INTERNAL_PROPOSAL_TYPES if internal else PUBLIC_EVENT_TYPES
+        if proposal.event_type not in allowed_types:
             return f"event type {proposal.event_type!r} is not publicly legal"
         if not isinstance(proposal.actor, str) or proposal.actor not in self.actors:
             return f"unknown actor {proposal.actor!r}"
@@ -222,6 +246,8 @@ class World:
                 self._event(parent)
         except ValidationError as error:
             return str(error)
+        if internal:
+            return self._validate_internal_rules(proposal)
         if proposal.event_type == "meaningful_interaction":
             if len(proposal.targets) != 1:
                 return "meaningful interactions require exactly one target"
@@ -277,29 +303,113 @@ class World:
                 return "rumor must parent the evidence through which the teller learned it"
             if list(provenance) != chain or proposal.payload["confidence"] != expected_confidence:
                 return "rumor provenance or confidence is not derivable"
-        if proposal.event_type == "request" and len(proposal.targets) != 1:
-            return "requests require exactly one recipient"
+        if proposal.event_type == "request":
+            if len(proposal.targets) != 1:
+                return "requests require exactly one recipient"
+            if not isinstance(proposal.payload.get("action"), str) or not proposal.payload["action"]:
+                return "requests require a non-empty action"
         return None
+
+    def _validate_internal_rules(self, proposal: Proposal) -> str | None:
+        if len(proposal.parents) != 1:
+            return "internal action requires exactly one causal parent"
+        parent = self._event(proposal.parents[0])
+        if proposal.event_type == "crisis_changed":
+            expected_severity = min(5, self.tick)
+            phases = ("warning", "strain", "danger", "collapse", "aftermath")
+            if proposal.actor != self.crisis_actor:
+                return "only the configured crisis authority may change world pressure"
+            if proposal.targets or proposal.witnesses or proposal.location != "albion-town":
+                return "crisis change violates the Albion World Anchor boundary"
+            if parent.event_type != "time_advanced" or parent.tick != self.tick:
+                return "crisis change must follow the current logical tick"
+            if any(event.event_type == "crisis_changed" and event.tick == self.tick for event in self.events):
+                return "crisis pressure may change only once per logical tick"
+            if (
+                proposal.payload.get("crisis") != "river_flood"
+                or not isinstance(proposal.payload.get("severity"), int)
+                or isinstance(proposal.payload.get("severity"), bool)
+                or proposal.payload.get("severity") != expected_severity
+                or proposal.payload.get("phase") != phases[expected_severity - 1]
+                or proposal.payload.get("player_intervened") is not False
+            ):
+                return "crisis change violates deterministic severity, phase, or playability constraints"
+            return None
+
+        if proposal.event_type == "routine_action":
+            actor = self.actors[proposal.actor]
+            if (
+                actor.category != "non_thinker"
+                or self.cognition(actor.id) != "routine"
+                or proposal.targets
+                or proposal.witnesses
+                or proposal.location != "albion"
+                or parent.event_type != "time_advanced"
+                or parent.tick != self.tick
+                or proposal.payload.get("role") != actor.role
+                or proposal.payload.get("action") != f"perform {actor.role} routine"
+            ):
+                return "routine action violates role, cognition, or tick preconditions"
+            return None
+
+        if parent.event_type != "request" or len(parent.targets) != 1:
+            return "actor decision must answer one request"
+        if (
+            proposal.actor != parent.targets[0]
+            or tuple(proposal.targets) != (parent.actor,)
+            or proposal.witnesses
+            or proposal.location != "albion"
+        ):
+            return "actor decision identities do not match the request"
+        if proposal.payload.get("action") != parent.payload.get("action"):
+            return "actor decision action does not match the request"
+        cognition = self.cognition(proposal.actor)
+        if proposal.event_type == "routine_response":
+            return None if cognition != "conscious" else "conscious actors cannot emit routine responses"
+        if cognition != "conscious":
+            return "routine actors cannot emit independent decisions"
+        conflicts = self._action_conflicts_with_goals(proposal.actor, proposal.payload.get("action"))
+        if proposal.event_type == "values_refusal" and not conflicts:
+            return "refusal is not supported by persistent goals or values"
+        if proposal.event_type == "independent_choice" and conflicts:
+            return "conflicting action requires a values-based refusal"
+        expected_decision = "refuse" if conflicts else "accept"
+        if (
+            proposal.payload.get("decision") != expected_decision
+            or proposal.payload.get("goals") != self.goals(proposal.actor)
+            or proposal.payload.get("values") != list(self.actors[proposal.actor].values)
+        ):
+            return "decision evidence does not match persistent goals and values"
+        return None
+
+    def _action_conflicts_with_goals(self, actor_id: str, action: Any) -> bool:
+        actor = self.actors[actor_id]
+        return action == "abandon_town" and (
+            "protect_community" in actor.values or any("protect" in goal for goal in self.goals(actor_id))
+        )
+
+    def _reject(self, proposal: Proposal, reason: str) -> Event:
+        fallback_actor = (
+            proposal.actor
+            if isinstance(proposal.actor, str) and proposal.actor in self.actors
+            else self.crisis_actor
+        )
+        return self._record(
+            "proposal_rejected",
+            fallback_actor,
+            (),
+            proposal.location if isinstance(proposal.location, str) else "unknown",
+            (),
+            (),
+            f"invalid-proposal:{len(self.events) + 1}",
+            {"proposal": _thaw(_freeze(asdict(proposal))), "reason": reason},
+        )
 
     def apply(self, proposal: Proposal) -> Event:
         """Validate a proposal and append either its legal event or rejection evidence."""
         reason = self._validate(proposal)
         if reason:
-            fallback_actor = (
-                proposal.actor
-                if isinstance(proposal.actor, str) and proposal.actor in self.actors
-                else self.crisis_actor
-            )
-            return self._record(
-                "proposal_rejected",
-                fallback_actor,
-                (),
-                proposal.location if isinstance(proposal.location, str) else "unknown",
-                (),
-                (),
-                f"invalid-proposal:{len(self.events) + 1}",
-                {"proposal": _thaw(_freeze(asdict(proposal))), "reason": reason},
-            )
+            return self._reject(proposal, reason)
         event = self._record(
             proposal.event_type,
             proposal.actor,
@@ -313,6 +423,32 @@ class World:
         if event.event_type == "meaningful_interaction":
             self._maybe_awaken(event.targets[0], event.actor, event)
         return event
+
+    def _apply_internal(self, proposal: Proposal) -> Event:
+        reason = self._validate(proposal, internal=True)
+        if reason:
+            return self._reject(proposal, reason)
+        payload = dict(proposal.payload)
+        payload["validation"] = {
+            "authority": "world_validator",
+            "cooldowns": True,
+            "identity": True,
+            "permissions": True,
+            "physical_possibility": True,
+            "preconditions": True,
+            "world_anchor": True,
+            "playability": True,
+        }
+        return self._record(
+            proposal.event_type,
+            proposal.actor,
+            proposal.targets,
+            proposal.location,
+            proposal.witnesses,
+            proposal.parents,
+            proposal.root_input,
+            payload,
+        )
 
     def apply_all(self, proposals: Iterable[Proposal]) -> list[Event]:
         """Apply simultaneous proposals in a stable, process-independent order."""
@@ -557,20 +693,27 @@ class World:
             return request
         actor = self.actors[actor_id]
         if self.cognition(actor_id) != "conscious":
-            return self._record(
-                "routine_response", actor_id, (bio_id,), "albion", (), (request.id,), None, {"action": action}
+            return self._apply_internal(
+                Proposal("routine_response", actor_id, (bio_id,), "albion", (), (request.id,), None, {"action": action})
             )
-        conflicts = action == "abandon_town" and "protect_community" in actor.values
+        conflicts = self._action_conflicts_with_goals(actor_id, action)
         event_type = "values_refusal" if conflicts else "independent_choice"
-        return self._record(
-            event_type,
-            actor_id,
-            (bio_id,),
-            "albion",
-            (),
-            (request.id,),
-            None,
-            {"action": action, "decision": "refuse" if conflicts else "accept", "values": list(actor.values)},
+        return self._apply_internal(
+            Proposal(
+                event_type,
+                actor_id,
+                (bio_id,),
+                "albion",
+                (),
+                (request.id,),
+                None,
+                {
+                    "action": action,
+                    "decision": "refuse" if conflicts else "accept",
+                    "goals": self.goals(actor_id),
+                    "values": list(actor.values),
+                },
+            )
         )
 
     def advance(self, ticks: int = 1) -> list[Event]:
@@ -586,29 +729,38 @@ class World:
             for actor in sorted(self.actors.values(), key=lambda item: item.id):
                 if actor.category == "non_thinker" and not self.is_awakened(actor.id):
                     emitted.append(
-                        self._record(
-                            "routine_action",
-                            actor.id,
-                            (),
-                            "albion",
-                            (),
-                            (tick_event.id,),
-                            None,
-                            {"role": actor.role, "action": f"perform {actor.role} routine"},
+                        self._apply_internal(
+                            Proposal(
+                                "routine_action",
+                                actor.id,
+                                (),
+                                "albion",
+                                (),
+                                (tick_event.id,),
+                                None,
+                                {"role": actor.role, "action": f"perform {actor.role} routine"},
+                            )
                         )
                     )
             severity = min(5, self.tick)
             phase = ("warning", "strain", "danger", "collapse", "aftermath")[severity - 1]
             emitted.append(
-                self._record(
-                    "crisis_changed",
-                    self.crisis_actor,
-                    (),
-                    "albion-town",
-                    (),
-                    (tick_event.id,),
-                    None,
-                    {"crisis": "river_flood", "severity": severity, "phase": phase, "player_intervened": False},
+                self._apply_internal(
+                    Proposal(
+                        "crisis_changed",
+                        self.crisis_actor,
+                        (),
+                        "albion-town",
+                        (),
+                        (tick_event.id,),
+                        None,
+                        {
+                            "crisis": "river_flood",
+                            "severity": severity,
+                            "phase": phase,
+                            "player_intervened": False,
+                        },
+                    )
                 )
             )
         return emitted

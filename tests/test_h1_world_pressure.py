@@ -1,5 +1,6 @@
 import unittest
 
+from world_os import Proposal
 from world_os.scenarios import albion_world
 
 
@@ -12,6 +13,22 @@ class WorldPressureTest(unittest.TestCase):
         self.assertEqual(world.crisis()["phase"], "collapse")
         self.assertTrue(all(not event.payload["player_intervened"] for event in crisis_events))
         self.assertTrue(all(event.parents for event in crisis_events))
+        self.assertTrue(
+            all(event.payload["validation"]["authority"] == "world_validator" for event in crisis_events)
+        )
+        self.assertTrue(all(event.payload["validation"]["world_anchor"] for event in crisis_events))
+
+        forged = world.apply(
+            Proposal(
+                "crisis_changed",
+                "bio",
+                location="albion-town",
+                root_input="player-forges-crisis",
+                payload={"crisis": "river_flood", "severity": 5, "phase": "collapse"},
+            )
+        )
+        self.assertEqual(forged.event_type, "proposal_rejected")
+        self.assertEqual(world.crisis()["severity"], 4)
 
     def test_seeded_world_pressure_is_reproducible(self):
         first = albion_world(42)

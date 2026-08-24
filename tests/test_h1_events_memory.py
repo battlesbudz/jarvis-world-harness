@@ -18,8 +18,10 @@ class EventsMemoryTest(unittest.TestCase):
         self.assertEqual(event.witnesses, ("orin",))
 
         self.assertEqual(world.memories("bio")[0]["perspective"], "actor")
-        self.assertEqual(world.memories("mara")[0]["perspective"], "target")
-        self.assertEqual(world.memories("orin")[0]["perspective"], "witness")
+        mara_memory = next(memory for memory in world.memories("mara") if memory["event_id"] == event.id)
+        orin_memory = next(memory for memory in world.memories("orin") if memory["event_id"] == event.id)
+        self.assertEqual(mara_memory["perspective"], "target")
+        self.assertEqual(orin_memory["perspective"], "witness")
         self.assertEqual(world.beliefs("orin")[0]["source_event"], event.id)
         earth_memory = world.memories("bio")[0]
         self.assertEqual(world.trace(earth_memory["event_id"])["rule"], "bio_remembers_earth_immediately")
