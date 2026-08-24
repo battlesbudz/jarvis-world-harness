@@ -1,9 +1,10 @@
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from world_os import ValidationError
+from world_os import Proposal, ValidationError
 from world_os.scenarios import albion_world, awaken_elias
 
 
@@ -33,13 +34,37 @@ class PersistenceTracesTest(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 type(world).load(path)
 
+            world = albion_world()
+            rejected = world.apply(
+                Proposal("request", "bio", ("mara",), parents=("evt-999999",), payload={"action": "wait"})
+            )
+            self.assertEqual(rejected.event_type, "proposal_rejected")
+            world.save(path)
+            self.assertEqual(type(world).load(path).state_digest(), world.state_digest())
+
             world.advance()
             world.save(path)
             payload = json.loads(path.read_text(encoding="utf-8"))
             payload["state"]["events"][-1]["parents"] = ["evt-999999"]
             canonical = json.dumps(payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-            import hashlib
+            payload["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(ValidationError):
+                type(world).load(path)
 
+            world = albion_world()
+            world.meaningful_interaction("bio", "elias", ["attention"], root_input="hello")
+            world.save(path)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            event = payload["state"]["events"][-1]
+            event["event_type"] = "awakening_transition"
+            event["payload"] = {
+                "rule": "repeated_meaningful_soul_pattern",
+                "score": 99,
+                "threshold": 12,
+                "interaction_count": 3,
+            }
+            canonical = json.dumps(payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True)
             payload["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
@@ -59,12 +84,18 @@ class PersistenceTracesTest(unittest.TestCase):
         world.advance(3)
         crisis = next(event for event in reversed(world.events) if event.event_type == "crisis_changed")
         path = Path(".harness/evidence/h1/causal-scenario.json")
-        world.write_trace(path, "awakening-refusal-crisis", [transition_id, refusal.id, crisis.id])
+        world.write_trace(
+            path,
+            "awakening-refusal-crisis",
+            [transition_id, refusal.id, crisis.id],
+            relationships=[("elias", "bio")],
+        )
         payload = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(payload["seed"], 808)
         self.assertEqual(len(payload["events"]), 3)
         self.assertEqual(payload["state_digest"], world.state_digest())
         self.assertTrue(payload["events"][0]["causes"])
+        self.assertTrue(payload["relationships"][0]["contributions"])
 
 
 if __name__ == "__main__":

@@ -162,6 +162,18 @@ class World:
         self.actors = MappingProxyType(actor_map)
         self.crisis_actor = crisis_actor
         self._events: list[Event] = []
+        for actor in sorted(self.actors.values(), key=lambda item: item.id):
+            if actor.category == "bio":
+                self._record(
+                    "earth_memory",
+                    actor.id,
+                    (),
+                    "earth-memory",
+                    (),
+                    (),
+                    f"bio-origin:{actor.id}",
+                    {"memory": "Earth", "rule": "bio_remembers_earth_immediately"},
+                )
 
     @property
     def events(self) -> tuple[Event, ...]:
@@ -194,6 +206,8 @@ class World:
             factors = proposal.payload.get("factors")
             if not isinstance(factors, list) or not factors or any(value not in FACTOR_EFFECTS for value in factors):
                 return "meaningful interaction factors are missing or invalid"
+            if len(factors) != len(set(factors)):
+                return "meaningful interaction factors must be distinct within one event"
         if proposal.event_type == "rumor_shared":
             if len(proposal.targets) != 1:
                 return "rumor sharing requires exactly one listener"
@@ -229,9 +243,9 @@ class World:
                 (),
                 proposal.location,
                 (),
-                proposal.parents,
-                proposal.root_input or "invalid-proposal",
-                {"proposed_type": proposal.event_type, "reason": reason},
+                (),
+                proposal.root_input or f"invalid-proposal:{len(self.events) + 1}",
+                {"proposal": _thaw(_freeze(asdict(proposal))), "reason": reason},
             )
         event = self._record(
             proposal.event_type,
@@ -318,7 +332,9 @@ class World:
         return sum(
             AWAKENING_WEIGHTS[factor]
             for event in self.events
-            if event.event_type == "meaningful_interaction" and actor_id in event.targets
+            if event.event_type == "meaningful_interaction"
+            and actor_id in event.targets
+            and self.actors[event.actor].category == "bio"
             for factor in event.payload["factors"]
             if factor in AWAKENING_WEIGHTS
         )
@@ -327,13 +343,20 @@ class World:
         actor = self.actors[actor_id]
         if actor.category != "non_thinker" or self.is_awakened(actor_id):
             return
-        if self.actors[bio_id].category != "bio" or self.awakening_score(actor_id) < AWAKENING_THRESHOLD:
-            return
-        contributors = tuple(
-            event.id
+        qualifying = tuple(
+            event
             for event in self.events
-            if event.event_type == "meaningful_interaction" and actor_id in event.targets
+            if event.event_type == "meaningful_interaction"
+            and actor_id in event.targets
+            and self.actors[event.actor].category == "bio"
         )
+        if (
+            self.actors[bio_id].category != "bio"
+            or len(qualifying) < 3
+            or self.awakening_score(actor_id) < AWAKENING_THRESHOLD
+        ):
+            return
+        contributors = tuple(event.id for event in qualifying)
         transition = self._record(
             "awakening_transition",
             bio_id,
@@ -342,7 +365,12 @@ class World:
             cause.witnesses,
             contributors,
             None,
-            {"rule": "meaningful_soul_pattern", "score": self.awakening_score(actor_id), "threshold": AWAKENING_THRESHOLD},
+            {
+                "rule": "repeated_meaningful_soul_pattern",
+                "score": self.awakening_score(actor_id),
+                "threshold": AWAKENING_THRESHOLD,
+                "interaction_count": len(qualifying),
+            },
         )
         self._record(
             "independent_goal_formed",
@@ -364,6 +392,27 @@ class World:
                 for dimension, delta in FACTOR_EFFECTS[factor].items():
                     result[dimension] += delta
         return result
+
+    def relationship_trace(self, observer: str, subject: str) -> dict[str, Any]:
+        contributions = []
+        for event in self.events:
+            if event.event_type != "meaningful_interaction" or event.actor != subject or observer not in event.targets:
+                continue
+            for factor in event.payload["factors"]:
+                contributions.append(
+                    {
+                        "event_id": event.id,
+                        "factor": factor,
+                        "rule": "relationship_factor_effects",
+                        "deltas": dict(FACTOR_EFFECTS[factor]),
+                    }
+                )
+        return {
+            "observer": observer,
+            "subject": subject,
+            "dimensions": self.relationship(observer, subject),
+            "contributions": contributions,
+        }
 
     def memories(self, actor_id: str) -> list[dict[str, Any]]:
         if self.cognition(actor_id) != "conscious":
@@ -423,7 +472,7 @@ class World:
                 event.id
                 for event in reversed(self.events)
                 if event.event_type == "rumor_shared"
-                and event.actor == teller
+                and teller in event.targets
                 and event.payload.get("source_event") == source_event
             ),
             source_event,
@@ -436,6 +485,7 @@ class World:
                 teller,
                 (listener,),
                 parents=(parent,),
+                root_input=root_input,
                 payload={
                     "source_event": source_event,
                     "provenance": chain,
@@ -544,6 +594,95 @@ class World:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(_canonical(envelope) + "\n", encoding="utf-8")
 
+    @staticmethod
+    def _proposal_from_dict(data: Mapping[str, Any]) -> Proposal:
+        return Proposal(
+            event_type=data["event_type"],
+            actor=data["actor"],
+            targets=tuple(data.get("targets", ())),
+            location=data.get("location", "unknown"),
+            witnesses=tuple(data.get("witnesses", ())),
+            parents=tuple(data.get("parents", ())),
+            root_input=data.get("root_input"),
+            payload=_thaw(data.get("payload", {})),
+        )
+
+    @classmethod
+    def _replay(cls, state: dict[str, Any]) -> World:
+        saved_events = [Event.from_dict(item) for item in state["events"]]
+        world = cls(state["seed"], (Actor.from_dict(item) for item in state["actors"]), state["crisis_actor"])
+        index = 0
+        while index < len(saved_events):
+            if index < len(world.events):
+                if world.events[index].to_dict() != saved_events[index].to_dict():
+                    raise ValidationError(f"event {saved_events[index].id} does not replay from its causal history")
+                index += 1
+                continue
+
+            event = saved_events[index]
+            if event.event_type == "meaningful_interaction":
+                world.apply(
+                    Proposal(
+                        event.event_type,
+                        event.actor,
+                        event.targets,
+                        event.location,
+                        event.witnesses,
+                        event.parents,
+                        event.root_input,
+                        _thaw(event.payload),
+                    )
+                )
+            elif event.event_type == "rumor_shared":
+                world.share_rumor(
+                    event.actor,
+                    event.targets[0],
+                    event.payload["source_event"],
+                    root_input=event.root_input or "replayed-rumor",
+                )
+            elif event.event_type == "request":
+                next_event = saved_events[index + 1] if index + 1 < len(saved_events) else None
+                if next_event and next_event.parents == (event.id,) and next_event.event_type in {
+                    "routine_response",
+                    "values_refusal",
+                    "independent_choice",
+                }:
+                    world.decide_request(
+                        event.actor,
+                        event.targets[0],
+                        event.payload["action"],
+                        root_input=event.root_input or "replayed-request",
+                    )
+                else:
+                    world.apply(
+                        Proposal(
+                            event.event_type,
+                            event.actor,
+                            event.targets,
+                            event.location,
+                            event.witnesses,
+                            event.parents,
+                            event.root_input,
+                            _thaw(event.payload),
+                        )
+                    )
+            elif event.event_type == "time_advanced":
+                world.advance()
+            elif event.event_type == "proposal_rejected":
+                proposal = event.payload.get("proposal")
+                if not isinstance(proposal, Mapping):
+                    raise ValidationError("rejection event does not preserve its proposed input")
+                world.apply(cls._proposal_from_dict(proposal))
+            else:
+                raise ValidationError(f"internal event {event.event_type!r} has no valid causal precursor")
+
+            if len(world.events) <= index:
+                raise ValidationError(f"event {event.id} could not be reproduced")
+
+        if len(world.events) != len(saved_events) or world.tick != state["tick"]:
+            raise ValidationError("persisted world does not replay to its claimed boundary")
+        return world
+
     @classmethod
     def load(cls, path: Path) -> World:
         try:
@@ -555,36 +694,21 @@ class World:
             raise ValidationError("incompatible persisted world")
         if envelope.get("digest") != _digest(state):
             raise ValidationError("persisted world digest mismatch")
-        world = cls(state["seed"], (Actor.from_dict(item) for item in state["actors"]), state["crisis_actor"])
-        world.tick = state["tick"]
-        world._events = [Event.from_dict(item) for item in state["events"]]
-        expected = [f"evt-{index:06d}" for index in range(1, len(world.events) + 1)]
-        if [event.id for event in world.events] != expected:
-            raise ValidationError("event history is not append-only ordered")
-        known_events: set[str] = set()
-        previous_tick = 0
-        for index, event in enumerate(world.events):
-            if event.schema_version != SCHEMA_VERSION or event.order != index:
-                raise ValidationError("event schema or deterministic order is invalid")
-            if event.tick < previous_tick or event.tick > world.tick:
-                raise ValidationError("event logical time is invalid")
-            participants = (event.actor, *event.targets, *event.witnesses)
-            if any(actor_id not in world.actors for actor_id in participants):
-                raise ValidationError("event references an unknown actor")
-            if any(parent not in known_events for parent in event.parents):
-                raise ValidationError("event causal history is invalid")
-            if not event.parents and not event.root_input:
-                raise ValidationError("event has no causal parent or root input")
-            known_events.add(event.id)
-            previous_tick = event.tick
-        return world
+        return cls._replay(state)
 
-    def write_trace(self, path: Path, name: str, event_ids: Iterable[str]) -> None:
+    def write_trace(
+        self,
+        path: Path,
+        name: str,
+        event_ids: Iterable[str],
+        relationships: Iterable[tuple[str, str]] = (),
+    ) -> None:
         payload = {
             "scenario": name,
             "seed": self.seed,
             "tick": self.tick,
             "events": [self.trace(event_id) for event_id in event_ids],
+            "relationships": [self.relationship_trace(observer, subject) for observer, subject in relationships],
             "state_digest": self.state_digest(),
         }
         path.parent.mkdir(parents=True, exist_ok=True)

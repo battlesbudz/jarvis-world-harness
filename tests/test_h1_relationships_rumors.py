@@ -27,6 +27,11 @@ class RelationshipsRumorsTest(unittest.TestCase):
         self.assertEqual(first.payload["confidence"], 0.8)
         self.assertEqual(second.payload["confidence"], 0.64)
         self.assertEqual(world.beliefs("tavi")[-1]["source_event"], source.id)
+        self.assertEqual(world.trace(second.id)["causes"][0]["event"]["id"], first.id)
+
+        trace = world.relationship_trace("mara", "bio")
+        self.assertEqual(trace["dimensions"], world.relationship("mara", "bio"))
+        self.assertEqual({item["event_id"] for item in trace["contributions"]}, {source.id})
 
         forged = world.apply(
             Proposal(

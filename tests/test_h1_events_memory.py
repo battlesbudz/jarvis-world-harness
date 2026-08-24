@@ -12,7 +12,7 @@ class EventsMemoryTest(unittest.TestCase):
         event = world.meaningful_interaction(
             "bio", "mara", ["shared_danger"], witnesses=("orin",), root_input="bridge-defense"
         )
-        self.assertEqual(event.id, "evt-000001")
+        self.assertEqual(event.id, world.events[-1].id)
         self.assertEqual(event.schema_version, 1)
         self.assertEqual(event.root_input, "bridge-defense")
         self.assertEqual(event.witnesses, ("orin",))
@@ -21,6 +21,8 @@ class EventsMemoryTest(unittest.TestCase):
         self.assertEqual(world.memories("mara")[0]["perspective"], "target")
         self.assertEqual(world.memories("orin")[0]["perspective"], "witness")
         self.assertEqual(world.beliefs("orin")[0]["source_event"], event.id)
+        earth_memory = world.memories("bio")[0]
+        self.assertEqual(world.trace(earth_memory["event_id"])["rule"], "bio_remembers_earth_immediately")
         with self.assertRaises(TypeError):
             event.payload["factors"] = ("betrayal",)
         self.assertIsInstance(world.events, tuple)
@@ -31,6 +33,12 @@ class EventsMemoryTest(unittest.TestCase):
         self.assertEqual(rejected.event_type, "proposal_rejected")
         self.assertFalse(world.is_awakened("elias"))
         self.assertFalse(hasattr(world, "awaken"))
+
+        bad_parent = world.apply(
+            Proposal("request", "bio", ("mara",), parents=("evt-999999",), payload={"action": "wait"})
+        )
+        self.assertEqual(bad_parent.parents, ())
+        self.assertEqual(bad_parent.payload["proposal"]["parents"], ("evt-999999",))
 
     def test_simultaneous_proposals_have_stable_order(self):
         proposals = [
