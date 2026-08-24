@@ -200,6 +200,8 @@ class World:
             not isinstance(parent, str) for parent in proposal.parents
         ):
             return "causal parents must be an event-identity sequence"
+        if len(proposal.parents) != len(set(proposal.parents)):
+            return "causal parent identities must be distinct"
         if not isinstance(proposal.location, str):
             return "location must be a string"
         if proposal.root_input is not None and not isinstance(proposal.root_input, str):
@@ -232,13 +234,22 @@ class World:
                 return "meaningful interaction factors are missing or invalid"
             if len(factors) != len(set(factors)):
                 return "meaningful interaction factors must be distinct within one event"
-            if any(
-                proposal.root_input is not None
-                and event.event_type == "meaningful_interaction"
-                and event.root_input == proposal.root_input
-                for event in self.events
-            ):
-                return "meaningful interaction root input has already been consumed"
+            if proposal.root_input is not None:
+                consumed = any(
+                    event.event_type == "meaningful_interaction"
+                    and event.root_input == proposal.root_input
+                    for event in self.events
+                )
+            else:
+                parent_identity = tuple(sorted(proposal.parents))
+                consumed = any(
+                    event.event_type == "meaningful_interaction"
+                    and event.root_input is None
+                    and tuple(sorted(event.parents)) == parent_identity
+                    for event in self.events
+                )
+            if consumed:
+                return "meaningful interaction causal input has already been consumed"
         if proposal.event_type == "rumor_shared":
             if len(proposal.targets) != 1:
                 return "rumor sharing requires exactly one listener"

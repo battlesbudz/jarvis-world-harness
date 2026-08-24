@@ -66,6 +66,29 @@ class AwakeningAgencyTest(unittest.TestCase):
             world.advance()
         self.assertTrue(world.is_awakened("elias"))
 
+        replay = albion_world()
+        reused_parent = replay.events[0].id
+        results = []
+        for _ in range(3):
+            results.append(
+                replay.apply(
+                    Proposal(
+                        "meaningful_interaction",
+                        "bio",
+                        ("elias",),
+                        parents=(reused_parent,),
+                        payload={"factors": ["protection"]},
+                    )
+                )
+            )
+            replay.advance()
+        self.assertEqual([event.event_type for event in results], [
+            "meaningful_interaction",
+            "proposal_rejected",
+            "proposal_rejected",
+        ])
+        self.assertFalse(replay.is_awakened("elias"))
+
     def test_awakened_actor_can_refuse_bio_on_values(self):
         world = albion_world()
         transition_id = awaken_elias(world)
