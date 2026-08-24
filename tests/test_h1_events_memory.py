@@ -51,6 +51,15 @@ class EventsMemoryTest(unittest.TestCase):
         )
         self.assertEqual(malformed.event_type, "proposal_rejected")
 
+        invalid_actor = world.apply(
+            Proposal("request", [], ("mara",), root_input="unhashable-actor", payload={"action": "wait"})
+        )
+        invalid_target = world.apply(
+            Proposal("request", "bio", ([],), root_input="unhashable-target", payload={"action": "wait"})
+        )
+        self.assertEqual(invalid_actor.event_type, "proposal_rejected")
+        self.assertEqual(invalid_target.event_type, "proposal_rejected")
+
         before = len(world.events)
         unknown_bio = world.decide_request("missing-bio", "elias", "wait", root_input="bad-request")
         self.assertEqual(unknown_bio.event_type, "proposal_rejected")

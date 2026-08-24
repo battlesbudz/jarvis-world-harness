@@ -186,11 +186,31 @@ class World:
         raise ValidationError(f"unknown causal parent: {event_id}")
 
     def _validate(self, proposal: Proposal) -> str | None:
+        if not isinstance(proposal.event_type, str):
+            return "event type must be a string"
         if proposal.event_type not in PUBLIC_EVENT_TYPES:
             return f"event type {proposal.event_type!r} is not publicly legal"
-        if proposal.actor not in self.actors:
+        if not isinstance(proposal.actor, str) or proposal.actor not in self.actors:
             return f"unknown actor {proposal.actor!r}"
-        unknown = [value for value in (*proposal.targets, *proposal.witnesses) if value not in self.actors]
+        if not isinstance(proposal.targets, (list, tuple)) or not isinstance(
+            proposal.witnesses, (list, tuple)
+        ):
+            return "targets and witnesses must be identity sequences"
+        if not isinstance(proposal.parents, (list, tuple)) or any(
+            not isinstance(parent, str) for parent in proposal.parents
+        ):
+            return "causal parents must be an event-identity sequence"
+        if not isinstance(proposal.location, str):
+            return "location must be a string"
+        if proposal.root_input is not None and not isinstance(proposal.root_input, str):
+            return "root input must be a string when supplied"
+        if not isinstance(proposal.payload, dict):
+            return "payload must be an object"
+        participants = (*proposal.targets, *proposal.witnesses)
+        invalid = [value for value in participants if not isinstance(value, str)]
+        if invalid:
+            return f"participant identities must be strings: {invalid!r}"
+        unknown = [value for value in participants if value not in self.actors]
         if unknown:
             return f"unknown participants: {unknown}"
         if not proposal.parents and not proposal.root_input:
@@ -213,7 +233,9 @@ class World:
             if len(factors) != len(set(factors)):
                 return "meaningful interaction factors must be distinct within one event"
             if any(
-                event.event_type == "meaningful_interaction" and event.root_input == proposal.root_input
+                proposal.root_input is not None
+                and event.event_type == "meaningful_interaction"
+                and event.root_input == proposal.root_input
                 for event in self.events
             ):
                 return "meaningful interaction root input has already been consumed"
@@ -252,12 +274,16 @@ class World:
         """Validate a proposal and append either its legal event or rejection evidence."""
         reason = self._validate(proposal)
         if reason:
-            fallback_actor = proposal.actor if proposal.actor in self.actors else self.crisis_actor
+            fallback_actor = (
+                proposal.actor
+                if isinstance(proposal.actor, str) and proposal.actor in self.actors
+                else self.crisis_actor
+            )
             return self._record(
                 "proposal_rejected",
                 fallback_actor,
                 (),
-                proposal.location,
+                proposal.location if isinstance(proposal.location, str) else "unknown",
                 (),
                 (),
                 f"invalid-proposal:{len(self.events) + 1}",

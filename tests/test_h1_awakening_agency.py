@@ -1,5 +1,6 @@
 import unittest
 
+from world_os import Proposal
 from world_os.scenarios import albion_world, awaken_elias
 
 
@@ -46,6 +47,24 @@ class AwakeningAgencyTest(unittest.TestCase):
         self.assertEqual(second.event_type, "proposal_rejected")
         self.assertEqual(third.event_type, "proposal_rejected")
         self.assertFalse(replay.is_awakened("elias"))
+
+    def test_distinct_parented_interactions_can_awaken_without_root_inputs(self):
+        world = albion_world()
+        parent = world.events[0].id
+        for _ in range(3):
+            interaction = world.apply(
+                Proposal(
+                    "meaningful_interaction",
+                    "bio",
+                    ("elias",),
+                    parents=(parent,),
+                    payload={"factors": ["protection"]},
+                )
+            )
+            self.assertEqual(interaction.event_type, "meaningful_interaction")
+            parent = interaction.id
+            world.advance()
+        self.assertTrue(world.is_awakened("elias"))
 
     def test_awakened_actor_can_refuse_bio_on_values(self):
         world = albion_world()
