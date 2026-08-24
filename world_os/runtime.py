@@ -13,7 +13,9 @@ SCHEMA_VERSION = 1
 ACTOR_CATEGORIES = {"bio", "thinker", "non_thinker"}
 PUBLIC_EVENT_TYPES = {"meaningful_interaction", "rumor_shared", "request"}
 INTERNAL_PROPOSAL_TYPES = {
+    "awakening_transition",
     "crisis_changed",
+    "independent_goal_formed",
     "independent_choice",
     "routine_action",
     "routine_response",
@@ -184,19 +186,21 @@ class World:
                 )
             elif actor.category == "thinker":
                 value = actor.values[0] if actor.values else actor.role
-                self._record(
-                    "independent_goal_formed",
-                    actor.id,
-                    (),
-                    "genesis",
-                    (),
-                    (),
-                    f"thinker-goal:{actor.id}",
-                    {
-                        "goal": f"uphold {value} while serving as {actor.role}",
-                        "values": list(actor.values),
-                        "rule": "conscious_thinker_genesis_goal",
-                    },
+                self._apply_internal(
+                    Proposal(
+                        "independent_goal_formed",
+                        actor.id,
+                        (),
+                        "genesis",
+                        (),
+                        (),
+                        f"thinker-goal:{actor.id}",
+                        {
+                            "goal": f"uphold {value} while serving as {actor.role}",
+                            "values": list(actor.values),
+                            "rule": "conscious_thinker_genesis_goal",
+                        },
+                    )
                 )
 
     @property
@@ -314,8 +318,88 @@ class World:
         return None
 
     def _validate_internal_rules(self, proposal: Proposal) -> str | None:
+        if proposal.event_type == "independent_goal_formed":
+            actor = self.actors[proposal.actor]
+            if any(event.event_type == "independent_goal_formed" and event.actor == actor.id for event in self.events):
+                return "actor already has a persistent goal"
+            if actor.category == "thinker":
+                value = actor.values[0] if actor.values else actor.role
+                if (
+                    proposal.parents
+                    or proposal.root_input != f"thinker-goal:{actor.id}"
+                    or proposal.location != "genesis"
+                    or proposal.targets
+                    or proposal.witnesses
+                    or proposal.payload.get("goal") != f"uphold {value} while serving as {actor.role}"
+                    or proposal.payload.get("values") != list(actor.values)
+                    or proposal.payload.get("rule") != "conscious_thinker_genesis_goal"
+                ):
+                    return "Thinker genesis goal violates identity or initialization rules"
+                return None
+            if len(proposal.parents) != 1:
+                return "awakened goal requires exactly one transition parent"
+            transition = self._event(proposal.parents[0])
+            if (
+                actor.category != "non_thinker"
+                or transition.event_type != "awakening_transition"
+                or transition.targets != (actor.id,)
+                or proposal.root_input is not None
+                or proposal.targets
+                or proposal.witnesses
+                or proposal.location != transition.location
+                or proposal.payload.get("goal") != f"protect the people served as {actor.role}"
+                or proposal.payload.get("values") != list(actor.values)
+                or proposal.payload.get("rule") != "awakened_independent_goal"
+            ):
+                return "awakened goal violates cognition, transition, or identity preconditions"
+            return None
+
         if not proposal.parents:
             return "internal action requires causal evidence"
+        if proposal.event_type == "awakening_transition":
+            if len(proposal.targets) != 1:
+                return "awakening transition requires exactly one subject"
+            actor = self.actors[proposal.targets[0]]
+            contributors = tuple(self._event(parent_id) for parent_id in proposal.parents)
+            expected_contributors = tuple(
+                event
+                for event in self.events
+                if event.event_type == "meaningful_interaction"
+                and actor.id in event.targets
+                and self.actors[event.actor].category == "bio"
+            )
+            score = sum(
+                AWAKENING_WEIGHTS[factor]
+                for event in contributors
+                for factor in event.payload.get("factors", ())
+                if factor in AWAKENING_WEIGHTS
+            )
+            if (
+                actor.category != "non_thinker"
+                or self.is_awakened(actor.id)
+                or self.actors[proposal.actor].category != "bio"
+                or proposal.actor != contributors[-1].actor
+                or contributors != expected_contributors
+                or len(contributors) < 3
+                or len({event.tick for event in contributors}) < 3
+                or any(
+                    event.event_type != "meaningful_interaction"
+                    or actor.id not in event.targets
+                    or self.actors[event.actor].category != "bio"
+                    for event in contributors
+                )
+                or score < AWAKENING_THRESHOLD
+                or proposal.location != contributors[-1].location
+                or tuple(proposal.witnesses) != contributors[-1].witnesses
+                or proposal.root_input is not None
+                or proposal.payload.get("rule") != "repeated_meaningful_soul_pattern"
+                or proposal.payload.get("score") != score
+                or proposal.payload.get("threshold") != AWAKENING_THRESHOLD
+                or proposal.payload.get("interaction_count") != len(contributors)
+            ):
+                return "awakening transition violates evidence, cognition, or threshold preconditions"
+            return None
+
         parent = self._event(proposal.parents[0])
         if proposal.event_type == "crisis_changed":
             expected_severity = min(5, self.tick)
@@ -564,30 +648,40 @@ class World:
         ):
             return
         contributors = tuple(event.id for event in qualifying)
-        transition = self._record(
-            "awakening_transition",
-            bio_id,
-            (actor_id,),
-            cause.location,
-            cause.witnesses,
-            contributors,
-            None,
-            {
-                "rule": "repeated_meaningful_soul_pattern",
-                "score": self.awakening_score(actor_id),
-                "threshold": AWAKENING_THRESHOLD,
-                "interaction_count": len(qualifying),
-            },
+        transition = self._apply_internal(
+            Proposal(
+                "awakening_transition",
+                bio_id,
+                (actor_id,),
+                cause.location,
+                cause.witnesses,
+                contributors,
+                None,
+                {
+                    "rule": "repeated_meaningful_soul_pattern",
+                    "score": self.awakening_score(actor_id),
+                    "threshold": AWAKENING_THRESHOLD,
+                    "interaction_count": len(qualifying),
+                },
+            )
         )
-        self._record(
-            "independent_goal_formed",
-            actor_id,
-            (),
-            cause.location,
-            (),
-            (transition.id,),
-            None,
-            {"goal": f"protect the people served as {actor.role}", "values": list(actor.values)},
+        if transition.event_type != "awakening_transition":
+            return
+        self._apply_internal(
+            Proposal(
+                "independent_goal_formed",
+                actor_id,
+                (),
+                cause.location,
+                (),
+                (transition.id,),
+                None,
+                {
+                    "goal": f"protect the people served as {actor.role}",
+                    "values": list(actor.values),
+                    "rule": "awakened_independent_goal",
+                },
+            )
         )
 
     def relationship(self, observer: str, subject: str) -> dict[str, int]:

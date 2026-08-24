@@ -16,6 +16,7 @@ class AwakeningAgencyTest(unittest.TestCase):
         self.assertEqual(transition.payload["rule"], "repeated_meaningful_soul_pattern")
         self.assertGreaterEqual(transition.payload["score"], transition.payload["threshold"])
         self.assertGreaterEqual(transition.payload["interaction_count"], 3)
+        self.assertEqual(transition.payload["validation"]["authority"], "world_validator")
         self.assertTrue(world.is_awakened("elias"))
         self.assertEqual(world.cognition("elias"), "conscious")
         interaction_ids = {
@@ -26,6 +27,8 @@ class AwakeningAgencyTest(unittest.TestCase):
         memory_ids = {memory["event_id"] for memory in world.memories("elias")}
         self.assertLessEqual(interaction_ids, memory_ids)
         self.assertTrue(world.goals("elias"))
+        goal_event = next(event for event in world.events if event.event_type == "independent_goal_formed" and event.actor == "elias")
+        self.assertEqual(goal_event.payload["validation"]["authority"], "world_validator")
 
     def test_one_event_or_non_bio_contact_cannot_awaken(self):
         world = albion_world()
