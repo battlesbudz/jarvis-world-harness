@@ -222,6 +222,11 @@ class World:
                 return "rumor sharing requires exactly one listener"
             if not {"source_event", "provenance", "confidence"} <= proposal.payload.keys():
                 return "rumor provenance is incomplete"
+            provenance = proposal.payload["provenance"]
+            if not isinstance(provenance, (list, tuple)) or not all(
+                isinstance(actor_id, str) and actor_id in self.actors for actor_id in provenance
+            ):
+                return "rumor provenance must be a sequence of known actor identities"
             try:
                 knowledge = self._knows(proposal.actor, proposal.payload["source_event"])
             except ValidationError as error:
@@ -237,7 +242,7 @@ class World:
             expected_confidence = round(confidence * credibility, 6)
             if proposal.parents != (parent,):
                 return "rumor must parent the evidence through which the teller learned it"
-            if list(proposal.payload["provenance"]) != chain or proposal.payload["confidence"] != expected_confidence:
+            if list(provenance) != chain or proposal.payload["confidence"] != expected_confidence:
                 return "rumor provenance or confidence is not derivable"
         if proposal.event_type == "request" and len(proposal.targets) != 1:
             return "requests require exactly one recipient"
@@ -514,7 +519,7 @@ class World:
         if request.event_type != "request":
             return request
         actor = self.actors[actor_id]
-        if not self.is_awakened(actor_id):
+        if self.cognition(actor_id) != "conscious":
             return self._record(
                 "routine_response", actor_id, (bio_id,), "albion", (), (request.id,), None, {"action": action}
             )

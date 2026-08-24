@@ -57,6 +57,9 @@ class AwakeningAgencyTest(unittest.TestCase):
         self.assertEqual(trace["causes"][0]["event"]["event_type"], "request")
         self.assertTrue(world.trace(transition_id)["causes"])
 
+        thinker_refusal = world.decide_request("bio", "mara", "abandon_town", root_input="captain-order")
+        self.assertEqual(thinker_refusal.event_type, "values_refusal")
+
 
 if __name__ == "__main__":
     unittest.main()

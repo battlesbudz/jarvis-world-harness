@@ -55,6 +55,18 @@ class RelationshipsRumorsTest(unittest.TestCase):
         )
         self.assertEqual(direct_without_parent.event_type, "proposal_rejected")
 
+        malformed = world.apply(
+            Proposal(
+                "rumor_shared",
+                "mara",
+                ("orin",),
+                parents=(source.id,),
+                root_input="malformed",
+                payload={"source_event": source.id, "provenance": None, "confidence": 0.8},
+            )
+        )
+        self.assertEqual(malformed.event_type, "proposal_rejected")
+
     def test_rumor_uses_one_consistent_knowledge_path(self):
         world = albion_world()
         source = world.meaningful_interaction(
