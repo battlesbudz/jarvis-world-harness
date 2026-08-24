@@ -21,7 +21,7 @@ if heading not in acceptance or "H1 — Text Simulator (draft" in acceptance:
     raise SystemExit("H1 acceptance criteria are not finalized")
 h1_acceptance = acceptance.split(heading, 1)[1]
 h1_acceptance = re.split(r"^## ", h1_acceptance, maxsplit=1, flags=re.MULTILINE)[0]
-if len(re.findall(r"^- \[ \] ", h1_acceptance, flags=re.MULTILINE)) < 13:
+if len(re.findall(r"^- \[[ x]\] ", h1_acceptance, flags=re.MULTILINE)) < 13:
     raise SystemExit("H1 acceptance criteria are incomplete")
 
 spec = spec_path.read_text(encoding="utf-8")

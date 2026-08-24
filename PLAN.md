@@ -1,6 +1,8 @@
 # Agent Plan
 
-1. Put each supervised gate behind a dedicated lease-holding subreaper/watchdog.
-2. Keep an active-gate marker until descendant cleanup is verified, and make every execution entry point fail closed on a stale marker.
-3. Retry failed cleanup while retaining both serialization leases; quarantine autonomous execution if verification is ever interrupted.
-4. Exercise supervisor/evaluator double death, cleanup-helper failure, lock retention, and the complete H0 gate before requesting another review.
+1. Define a deterministic event model, proposal validator, and append-only world history.
+2. Derive perspective-correct memories, beliefs, relationships, and rumor provenance from accepted events.
+3. Add role routines, evidence-driven awakening, persistent post-awakening goals, and values-based refusal.
+4. Advance autonomous town pressure through logical ticks without player input.
+5. Add versioned persistence, tamper detection, replay determinism, and machine-readable causal traces.
+6. Exercise every seeded scenario in the H1 evidence manifest and keep the full milestone gate passing.
