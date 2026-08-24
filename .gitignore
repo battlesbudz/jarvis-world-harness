@@ -14,3 +14,6 @@ docs/film/
 .claude/shell-snapshots/
 .claude/todos/
 .claude/projects/
+
+# Jarvis World Harness local runtime state: logs, PIDs, Codex thread ids, last-run metadata
+.harness/

@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Progress-oriented Codex health probe.
+# Kernel locks, not PID-file text, determine whether runner/supervisor are live.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+command -v flock >/dev/null || { echo "flock not found on PATH" >&2; exit 127; }
+mkdir -p .harness/logs
+RUNNER_LOCK=.harness/codex-runner.lock
+SUPERVISOR_LOCK=.harness/codex-supervisor.lock
+
+bad=0
+ok() { echo "  OK       $*"; }
+note() { echo "  NOTE     $*"; }
+problem() { echo "  PROBLEM  $*"; bad=1; }
+
+pid_alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
+lock_held() {
+  path="$1"
+  exec 5<>"$path"
+  if flock -n 5; then
+    flock -u 5 2>/dev/null || true
+    exec 5>&- 2>/dev/null || true
+    return 1
+  fi
+  exec 5>&- 2>/dev/null || true
+  return 0
+}
+mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+age_minutes() {
+  echo $(( ( $(date +%s) - $(mtime "$1") ) / 60 ))
+}
+
+runner_pid=$(cat "$RUNNER_LOCK" 2>/dev/null || true)
+child_pid=$(cat .harness/codex-child.pid 2>/dev/null || true)
+supervisor_pid=$(cat "$SUPERVISOR_LOCK" 2>/dev/null || true)
+
+runner_live=0
+child_live=0
+supervisor_live=0
+lock_held "$RUNNER_LOCK" && runner_live=1
+lock_held "$SUPERVISOR_LOCK" && supervisor_live=1
+[ "$runner_live" -eq 1 ] && pid_alive "$child_pid" && child_live=1
+
+if [ "$runner_live" -eq 1 ]; then
+  ok "runner/gate kernel lock is held${runner_pid:+ (pid metadata $runner_pid)}"
+  if [ "$child_live" -eq 1 ]; then
+    ok "Codex child active (pid $child_pid)"
+  elif [ "$supervisor_live" -eq 1 ]; then
+    note "runner lock is held without a child while supervisor evaluates a gate or transfers ownership"
+  else
+    problem "runner lock is held but no Codex child or supervisor handoff is live"
+  fi
+else
+  note "Codex runner is idle"
+  [ -n "$runner_pid" ] && note "runner PID metadata is stale/non-authoritative: $runner_pid"
+fi
+
+if [ "$supervisor_live" -eq 1 ]; then
+  ok "Codex supervisor kernel lock is held${supervisor_pid:+ (pid metadata $supervisor_pid)}"
+  if [ -e .harness/codex-supervisor.pause ]; then
+    note "supervisor is paused"
+  elif [ -e .harness/STOP ]; then
+    note "supervisor STOP marker is present"
+  elif [ "$runner_live" -eq 0 ]; then
+    note "supervisor is between gate/runner cycles or in backoff"
+  fi
+else
+  note "supervisor not running (manual mode)"
+fi
+
+latest=$(ls -t .harness/logs/codex-*.jsonl 2>/dev/null | head -1 || true)
+if [ -z "$latest" ]; then
+  [ "$runner_live" -eq 1 ] && [ "$child_live" -eq 1 ] && problem "runner is active but no Codex structured log exists" || note "no Codex run has started yet"
+else
+  age=$(age_minutes "$latest")
+  if [ "$child_live" -eq 1 ]; then
+    if [ "$age" -le "${MAX_EVENT_AGE_MIN:-20}" ]; then
+      ok "Codex event log updated ${age} min ago"
+    else
+      problem "Codex process exists but event log is ${age} min old"
+    fi
+  else
+    note "latest Codex event log is ${age} min old"
+  fi
+fi
+
+if [ -s .harness/codex-session-id ]; then
+  ok "resumable Codex session recorded"
+else
+  note "no Codex session id recorded yet"
+fi
+
+if [ -f PROGRESS.md ]; then
+  page=$(age_minutes PROGRESS.md)
+  if [ "$child_live" -eq 1 ] && [ "$page" -gt "${MAX_PROGRESS_AGE_MIN:-60}" ]; then
+    problem "Codex is running but PROGRESS.md has not changed for ${page} min"
+  else
+    ok "PROGRESS.md present (last update ${page} min ago)"
+  fi
+else
+  problem "PROGRESS.md does not exist"
+fi
+
+if [ -f MILESTONE.md ] && [ -f ACCEPTANCE-TESTS.md ] && [ -f spec/CORE-LAWS.md ]; then
+  ok "milestone, acceptance tests, and protected laws present"
+else
+  problem "required product-control documents missing"
+fi
+
+if [ -f .harness/last-run.json ]; then
+  python3 - .harness/last-run.json <<'PY'
+import json, sys
+try:
+    d=json.load(open(sys.argv[1], encoding="utf-8"))
+    print(f"  NOTE     last run: mode={d.get('mode')} exit={d.get('exit_code')} terminal={d.get('terminal_event')} duration={d.get('duration_seconds')}s")
+except Exception as e:
+    print(f"  PROBLEM  could not parse last-run.json: {e}")
+    raise SystemExit(1)
+PY
+  [ "$?" -eq 0 ] || bad=1
+fi
+
+exit "$bad"

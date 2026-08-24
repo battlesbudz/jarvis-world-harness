@@ -1,0 +1,12 @@
+{
+  "milestone": "H1",
+  "description": "The headless text simulator is complete only when deterministic causal behavior, agency, world evolution, persistence, and trace evidence pass.",
+  "checks": [
+    {"id":"h1-spec","command":["bash","bin/check-h1-spec.sh"],"timeout_seconds":30},
+    {"id":"h1-events-memory","command":["bash","bin/test-h1-events-memory.sh"],"timeout_seconds":120},
+    {"id":"h1-relationships-rumors","command":["bash","bin/test-h1-relationships-rumors.sh"],"timeout_seconds":120},
+    {"id":"h1-awakening-agency","command":["bash","bin/test-h1-awakening-agency.sh"],"timeout_seconds":120},
+    {"id":"h1-world-pressure","command":["bash","bin/test-h1-world-pressure.sh"],"timeout_seconds":120},
+    {"id":"h1-persistence-traces","command":["bash","bin/test-h1-persistence-traces.sh"],"timeout_seconds":120}
+  ]
+}
