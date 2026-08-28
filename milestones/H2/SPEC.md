@@ -46,10 +46,10 @@ Bridge failure must fail closed. Disconnects, malformed payloads, unknown identi
 
 ## Cognition proof
 
-The prototype contains at least one stable-identity Thinker and one stable-identity Non-Thinker sourced from the World OS fixture or an equivalent deterministic H2 fixture.
+The prototype contains at least one stable-identity Thinker and one stable-identity Non-Thinker initialized in World OS from its fixture or an equivalent deterministic H2 fixture. World OS selects both actors' cognition-driven behavior and emits proposals; Unreal may only validate the proposal, navigate or animate the actor, apply the legal physical result, and return the correlated outcome.
 
-- The Non-Thinker follows a visible role routine between named routine locations using only bounded routine state.
-- The Thinker makes at least one visible goal- or values-backed choice exposed by causal evidence.
+- World OS selects a visible Non-Thinker role routine between named routine locations using only bounded routine state and proposes the next routine action to Unreal.
+- World OS selects at least one Thinker goal- or values-backed choice, emits the corresponding proposal, and exposes the decision through causal evidence.
 - Their distinction must be behavioral. Different labels, colors, or floating text alone do not pass.
 - Awakening is not exercised in H2; that remains the H3 prototype.
 
@@ -60,10 +60,11 @@ Automated evidence must prove all of the following from a resettable start state
 1. PIE starts at the Bio spawn, the player traverses the required route, and collision prevents an invalid shortcut.
 2. One valid attack produces exactly one validated damage outcome and the hostile can be defeated.
 3. Duplicate, stale, out-of-range, or otherwise impossible combat/proposal input is rejected with no partial physical mutation.
-4. An authoritative engine observation enters World OS once, produces a traceable proposal where applicable, and receives one correlated engine outcome.
-5. The Non-Thinker completes a role-routine step while the Thinker performs a goal- or values-backed choice.
-6. System UI exposes health, target/interaction state, and combat feedback while omitting awakening progress.
-7. The complete path runs without a crash, softlock, Blueprint runtime error, unresolved validation failure, or surviving test process.
+4. A physically possible, current proposal from a known identity that lacks permission is durably rejected, records the permission reason, and leaves physical state unchanged.
+5. An authoritative engine observation enters World OS exactly once; World OS then emits at least one deterministic proposal that Unreal validates and successfully applies, and the resulting authoritative engine event is correlated and returned to World OS.
+6. World OS selects and proposes the Non-Thinker's role-routine step and the Thinker's goal- or values-backed choice; Unreal validates and performs both without reimplementing their cognition rules.
+7. System UI exposes health, target/interaction state, and combat feedback while omitting awakening progress.
+8. The complete path runs without a crash, softlock, Blueprint runtime error, unresolved validation failure, or surviving test process.
 
 ## Evidence and visual QA
 
