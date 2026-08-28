@@ -1,28 +1,28 @@
-# Active Milestone — H1: Text Simulator
+# Active Milestone — H2: Engine Prototype
 
 ## Goal
 
-Build a deterministic, headless Jarvis World OS simulator that proves causal living-world behavior before Unreal integration or large-scale content generation.
+Connect the proven headless World OS to a small playable Unreal greybox and demonstrate the engine/runtime boundary through movement, simple combat, System UI, and visibly distinct Thinker/Non-Thinker behavior.
 
 ## Authorized scope
 
-H1 authorizes the standalone simulation runtime, deterministic fixtures, persistence format, causal traces, and automated evidence defined in `milestones/H1/SPEC.md`.
+H2 authorizes the narrow bridge, one small Albion village greybox, one Bio player, a minimal prototype cast, player movement, simple combat, System UI, deterministic PIE scenarios, and captured evidence defined in `milestones/H2/SPEC.md`.
 
-It does not authorize Unreal assets or gameplay integration, procedural cities, large open-world content generation, production networking, or LLM-dependent state transitions.
+It does not authorize awakening gameplay, final art, procedural cities, large open-world content, production networking, multiplayer, or LLM-dependent durable state transitions.
 
 ## Required outcomes
 
-1. Bio, Thinker, and Non-Thinker actors have stable identities and distinct cognition rules.
-2. An append-only event history drives memories, beliefs, relationships, rumors, awakening, agency, and world pressure.
-3. A role-based Non-Thinker can awaken through meaningful relationship evidence without a direct awakening command.
-4. An awakened actor retains prior history, forms independent goals, and can refuse or oppose the Bio.
-5. A town crisis evolves without player action.
-6. Save/reload is deterministic and tampered or incompatible state fails closed.
-7. Machine-readable causal traces explain the required outcomes.
-8. The World OS only proposes actions; an authoritative validator applies legal mutations.
+1. The H1 deterministic simulator and causal evidence remain green.
+2. A versioned, narrow bridge maps authoritative engine events into World OS inputs and World OS proposals into engine validation requests.
+3. Unreal remains authoritative for physical state and rejects impossible, stale, or unauthorized proposals without partial mutation.
+4. A Bio player can enter and move through one small Albion village greybox in PIE.
+5. Simple combat has a complete input, validation, hit/damage, defeat, and feedback loop.
+6. System UI exposes the minimum playable state without displaying hidden awakening evidence.
+7. Thinkers and Non-Thinkers have visibly different behavior backed by stable World OS identities and causal events.
+8. Automated and visual evidence proves the bridge and playable loop end to end.
 
 ## Stop condition
 
-H1 is complete only when every command in `milestones/H1/gate.json` passes and its evidence covers every H1 criterion in `ACCEPTANCE-TESTS.md`.
+H2 is complete only when every command in `milestones/H2/gate.json` passes and its evidence covers every H2 criterion in `ACCEPTANCE-TESTS.md`.
 
-Unreal integration remains outside H1.
+Do not begin H3 Awakening Prototype work during H2.

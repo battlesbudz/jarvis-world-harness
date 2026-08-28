@@ -1,0 +1,13 @@
+{
+  "milestone": "H2",
+  "description": "The engine prototype is complete only when the H1 simulation remains green and the validated Unreal bridge, playable greybox loop, cognition behavior, and inspected PIE evidence pass.",
+  "checks": [
+    {"id":"h2-spec","command":["bash","bin/check-h2-spec.sh"],"timeout_seconds":30},
+    {"id":"h1-regression","command":["env","MILESTONE_ID=H1","python3","bin/milestone-gate.py","--json","--no-record"],"timeout_seconds":180},
+    {"id":"h2-bridge-contract","command":["bash","bin/test-h2-bridge-contract.sh"],"timeout_seconds":180},
+    {"id":"h2-project-structure","command":["bash","bin/test-h2-project-structure.sh"],"timeout_seconds":180},
+    {"id":"h2-pie-playable-loop","command":["bash","bin/test-h2-pie-playable-loop.sh"],"timeout_seconds":900},
+    {"id":"h2-cognition-bridge","command":["bash","bin/test-h2-cognition-bridge.sh"],"timeout_seconds":900},
+    {"id":"h2-visual-evidence","command":["bash","bin/test-h2-visual-evidence.sh"],"timeout_seconds":300}
+  ]
+}

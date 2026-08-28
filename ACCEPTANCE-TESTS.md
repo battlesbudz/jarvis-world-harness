@@ -19,7 +19,7 @@
 
 ## H1 — Text Simulator
 
-The simulator must run without Unreal and demonstrate causal world behavior. H1 is active; `milestones/H1/SPEC.md` defines its finalized scope and evidence contract.
+The simulator must run without Unreal and demonstrate causal world behavior. H1 is complete; `milestones/H1/SPEC.md` defines its finalized scope and evidence contract.
 
 - [x] Supports Bio, Thinker, and Non-Thinker actor categories.
 - [x] Stores append-only world events with actor, target, time, location/context, witnesses, and causal metadata.
@@ -34,3 +34,22 @@ The simulator must run without Unreal and demonstrate causal world behavior. H1 
 - [x] Save/reload reproduces world state from event history or a verified event-backed snapshot.
 - [x] A trace can explain *why* an awakening, rumor belief, relationship change, or crisis outcome occurred.
 - [x] Deterministic seeded regression tests cover the above behavior.
+
+## H2 — Engine Prototype
+
+The prototype must prove a playable Unreal/World OS boundary in one small greybox village. H2 is active; `milestones/H2/SPEC.md` defines its finalized scope and evidence contract.
+
+- [ ] The complete H1 gate remains green without weakening its deterministic or causal guarantees.
+- [ ] A versioned bridge schema preserves stable actor/event/request identities, ordering, correlation, and validation outcomes.
+- [ ] Authoritative Unreal events enter World OS exactly once and at least one World OS-selected proposal is accepted, applied by Unreal, and returned as a traceable engine outcome.
+- [ ] Unreal rejects stale, duplicate, impossible, or unauthorized proposals without partially mutating physical state.
+- [ ] A Bio player can start PIE, move, turn, traverse the required greybox route, and cannot pass through blocking geometry.
+- [ ] One small Albion village greybox has a readable route, interaction space, combat space, and distinct NPC routine locations.
+- [ ] Simple combat supports input, attack timing, authoritative hit validation, damage, defeat, and clear audiovisual or UI feedback.
+- [ ] System UI communicates player health, target/interaction state, and combat feedback without exposing awakening progress.
+- [ ] At least one Thinker and one Non-Thinker have stable World OS identities and visibly distinct engine behavior.
+- [ ] World OS selects the Non-Thinker's role routine and the Thinker's goal- or values-backed choice; Unreal only validates and performs them, and neither behavior is a cosmetic label-only distinction.
+- [ ] A deterministic end-to-end PIE scenario emits machine-readable bridge, validation, engine outcome, and causal trace evidence.
+- [ ] Captured PIE evidence includes an establishing view, player traversal, combat feedback, System UI, and both cognition behaviors.
+- [ ] The required scenario completes without crashes, softlocks, Blueprint runtime errors, or unresolved validation failures.
+- [ ] H2 uses placeholder/greybox content and does not silently expand into awakening, final art, procedural cities, or a large open world.
