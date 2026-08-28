@@ -87,5 +87,6 @@ grep -q 'os.killpg' bin/milestone-gate.py
 grep -q 'process tree terminated' bin/milestone-gate.py
 grep -q -- '-r requirements.txt' bin/setup-capabilities.sh
 grep -q '"cryptography"' bin/setup-capabilities.sh
+grep -q 'required bridge dependency is unavailable' bin/setup-capabilities.sh
 
 echo "H0 static harness checks passed"

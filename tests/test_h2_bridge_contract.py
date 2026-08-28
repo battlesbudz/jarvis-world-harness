@@ -607,6 +607,60 @@ class H2BridgeContractTest(unittest.TestCase):
                     PROPOSAL_ORIGIN_KEY,
                 )
 
+            alternate_event_id = next(
+                event.id
+                for event in bridge.world.events
+                if event.id != original.payload["causal_event_id"]
+            )
+            alternate_unsigned = Envelope.from_dict(
+                {
+                    **original.to_dict(),
+                    "payload": {
+                        **original.to_dict()["payload"],
+                        "causal_event_id": alternate_event_id,
+                        "origin_proof": "0" * 64,
+                    },
+                }
+            )
+            alternate = Envelope.from_dict(
+                {
+                    **alternate_unsigned.to_dict(),
+                    "payload": {
+                        **alternate_unsigned.to_dict()["payload"],
+                        "origin_proof": _origin_proof(
+                            alternate_unsigned, PROPOSAL_ORIGIN_KEY
+                        ),
+                    },
+                }
+            )
+            state["pending"] = [
+                alternate.to_dict() if item["message_id"] == original.message_id else item
+                for item in state["pending"]
+            ]
+            for observation in state["observations"]:
+                observation["proposals"] = [
+                    alternate.to_dict()
+                    if item["message_id"] == original.message_id
+                    else item
+                    for item in observation["proposals"]
+                ]
+            for message_id, delivered in state["delivery_results"].items():
+                state["delivery_results"][message_id] = [
+                    alternate.to_dict()
+                    if item["message_id"] == original.message_id
+                    else item
+                    for item in delivered
+                ]
+            bridge.world.set_extension_state("h2_bridge", state)
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+            with self.assertRaisesRegex(BridgeValidationError, "causal event identity"):
+                WorldOSBridge(
+                    World.load(path, expected_state_digest=trusted),
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "world.json"

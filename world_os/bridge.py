@@ -771,8 +771,38 @@ class WorldOSBridge:
                 raise BridgeValidationError("persisted proposal origin proof is invalid")
             try:
                 causal_event_id = proposal.payload["causal_event_id"]
-                self.world.trace(str(causal_event_id))
+                causal_event = self.world.trace(str(causal_event_id))["event"]
+                expected_message_id = (
+                    f"world-proposal:{proposal.correlation_id}:{causal_event['id']}"
+                )
+                if (
+                    proposal.message_id != expected_message_id
+                    or proposal.actor_id != causal_event["actor"]
+                ):
+                    raise BridgeValidationError(
+                        "persisted proposal does not match its causal event identity"
+                    )
+                if causal_event["event_type"] == "routine_action":
+                    expected_action = {
+                        "action_type": "routine_move",
+                        "command": causal_event["payload"]["action"],
+                        "destination": self.role_stations[causal_event["payload"]["role"]],
+                    }
+                else:
+                    expected_action = {
+                        "action_type": causal_event["event_type"],
+                        "command": causal_event["payload"]["action"],
+                    }
+                if any(
+                    proposal.payload.get(key) != value
+                    for key, value in expected_action.items()
+                ):
+                    raise BridgeValidationError(
+                        "persisted proposal action does not match its causal event"
+                    )
             except (KeyError, TypeError, ValueError) as error:
+                if isinstance(error, BridgeValidationError):
+                    raise
                 raise BridgeValidationError(
                     "persisted proposal causal event reference is invalid"
                 ) from error
