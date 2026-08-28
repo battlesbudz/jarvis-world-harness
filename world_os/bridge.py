@@ -540,7 +540,10 @@ class WorldOSBridge:
         for observation in self._buffered_observations.values():
             self._validate_observation(observation)
             slot = (observation.actor_id, observation.sequence)
-            if slot in buffered_slots or observation.sequence <= self._last_engine_sequence.get(observation.actor_id, 0):
+            if (
+                slot in buffered_slots
+                or observation.sequence <= self._last_engine_sequence.get(observation.actor_id, 0) + 1
+            ):
                 raise BridgeValidationError("persisted buffered observation ordering is invalid")
             buffered_slots.add(slot)
         for proposal in self._pending.values():
@@ -1047,8 +1050,8 @@ class EngineAuthority:
         for proposal in authority._buffered_proposals.values():
             if proposal.actor_id not in authority._positions:
                 raise BridgeValidationError("persisted buffered engine proposal has an unknown actor")
-            if proposal.sequence <= authority._last_sequence.get(proposal.actor_id, 0):
-                raise BridgeValidationError("persisted buffered engine proposal is not above its high-water mark")
+            if proposal.sequence <= authority._last_sequence.get(proposal.actor_id, 0) + 1:
+                raise BridgeValidationError("persisted buffered engine proposal does not follow a real gap")
             slot = (proposal.actor_id, proposal.sequence)
             if slot in buffered_slots:
                 raise BridgeValidationError("persisted buffered engine proposal ordering slot is duplicated")

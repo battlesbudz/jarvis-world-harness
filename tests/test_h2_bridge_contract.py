@@ -568,6 +568,12 @@ class H2BridgeContractTest(unittest.TestCase):
             with self.assertRaisesRegex(BridgeValidationError, "positions do not match applied event history"):
                 EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
 
+            no_gap_buffer = load_payloads([engine_authority()])[0]
+            no_gap_buffer["state"]["buffered_proposals"] = [proposals[0].to_dict()]
+            digest = write_payload(no_gap_buffer)
+            with self.assertRaisesRegex(BridgeValidationError, "does not follow a real gap"):
+                EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
             rejecting_authorities = [
                 EngineAuthority(
                     {"elias": "village-square", "nella": "village-square", "mara": "captain-post"},
@@ -711,6 +717,23 @@ class H2BridgeContractTest(unittest.TestCase):
             second_proposals = resumed.ingest_engine_observation(second)
             self.assertEqual(len(second_proposals), 2)
             self.assertTrue(all(item.correlation_id == second.message_id for item in second_proposals))
+
+            no_gap_bridge = h2_bridge()
+            no_gap_bridge.ingest_engine_observation(second)
+            no_gap_state = no_gap_bridge.world.extension_state("h2_bridge")
+            no_gap_state["buffered_observations"][0]["sequence"] = 1
+            no_gap_bridge.world.set_extension_state("h2_bridge", no_gap_state)
+            no_gap_digest = no_gap_bridge.world.state_digest()
+            no_gap_bridge.world.save(path)
+            no_gap_world = type(no_gap_bridge.world).load(
+                path, expected_state_digest=no_gap_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "buffered observation ordering"):
+                WorldOSBridge(
+                    no_gap_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
 
             duplicate_bridge = h2_bridge()
             duplicate_bridge.ingest_engine_observation(second)
