@@ -1,5 +1,7 @@
 # Progress
 
+- PR #4 fourteenth review hardening on 2026-08-28: processed authority records now persist the complete signed World OS proposal; restore revalidates its origin proof, identity, and digest, then derives actor sequence high-water marks exclusively from those authenticated envelopes.
+
 - PR #4 thirteenth review hardening on 2026-08-28: each processed engine proposal now persists its actor and proposal sequence, and restored per-actor high-water marks must exactly match that processed ledger before the authority can accept new work.
 
 - PR #4 twelfth review hardening on 2026-08-28: retry delivery groups now persist drained observation identities separately from emitted proposals, preserving valid zero-proposal observations through reload, and every restored applied observation is revalidated against the live engine-observation contract.

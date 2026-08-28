@@ -463,6 +463,13 @@ class H2BridgeContractTest(unittest.TestCase):
             with self.assertRaisesRegex(BridgeValidationError, "high-water marks"):
                 EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
 
+            forged_high_water = json.loads(json.dumps(applied_payloads[0]))
+            forged_high_water["state"]["processed"][0]["proposal"]["sequence"] = 999
+            forged_high_water["state"]["last_sequence"] = {"elias": 999}
+            digest = write_payload(forged_high_water)
+            with self.assertRaisesRegex(BridgeValidationError, "proposal (origin proof|identity or digest)"):
+                EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
             duplicate_state_version = applied_payloads[0]
             duplicate_state_version["state"]["processed"].extend(
                 applied_payloads[1]["state"]["processed"]
