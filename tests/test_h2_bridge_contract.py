@@ -430,6 +430,12 @@ class H2BridgeContractTest(unittest.TestCase):
                 paths[0].write_text(json.dumps(payload), encoding="utf-8")
                 return digest
 
+            unmoved_payload = load_payloads([engine_authority()])[0]
+            unmoved_payload["state"]["positions"]["elias"] = "bakery"
+            digest = write_payload(unmoved_payload)
+            with self.assertRaisesRegex(BridgeValidationError, "positions do not match applied event history"):
+                EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
             rejecting_authorities = [
                 EngineAuthority(
                     {"elias": "village-square", "nella": "village-square", "mara": "captain-post"},

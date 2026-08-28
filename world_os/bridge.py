@@ -762,7 +762,8 @@ class EngineAuthority:
         proposal_origin_key: bytes | str,
         blocked_paths: Iterable[tuple[str, str]] = (),
     ):
-        self._positions = dict(actor_positions)
+        self._initial_positions = dict(actor_positions)
+        self._positions = dict(self._initial_positions)
         self._permissions = {actor: frozenset(actions) for actor, actions in permissions.items()}
         if set(self._positions) != set(self._permissions):
             raise BridgeValidationError("every engine actor requires an explicit permission set")
@@ -787,6 +788,7 @@ class EngineAuthority:
     def snapshot(self) -> dict[str, Any]:
         return {
             "schema_version": BRIDGE_SCHEMA_VERSION,
+            "initial_positions": dict(sorted(self._initial_positions.items())),
             "positions": dict(sorted(self._positions.items())),
             "permissions": {actor: sorted(actions) for actor, actions in sorted(self._permissions.items())},
             "destinations": sorted(self._destinations),
@@ -835,7 +837,7 @@ class EngineAuthority:
         except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
             raise BridgeValidationError(f"invalid persisted engine authority: {error}") from error
         expected_fields = {
-            "schema_version", "positions", "permissions", "destinations", "blocked_paths",
+            "schema_version", "initial_positions", "positions", "permissions", "destinations", "blocked_paths",
             "last_action", "last_sequence", "processed", "message_conflicts",
             "event_history", "decision_sequence", "state_version",
         }
@@ -851,12 +853,15 @@ class EngineAuthority:
             raise BridgeValidationError("persisted engine authority does not match the trusted snapshot boundary")
         try:
             authority = cls(
-                state["positions"],
+                state["initial_positions"],
                 state["permissions"],
                 state["destinations"],
                 proposal_origin_key,
                 (tuple(item) for item in state["blocked_paths"]),
             )
+            authority._positions = {str(actor): str(position) for actor, position in state["positions"].items()}
+            if set(authority._positions) != set(authority._initial_positions):
+                raise BridgeValidationError("persisted engine position identities do not match initial positions")
             authority._last_action = {str(actor): dict(action) for actor, action in state["last_action"].items()}
             authority._last_sequence = _counter_map(state["last_sequence"], "last_sequence", minimum=1)
             authority._processed = {}
@@ -941,7 +946,7 @@ class EngineAuthority:
         if authority._last_sequence != expected_last_sequence:
             raise BridgeValidationError("persisted engine proposal high-water marks do not match processed decisions")
         expected_last_action: dict[str, dict[str, Any]] = {}
-        expected_positions: dict[str, str] = {}
+        expected_positions = dict(authority._initial_positions)
         for decision, _proposal in sorted(
             applied_decisions,
             key=lambda item: int(item[0].engine_event.payload["state_version"]),
@@ -955,7 +960,7 @@ class EngineAuthority:
                 expected_positions[event.actor_id] = event.payload["destination"]
         if authority._last_action != expected_last_action:
             raise BridgeValidationError("persisted engine last actions do not match applied event history")
-        if any(authority._positions.get(actor_id) != position for actor_id, position in expected_positions.items()):
+        if authority._positions != expected_positions:
             raise BridgeValidationError("persisted engine positions do not match applied event history")
         return authority
 

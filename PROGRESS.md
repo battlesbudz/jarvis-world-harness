@@ -1,5 +1,7 @@
 # Progress
 
+- PR #4 sixteenth review hardening on 2026-08-28: engine snapshots now persist immutable initial actor positions; restore replays every applied destination from that genesis baseline and compares the complete physical position map, including actors that never moved.
+
 - PR #4 fifteenth review hardening on 2026-08-28: restored applied decisions must match their authenticated proposal action fields, while physical positions and derived last-action state must match the ordered authoritative event history.
 
 - PR #4 fourteenth review hardening on 2026-08-28: processed authority records now persist the complete signed World OS proposal; restore revalidates its origin proof, identity, and digest, then derives actor sequence high-water marks exclusively from those authenticated envelopes.
