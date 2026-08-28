@@ -258,6 +258,22 @@ class H2BridgeContractTest(unittest.TestCase):
                     PROPOSAL_ORIGIN_KEY,
                 )
 
+            invalid_counter_bridge = h2_bridge()
+            invalid_counter_state = invalid_counter_bridge.world.extension_state("h2_bridge")
+            invalid_counter_state["last_engine_sequence"] = {"bio": True}
+            invalid_counter_bridge.world.set_extension_state("h2_bridge", invalid_counter_state)
+            invalid_counter_digest = invalid_counter_bridge.world.state_digest()
+            invalid_counter_bridge.world.save(path)
+            invalid_counter_world = type(invalid_counter_bridge.world).load(
+                path, expected_state_digest=invalid_counter_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "last_engine_sequence"):
+                WorldOSBridge(
+                    invalid_counter_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
             authority.save(engine_path)
             engine_payload = json.loads(engine_path.read_text(encoding="utf-8"))
             engine_payload["state"]["schema_version"] = True
@@ -272,6 +288,23 @@ class H2BridgeContractTest(unittest.TestCase):
                     engine_path,
                     PROPOSAL_ORIGIN_KEY,
                     expected_snapshot_digest=invalid_engine_digest,
+                )
+
+            fresh_authority = engine_authority()
+            fresh_authority.save(engine_path)
+            engine_payload = json.loads(engine_path.read_text(encoding="utf-8"))
+            engine_payload["state"]["state_version"] = True
+            canonical = json.dumps(
+                engine_payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            invalid_counter_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            engine_payload["digest"] = invalid_counter_digest
+            engine_path.write_text(json.dumps(engine_payload), encoding="utf-8")
+            with self.assertRaisesRegex(BridgeValidationError, "state_version"):
+                EngineAuthority.load(
+                    engine_path,
+                    PROPOSAL_ORIGIN_KEY,
+                    expected_snapshot_digest=invalid_counter_digest,
                 )
 
     def test_out_of_order_observations_buffer_across_reload_and_apply_in_order(self):

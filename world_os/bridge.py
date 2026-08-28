@@ -25,6 +25,18 @@ def _is_supported_schema_version(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value == BRIDGE_SCHEMA_VERSION
 
 
+def _counter(value: Any, name: str, *, minimum: int = 0) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+        raise BridgeValidationError(f"{name} must be a non-boolean integer >= {minimum}")
+    return value
+
+
+def _counter_map(value: Any, name: str, *, minimum: int = 0) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        raise BridgeValidationError(f"{name} must be an object")
+    return {str(key): _counter(item, f"{name}.{key}", minimum=minimum) for key, item in value.items()}
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
@@ -306,8 +318,8 @@ class WorldOSBridge:
                 observation = Envelope.from_dict(item["envelope"])
                 proposals = tuple(Envelope.from_dict(proposal) for proposal in item["proposals"])
                 observations[observation.message_id] = (observation, proposals)
-            self._last_engine_sequence = {str(key): int(value) for key, value in state["last_engine_sequence"].items()}
-            self._proposal_sequence = {str(key): int(value) for key, value in state["proposal_sequence"].items()}
+            self._last_engine_sequence = _counter_map(state["last_engine_sequence"], "last_engine_sequence")
+            self._proposal_sequence = _counter_map(state["proposal_sequence"], "proposal_sequence")
             self._pending = {item.message_id: item for item in pending}
             self._decisions = {item.outcome.message_id: item for item in decisions}
             self._engine_events = {str(key): str(value) for key, value in state["engine_events"].items()}
@@ -329,6 +341,33 @@ class WorldOSBridge:
             for proposal in proposals
         ):
             raise BridgeValidationError("persisted delivery result references an unknown proposal")
+        observation_sequences: dict[str, set[int]] = {}
+        for observation, _proposals in self._observations.values():
+            observation_sequences.setdefault(observation.actor_id, set()).add(observation.sequence)
+        expected_last_sequence = {
+            actor: max(sequences) for actor, sequences in observation_sequences.items()
+        }
+        if any(sequences != set(range(1, max(sequences) + 1)) for sequences in observation_sequences.values()):
+            raise BridgeValidationError("persisted engine observation ordering has gaps")
+        if self._last_engine_sequence != expected_last_sequence:
+            raise BridgeValidationError("persisted engine observation counters do not match the ledger")
+        proposal_sequences: dict[str, set[int]] = {}
+        for proposal in self._pending.values():
+            proposal_sequences.setdefault(proposal.actor_id, set()).add(proposal.sequence)
+        expected_proposal_sequence = {
+            actor: max(sequences) for actor, sequences in proposal_sequences.items()
+        }
+        if any(sequences != set(range(1, max(sequences) + 1)) for sequences in proposal_sequences.values()):
+            raise BridgeValidationError("persisted proposal ordering has gaps")
+        if self._proposal_sequence != expected_proposal_sequence:
+            raise BridgeValidationError("persisted proposal counters do not match the ledger")
+        buffered_slots: set[tuple[str, int]] = set()
+        for observation in self._buffered_observations.values():
+            self._validate_observation(observation)
+            slot = (observation.actor_id, observation.sequence)
+            if slot in buffered_slots or observation.sequence <= self._last_engine_sequence.get(observation.actor_id, 0):
+                raise BridgeValidationError("persisted buffered observation ordering is invalid")
+            buffered_slots.add(slot)
         for proposal in self._pending.values():
             if not hmac.compare_digest(str(proposal.payload.get("origin_proof", "")), _origin_proof(proposal, self._proposal_origin_key)):
                 raise BridgeValidationError("persisted proposal origin proof is invalid")
@@ -647,7 +686,7 @@ class EngineAuthority:
                 (tuple(item) for item in state["blocked_paths"]),
             )
             authority._last_action = {str(actor): dict(action) for actor, action in state["last_action"].items()}
-            authority._last_sequence = {str(actor): int(sequence) for actor, sequence in state["last_sequence"].items()}
+            authority._last_sequence = _counter_map(state["last_sequence"], "last_sequence", minimum=1)
             authority._processed = {}
             for item in state["processed"]:
                 decision = EngineDecision.from_dict(item["decision"])
@@ -657,12 +696,28 @@ class EngineAuthority:
                 authority._processed[message_id] = (str(item["proposal_digest"]), decision)
             authority._message_conflicts = [dict(item) for item in state["message_conflicts"]]
             authority._event_history = [str(digest) for digest in state["event_history"]]
-            authority._decision_sequence = int(state["decision_sequence"])
-            authority._state_version = int(state["state_version"])
+            authority._decision_sequence = _counter(state["decision_sequence"], "decision_sequence")
+            authority._state_version = _counter(state["state_version"], "state_version")
         except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
             raise BridgeValidationError(f"persisted engine authority is malformed: {error}") from error
         if authority.snapshot() != state:
             raise BridgeValidationError("persisted engine authority does not round-trip exactly")
+        if any(not re.fullmatch(r"[0-9a-f]{64}", digest) for digest in authority._event_history):
+            raise BridgeValidationError("persisted engine event history contains an invalid digest")
+        applied_by_version = {
+            int(decision.engine_event.payload["state_version"]): decision.engine_event.digest()
+            for _proposal_digest, decision in authority._processed.values()
+            if decision.engine_event is not None
+        }
+        expected_history = [applied_by_version.get(version) for version in range(1, authority._state_version + 1)]
+        if authority._state_version != len(authority._event_history) or expected_history != authority._event_history:
+            raise BridgeValidationError("persisted engine state version does not match its event history")
+        max_decision_sequence = max(
+            (decision.outcome.sequence for _digest, decision in authority._processed.values()),
+            default=0,
+        )
+        if authority._decision_sequence != max_decision_sequence:
+            raise BridgeValidationError("persisted engine decision counter does not match its ledger")
         return authority
 
     def conflicts(self) -> tuple[dict[str, str], ...]:
