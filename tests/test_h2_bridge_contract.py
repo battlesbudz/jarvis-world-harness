@@ -199,7 +199,9 @@ class H2BridgeContractTest(unittest.TestCase):
         lineage_first = lineage_authority.validate_and_apply(lineage_proposals[0])
         lineage_second = lineage_authority.validate_and_apply(lineage_proposals[1])
         lineage_bridge.receive_engine_decision(lineage_second)
-        forked_first = engine_authority().validate_and_apply(fork_proposal)
+        forked_authority = engine_authority()
+        forked_authority.validate_and_apply(lineage_proposals[0])
+        forked_first = forked_authority.validate_and_apply(fork_proposal)
         with self.assertRaisesRegex(BridgeValidationError, "state version was reused"):
             lineage_bridge.receive_engine_decision(forked_first)
         lineage_bridge.receive_engine_decision(lineage_first)
@@ -246,6 +248,40 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(resumed_authority.validate_and_apply(proposals[0]), decision)
             self.assertEqual(resumed_authority.state(), before_engine_retry)
             self.assertEqual(resumed_authority.state()["state_version"], 1)
+
+            buffered_authority = engine_authority()
+            first_elias = next(item for item in proposals if item.actor_id == "elias")
+            second_elias = next(item for item in next_proposals if item.actor_id == "elias")
+            self.assertIsNone(buffered_authority.validate_and_apply(second_elias))
+            self.assertEqual(buffered_authority.state()["state_version"], 0)
+            buffered_authority.save(engine_path)
+            buffered_digest = buffered_authority.snapshot_digest()
+            resumed_buffer = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=buffered_digest,
+            )
+            self.assertEqual(resumed_buffer.validate_and_apply(first_elias).status, "applied")
+            self.assertEqual(resumed_buffer.state()["state_version"], 2)
+            self.assertEqual(resumed_buffer.validate_and_apply(second_elias).status, "applied")
+
+            authority.save(engine_path)
+            previous_payload = json.loads(engine_path.read_text(encoding="utf-8"))
+            previous_payload["state"].pop("buffered_proposals")
+            previous_payload["state"]["schema_version"] = 1
+            canonical = json.dumps(
+                previous_payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            previous_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            previous_payload["digest"] = previous_digest
+            engine_path.write_text(json.dumps(previous_payload), encoding="utf-8")
+            migrated_authority = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=previous_digest,
+            )
+            self.assertEqual(migrated_authority.validate_and_apply(proposals[0]), decision)
+            self.assertEqual(migrated_authority.snapshot()["schema_version"], 2)
 
             missing_index_bridge = h2_bridge()
             indexed_proposals = missing_index_bridge.ingest_engine_observation(
@@ -503,6 +539,12 @@ class H2BridgeContractTest(unittest.TestCase):
             with self.assertRaisesRegex(BridgeValidationError, "positions do not match applied event history"):
                 EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
 
+            revoked_permission = json.loads(json.dumps(applied_payloads[0]))
+            revoked_permission["state"]["permissions"][applied_actor] = []
+            digest = write_payload(revoked_permission)
+            with self.assertRaisesRegex(BridgeValidationError, "decisions do not match replayed policy"):
+                EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
             duplicate_state_version = applied_payloads[0]
             duplicate_state_version["state"]["processed"].extend(
                 applied_payloads[1]["state"]["processed"]
@@ -695,11 +737,11 @@ class H2BridgeContractTest(unittest.TestCase):
         )
 
         stale_authority = engine_authority()
+        self.assertIsNone(stale_authority.validate_and_apply(second))
+        self.assertEqual(stale_authority.state()["state_version"], 0)
+        self.assertEqual(stale_authority.validate_and_apply(first).status, "applied")
+        self.assertEqual(stale_authority.state()["state_version"], 2)
         self.assertEqual(stale_authority.validate_and_apply(second).status, "applied")
-        before = stale_authority.state()
-        stale = stale_authority.validate_and_apply(first)
-        self.assertEqual((stale.status, stale.reason), ("rejected", "stale_sequence"))
-        self.assertEqual(stale_authority.state(), before)
 
         impossible_authority = EngineAuthority(
             {"elias": "village-square"},

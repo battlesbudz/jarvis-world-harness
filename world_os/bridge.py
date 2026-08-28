@@ -13,6 +13,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
 BRIDGE_SCHEMA_VERSION = 1
+ENGINE_AUTHORITY_SCHEMA_VERSION = 2
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
 
@@ -23,6 +24,14 @@ class BridgeValidationError(ValueError):
 
 def _is_supported_schema_version(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value == BRIDGE_SCHEMA_VERSION
+
+
+def _is_supported_authority_schema_version(value: Any) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value == ENGINE_AUTHORITY_SCHEMA_VERSION
+    )
 
 
 def _counter(value: Any, name: str, *, minimum: int = 0) -> int:
@@ -773,6 +782,7 @@ class EngineAuthority:
         self._last_action: dict[str, dict[str, Any]] = {}
         self._last_sequence: dict[str, int] = {}
         self._processed: dict[str, tuple[str, EngineDecision, Envelope]] = {}
+        self._buffered_proposals: dict[str, Envelope] = {}
         self._message_conflicts: list[dict[str, str]] = []
         self._event_history: list[str] = []
         self._decision_sequence = 0
@@ -787,7 +797,7 @@ class EngineAuthority:
 
     def snapshot(self) -> dict[str, Any]:
         return {
-            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "schema_version": ENGINE_AUTHORITY_SCHEMA_VERSION,
             "initial_positions": dict(sorted(self._initial_positions.items())),
             "positions": dict(sorted(self._positions.items())),
             "permissions": {actor: sorted(actions) for actor, actions in sorted(self._permissions.items())},
@@ -803,6 +813,10 @@ class EngineAuthority:
                     "decision": decision.to_dict(),
                 }
                 for message_id, (proposal_digest, decision, proposal) in sorted(self._processed.items())
+            ],
+            "buffered_proposals": [
+                proposal.to_dict()
+                for proposal in sorted(self._buffered_proposals.values(), key=lambda item: item.message_id)
             ],
             "message_conflicts": [dict(item) for item in self._message_conflicts],
             "event_history": list(self._event_history),
@@ -839,18 +853,35 @@ class EngineAuthority:
         expected_fields = {
             "schema_version", "initial_positions", "positions", "permissions", "destinations", "blocked_paths",
             "last_action", "last_sequence", "processed", "message_conflicts",
-            "event_history", "decision_sequence", "state_version",
+            "event_history", "decision_sequence", "state_version", "buffered_proposals",
         }
         digest = hashlib.sha256(_canonical(state).encode("utf-8")).hexdigest()
+        previous_fields = expected_fields - {"buffered_proposals"}
+        previous_shape = (
+            isinstance(state, dict)
+            and set(state) == previous_fields
+            and _is_supported_schema_version(state.get("schema_version"))
+        )
         if (
             envelope.get("format") != "jarvis-world-h2-engine"
             or not isinstance(state, dict)
-            or set(state) != expected_fields
-            or not _is_supported_schema_version(state.get("schema_version"))
+            or not (
+                previous_shape
+                or (
+                    set(state) == expected_fields
+                    and _is_supported_authority_schema_version(state.get("schema_version"))
+                )
+            )
         ):
             raise BridgeValidationError("incompatible persisted engine authority")
         if not expected_snapshot_digest or digest != expected_snapshot_digest or envelope.get("digest") != digest:
             raise BridgeValidationError("persisted engine authority does not match the trusted snapshot boundary")
+        if previous_shape:
+            state = {
+                **state,
+                "schema_version": ENGINE_AUTHORITY_SCHEMA_VERSION,
+                "buffered_proposals": [],
+            }
         try:
             authority = cls(
                 state["initial_positions"],
@@ -890,6 +921,17 @@ class EngineAuthority:
                     decision,
                     proposal,
                 )
+            authority._buffered_proposals = {}
+            for item in state["buffered_proposals"]:
+                proposal = Envelope.from_dict(item)
+                if (
+                    proposal.message_id in authority._buffered_proposals
+                    or proposal.message_id in authority._processed
+                ):
+                    raise BridgeValidationError("persisted buffered engine proposal identity is duplicated")
+                if not authority._has_valid_origin(proposal):
+                    raise BridgeValidationError("persisted buffered engine proposal origin proof is invalid")
+                authority._buffered_proposals[proposal.message_id] = proposal
             authority._message_conflicts = [dict(item) for item in state["message_conflicts"]]
             authority._event_history = [str(digest) for digest in state["event_history"]]
             authority._decision_sequence = _counter(state["decision_sequence"], "decision_sequence")
@@ -945,6 +987,16 @@ class EngineAuthority:
         }
         if authority._last_sequence != expected_last_sequence:
             raise BridgeValidationError("persisted engine proposal high-water marks do not match processed decisions")
+        buffered_slots: set[tuple[str, int]] = set()
+        for proposal in authority._buffered_proposals.values():
+            if proposal.actor_id not in authority._positions:
+                raise BridgeValidationError("persisted buffered engine proposal has an unknown actor")
+            if proposal.sequence <= authority._last_sequence.get(proposal.actor_id, 0):
+                raise BridgeValidationError("persisted buffered engine proposal is not above its high-water mark")
+            slot = (proposal.actor_id, proposal.sequence)
+            if slot in buffered_slots:
+                raise BridgeValidationError("persisted buffered engine proposal ordering slot is duplicated")
+            buffered_slots.add(slot)
         expected_last_action: dict[str, dict[str, Any]] = {}
         expected_positions = dict(authority._initial_positions)
         for decision, _proposal in sorted(
@@ -962,6 +1014,29 @@ class EngineAuthority:
             raise BridgeValidationError("persisted engine last actions do not match applied event history")
         if authority._positions != expected_positions:
             raise BridgeValidationError("persisted engine positions do not match applied event history")
+        replay = cls(
+            authority._initial_positions,
+            authority._permissions,
+            authority._destinations,
+            proposal_origin_key,
+            authority._blocked_paths,
+        )
+        for _proposal_digest, decision, proposal in sorted(
+            authority._processed.values(),
+            key=lambda item: item[1].outcome.sequence,
+        ):
+            replayed = replay.validate_and_apply(proposal)
+            if replayed is None or replayed != decision:
+                raise BridgeValidationError("persisted engine decisions do not match replayed policy")
+        if (
+            replay._positions != authority._positions
+            or replay._last_action != authority._last_action
+            or replay._last_sequence != authority._last_sequence
+            or replay._event_history != authority._event_history
+            or replay._decision_sequence != authority._decision_sequence
+            or replay._state_version != authority._state_version
+        ):
+            raise BridgeValidationError("persisted engine state does not match replayed policy")
         return authority
 
     def conflicts(self) -> tuple[dict[str, str], ...]:
@@ -1004,7 +1079,7 @@ class EngineAuthority:
         )
         return EngineDecision(status, outcome, engine_event)
 
-    def validate_and_apply(self, proposal: Envelope) -> EngineDecision:
+    def validate_and_apply(self, proposal: Envelope) -> EngineDecision | None:
         authenticated = self._has_valid_origin(proposal)
         existing = self._processed.get(proposal.message_id)
         if not authenticated:
@@ -1030,6 +1105,45 @@ class EngineAuthority:
                 self._message_conflicts.append(conflict)
             return existing[1]
 
+        buffered = self._buffered_proposals.get(proposal.message_id)
+        if buffered:
+            if buffered.digest() == proposal.digest():
+                return None
+            raise BridgeValidationError("buffered engine proposal id was reused with different content")
+
+        if proposal.actor_id in self._positions:
+            expected_sequence = self._last_sequence.get(proposal.actor_id, 0) + 1
+            if proposal.sequence > expected_sequence:
+                if any(
+                    item.actor_id == proposal.actor_id and item.sequence == proposal.sequence
+                    for item in self._buffered_proposals.values()
+                ):
+                    raise BridgeValidationError("buffered engine proposal sequence was reused")
+                self._buffered_proposals[proposal.message_id] = proposal
+                return None
+
+        decision = self._process_proposal(proposal)
+        if proposal.actor_id in self._positions:
+            self._drain_buffer(proposal.actor_id)
+        return decision
+
+    def _drain_buffer(self, actor_id: str) -> None:
+        while True:
+            expected_sequence = self._last_sequence.get(actor_id, 0) + 1
+            pending = next(
+                (
+                    item
+                    for item in self._buffered_proposals.values()
+                    if item.actor_id == actor_id and item.sequence == expected_sequence
+                ),
+                None,
+            )
+            if pending is None:
+                return
+            del self._buffered_proposals[pending.message_id]
+            self._process_proposal(pending)
+
+    def _process_proposal(self, proposal: Envelope) -> EngineDecision:
         reason = self._validate(proposal)
         if reason:
             if proposal.actor_id in self._positions and proposal.sequence > self._last_sequence.get(proposal.actor_id, 0):
