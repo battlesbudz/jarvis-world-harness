@@ -64,6 +64,10 @@ class H2BridgeContractTest(unittest.TestCase):
         future["schema_version"] = 2
         with self.assertRaises(BridgeValidationError):
             Envelope.from_dict(future)
+        boolean_version = original.to_dict()
+        boolean_version["schema_version"] = True
+        with self.assertRaises(BridgeValidationError):
+            Envelope.from_dict(boolean_version)
         malformed = original.to_dict()
         malformed["unexpected"] = True
         with self.assertRaises(BridgeValidationError):
@@ -222,6 +226,31 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(resumed_authority.validate_and_apply(proposals[0]), decision)
             self.assertEqual(resumed_authority.state(), before_engine_retry)
             self.assertEqual(resumed_authority.state()["state_version"], 1)
+
+    def test_out_of_order_observations_buffer_across_reload_and_apply_in_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "buffered-world.json"
+            bridge = h2_bridge()
+            second = envelope("engine-observation:out-of-order:2", 2, "bio", "time_advance", {"ticks": 1})
+            self.assertEqual(bridge.ingest_engine_observation(second), ())
+            self.assertEqual(bridge.ingest_engine_observation(second), ())
+            self.assertEqual(bridge.world.tick, 0)
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+
+            resumed = WorldOSBridge(
+                type(bridge.world).load(path, expected_state_digest=trusted),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            first = envelope("engine-observation:out-of-order:1", 1, "bio", "time_advance", {"ticks": 1})
+            delivered = resumed.ingest_engine_observation(first)
+            self.assertEqual(resumed.world.tick, 2)
+            self.assertEqual(len(delivered), 4)
+            self.assertEqual(resumed.ingest_engine_observation(first), delivered)
+            second_proposals = resumed.ingest_engine_observation(second)
+            self.assertEqual(len(second_proposals), 2)
+            self.assertTrue(all(item.correlation_id == second.message_id for item in second_proposals))
 
     def test_stale_impossible_unauthorized_and_conflicting_inputs_do_not_mutate(self):
         bridge = h2_bridge()

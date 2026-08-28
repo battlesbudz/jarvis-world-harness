@@ -62,7 +62,11 @@ class Envelope:
     payload: Mapping[str, Any]
 
     def __post_init__(self) -> None:
-        if self.schema_version != BRIDGE_SCHEMA_VERSION:
+        if (
+            not isinstance(self.schema_version, int)
+            or isinstance(self.schema_version, bool)
+            or self.schema_version != BRIDGE_SCHEMA_VERSION
+        ):
             raise BridgeValidationError(f"unsupported bridge schema version: {self.schema_version!r}")
         for name, value in (
             ("message_id", self.message_id),
@@ -243,6 +247,8 @@ class WorldOSBridge:
         self._decisions: dict[str, EngineDecision] = {}
         self._engine_events: dict[str, str] = {}
         self._engine_versions: dict[int, str] = {}
+        self._buffered_observations: dict[str, Envelope] = {}
+        self._delivery_results: dict[str, tuple[Envelope, ...]] = {}
         saved = world.extension_state(_BRIDGE_EXTENSION)
         if saved is not None:
             self._restore(saved)
@@ -266,6 +272,13 @@ class WorldOSBridge:
             "decisions": [decision.to_dict() for decision in sorted(self._decisions.values(), key=lambda item: item.outcome.message_id)],
             "engine_events": dict(sorted(self._engine_events.items())),
             "engine_versions": {str(version): digest for version, digest in sorted(self._engine_versions.items())},
+            "buffered_observations": [
+                item.to_dict() for item in sorted(self._buffered_observations.values(), key=lambda item: item.message_id)
+            ],
+            "delivery_results": {
+                message_id: [proposal.to_dict() for proposal in proposals]
+                for message_id, proposals in sorted(self._delivery_results.items())
+            },
         }
 
     def _persist(self) -> None:
@@ -275,7 +288,7 @@ class WorldOSBridge:
         required = {
             "schema_version", "role_stations", "observations", "last_engine_sequence",
             "proposal_sequence", "pending", "decisions", "engine_events",
-            "engine_versions",
+            "engine_versions", "buffered_observations", "delivery_results",
         }
         if set(state) != required or state.get("schema_version") != BRIDGE_SCHEMA_VERSION:
             raise BridgeValidationError("persisted bridge state is incompatible")
@@ -295,11 +308,23 @@ class WorldOSBridge:
             self._decisions = {item.outcome.message_id: item for item in decisions}
             self._engine_events = {str(key): str(value) for key, value in state["engine_events"].items()}
             self._engine_versions = {int(key): str(value) for key, value in state["engine_versions"].items()}
+            buffered = [Envelope.from_dict(item) for item in state["buffered_observations"]]
+            self._buffered_observations = {item.message_id: item for item in buffered}
+            self._delivery_results = {
+                str(message_id): tuple(Envelope.from_dict(item) for item in proposals)
+                for message_id, proposals in state["delivery_results"].items()
+            }
             self._observations = observations
         except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
             raise BridgeValidationError(f"persisted bridge state is malformed: {error}") from error
         if any(proposal.message_id not in self._pending for _observation, proposals in self._observations.values() for proposal in proposals):
             raise BridgeValidationError("persisted observation references an unknown proposal")
+        if any(
+            proposal.message_id not in self._pending
+            for proposals in self._delivery_results.values()
+            for proposal in proposals
+        ):
+            raise BridgeValidationError("persisted delivery result references an unknown proposal")
         for proposal in self._pending.values():
             if not hmac.compare_digest(str(proposal.payload.get("origin_proof", "")), _origin_proof(proposal, self._proposal_origin_key)):
                 raise BridgeValidationError("persisted proposal origin proof is invalid")
@@ -323,24 +348,30 @@ class WorldOSBridge:
         self._pending[proposal.message_id] = proposal
         return proposal
 
-    def ingest_engine_observation(self, observation: Envelope) -> tuple[Envelope, ...]:
-        existing = self._observations.get(observation.message_id)
-        if existing:
-            if existing[0].digest() != observation.digest():
-                raise BridgeValidationError("engine message id was reused with different content")
-            return existing[1]
+    def _validate_observation(self, observation: Envelope) -> None:
         if observation.message_type not in {"time_advance", "npc_request"}:
             raise BridgeValidationError(f"unsupported engine observation: {observation.message_type}")
         if observation.actor_id not in self.world.actors:
             raise BridgeValidationError(f"unknown engine actor: {observation.actor_id}")
-        previous_sequence = self._last_engine_sequence.get(observation.actor_id, 0)
-        if observation.sequence <= previous_sequence:
-            raise BridgeValidationError("stale engine observation")
-
-        proposals: list[Envelope] = []
         if observation.message_type == "time_advance":
             if self.world.actors[observation.actor_id].category != "bio" or observation.payload != {"ticks": 1}:
                 raise BridgeValidationError("time advance requires one tick from a Bio observation")
+        else:
+            target_id = observation.payload.get("target_id")
+            action = observation.payload.get("action")
+            if (
+                self.world.actors[observation.actor_id].category != "bio"
+                or not isinstance(target_id, str)
+                or target_id not in self.world.actors
+                or self.world.actors[target_id].category == "bio"
+                or not isinstance(action, str)
+                or action not in FEASIBLE_REQUEST_ACTIONS
+            ):
+                raise BridgeValidationError("npc request has invalid Bio, target, or action")
+
+    def _apply_observation(self, observation: Envelope) -> tuple[Envelope, ...]:
+        proposals: list[Envelope] = []
+        if observation.message_type == "time_advance":
             events = self.world.advance(1)
             for event in events:
                 if event.event_type == "routine_action":
@@ -358,15 +389,6 @@ class WorldOSBridge:
         else:
             target_id = observation.payload.get("target_id")
             action = observation.payload.get("action")
-            if (
-                self.world.actors[observation.actor_id].category != "bio"
-                or not isinstance(target_id, str)
-                or target_id not in self.world.actors
-                or self.world.actors[target_id].category == "bio"
-                or not isinstance(action, str)
-                or action not in FEASIBLE_REQUEST_ACTIONS
-            ):
-                raise BridgeValidationError("npc request has invalid Bio, target, or action")
             decision = self.world.decide_request(
                 observation.actor_id,
                 target_id,
@@ -385,10 +407,58 @@ class WorldOSBridge:
                     },
                 )
             )
+        return tuple(proposals)
 
-        result = tuple(proposals)
-        self._last_engine_sequence[observation.actor_id] = observation.sequence
-        self._observations[observation.message_id] = (observation, result)
+    def ingest_engine_observation(self, observation: Envelope) -> tuple[Envelope, ...]:
+        existing = self._observations.get(observation.message_id)
+        if existing:
+            if existing[0].digest() != observation.digest():
+                raise BridgeValidationError("engine message id was reused with different content")
+            return self._delivery_results.get(observation.message_id, existing[1])
+        buffered = self._buffered_observations.get(observation.message_id)
+        if buffered:
+            if buffered.digest() != observation.digest():
+                raise BridgeValidationError("engine message id was reused with different content")
+            return ()
+        self._validate_observation(observation)
+        expected_sequence = self._last_engine_sequence.get(observation.actor_id, 0) + 1
+        if observation.sequence < expected_sequence:
+            raise BridgeValidationError("stale engine observation")
+        if observation.sequence > expected_sequence:
+            if any(
+                item.actor_id == observation.actor_id and item.sequence == observation.sequence
+                for item in self._buffered_observations.values()
+            ):
+                raise BridgeValidationError("engine observation sequence was reused by a different message")
+            self._buffered_observations[observation.message_id] = observation
+            self._persist()
+            return ()
+
+        ordered = [observation]
+        next_sequence = observation.sequence + 1
+        while True:
+            next_observation = next(
+                (
+                    item
+                    for item in self._buffered_observations.values()
+                    if item.actor_id == observation.actor_id and item.sequence == next_sequence
+                ),
+                None,
+            )
+            if next_observation is None:
+                break
+            ordered.append(next_observation)
+            next_sequence += 1
+
+        delivered: list[Envelope] = []
+        for item in ordered:
+            proposals = self._apply_observation(item)
+            self._last_engine_sequence[item.actor_id] = item.sequence
+            self._observations[item.message_id] = (item, proposals)
+            self._buffered_observations.pop(item.message_id, None)
+            delivered.extend(proposals)
+        result = tuple(delivered)
+        self._delivery_results[observation.message_id] = result
         self._persist()
         return result
 
