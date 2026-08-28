@@ -318,6 +318,21 @@ class H2BridgeContractTest(unittest.TestCase):
             resumed.receive_engine_decision(decision)
             self.assertEqual(resumed.world.state_digest(), before_retry)
 
+            pre_versioned_world = type(bridge.world).load(path, expected_state_digest=trusted)
+            pre_versioned_state = pre_versioned_world.extension_state("h2_bridge")
+            pre_versioned_state["schema_version"] = 1
+            pre_versioned_world.set_extension_state("h2_bridge", pre_versioned_state)
+            pre_versioned_digest = pre_versioned_world.state_digest()
+            pre_versioned_world.save(path)
+            migrated_bridge = WorldOSBridge(
+                type(pre_versioned_world).load(path, expected_state_digest=pre_versioned_digest),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            self.assertEqual(
+                migrated_bridge.world.extension_state("h2_bridge")["schema_version"], 2
+            )
+
             legacy_signature_state = bridge.world.extension_state("h2_bridge")
             legacy_signature_state["schema_version"] = 1
             legacy_signature_state["decisions"][0]["outcome"]["payload"]["authority_proof"] = "0" * 64

@@ -395,7 +395,19 @@ class WorldOSBridge:
         ):
             raise BridgeValidationError("persisted bridge state is incompatible")
         if state["schema_version"] == 1:
-            if state["decisions"]:
+            try:
+                proofs = [
+                    item["outcome"]["payload"]["authority_proof"]
+                    for item in state["decisions"]
+                ]
+            except (KeyError, TypeError) as error:
+                raise BridgeValidationError(
+                    f"persisted bridge state is malformed: {error}"
+                ) from error
+            if any(
+                isinstance(proof, str) and re.fullmatch(r"[0-9a-f]{64}", proof)
+                for proof in proofs
+            ):
                 raise BridgeValidationError(
                     "persisted bridge authority signature format is incompatible"
                 )

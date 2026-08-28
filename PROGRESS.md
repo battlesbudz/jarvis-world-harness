@@ -1,5 +1,7 @@
 # Progress
 
+- PR #4 pre-versioned Ed25519 compatibility on 2026-08-28: schema-v1 bridge snapshots now distinguish genuine legacy 64-hex HMAC proofs from the immediately preceding 128-hex Ed25519 format. Legacy shared-key outcomes still fail explicitly, while already-valid Ed25519 decisions verify under the configured engine public key and migrate to bridge persistence schema v2.
+
 - PR #4 sixteenth review hardening on 2026-08-28: engine snapshots now persist immutable initial actor positions; restore replays every applied destination from that genesis baseline and compares the complete physical position map, including actors that never moved.
 
 - PR #4 fifteenth review hardening on 2026-08-28: restored applied decisions must match their authenticated proposal action fields, while physical positions and derived last-action state must match the ordered authoritative event history.
