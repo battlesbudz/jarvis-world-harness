@@ -354,24 +354,73 @@ class WorldOSBridge:
             for proposal in proposals
         ):
             raise BridgeValidationError("persisted delivery result references an unknown proposal")
-        observation_sequences: dict[str, set[int]] = {}
+        decision_correlations: set[str] = set()
+        expected_engine_events: dict[str, str] = {}
+        expected_engine_versions: dict[int, str] = {}
+        for decision in self._decisions.values():
+            if not hmac.compare_digest(
+                str(decision.outcome.payload["authority_proof"]),
+                _authority_proof(decision.outcome, decision.engine_event, self._proposal_origin_key),
+            ):
+                raise BridgeValidationError("persisted engine decision authority proof is invalid")
+            proposal_id = decision.outcome.correlation_id
+            proposal = self._pending.get(proposal_id)
+            if proposal is None or decision.outcome.actor_id != proposal.actor_id:
+                raise BridgeValidationError("persisted engine decision does not match a pending proposal")
+            if proposal_id in decision_correlations:
+                raise BridgeValidationError("persisted World OS proposal has multiple engine outcomes")
+            decision_correlations.add(proposal_id)
+            if decision.engine_event is None:
+                continue
+            expected_action = {
+                key: proposal.payload.get(key)
+                for key in ("action_type", "command", "destination")
+            }
+            actual_action = {
+                key: decision.engine_event.payload.get(key)
+                for key in expected_action
+            }
+            if actual_action != expected_action:
+                raise BridgeValidationError("persisted authoritative event does not match its proposal")
+            event_digest = decision.engine_event.digest()
+            event_id = decision.engine_event.message_id
+            existing_event = expected_engine_events.get(event_id)
+            if existing_event is not None and existing_event != event_digest:
+                raise BridgeValidationError("persisted authoritative engine event identity is duplicated")
+            expected_engine_events[event_id] = event_digest
+            for prior_version, prior_digest in enumerate(
+                decision.engine_event.payload["prior_event_digests"], start=1
+            ):
+                existing_version = expected_engine_versions.get(prior_version)
+                if existing_version is not None and existing_version != prior_digest:
+                    raise BridgeValidationError("persisted authoritative engine lineage conflicts")
+                expected_engine_versions[prior_version] = prior_digest
+            state_version = int(decision.engine_event.payload["state_version"])
+            existing_version = expected_engine_versions.get(state_version)
+            if existing_version is not None and existing_version != event_digest:
+                raise BridgeValidationError("persisted authoritative engine state version is duplicated")
+            expected_engine_versions[state_version] = event_digest
+        if self._engine_events != expected_engine_events or self._engine_versions != expected_engine_versions:
+            raise BridgeValidationError("persisted engine identity maps do not match applied decisions")
+
+        observation_sequences: dict[str, list[int]] = {}
         for observation, _proposals in self._observations.values():
-            observation_sequences.setdefault(observation.actor_id, set()).add(observation.sequence)
+            observation_sequences.setdefault(observation.actor_id, []).append(observation.sequence)
         expected_last_sequence = {
             actor: max(sequences) for actor, sequences in observation_sequences.items()
         }
-        if any(sequences != set(range(1, max(sequences) + 1)) for sequences in observation_sequences.values()):
-            raise BridgeValidationError("persisted engine observation ordering has gaps")
+        if any(sorted(sequences) != list(range(1, len(sequences) + 1)) for sequences in observation_sequences.values()):
+            raise BridgeValidationError("persisted engine observation ordering is not unique and contiguous")
         if self._last_engine_sequence != expected_last_sequence:
             raise BridgeValidationError("persisted engine observation counters do not match the ledger")
-        proposal_sequences: dict[str, set[int]] = {}
+        proposal_sequences: dict[str, list[int]] = {}
         for proposal in self._pending.values():
-            proposal_sequences.setdefault(proposal.actor_id, set()).add(proposal.sequence)
+            proposal_sequences.setdefault(proposal.actor_id, []).append(proposal.sequence)
         expected_proposal_sequence = {
             actor: max(sequences) for actor, sequences in proposal_sequences.items()
         }
-        if any(sequences != set(range(1, max(sequences) + 1)) for sequences in proposal_sequences.values()):
-            raise BridgeValidationError("persisted proposal ordering has gaps")
+        if any(sorted(sequences) != list(range(1, len(sequences) + 1)) for sequences in proposal_sequences.values()):
+            raise BridgeValidationError("persisted proposal ordering is not unique and contiguous")
         if self._proposal_sequence != expected_proposal_sequence:
             raise BridgeValidationError("persisted proposal counters do not match the ledger")
         buffered_slots: set[tuple[str, int]] = set()

@@ -228,6 +228,28 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(resumed_authority.state(), before_engine_retry)
             self.assertEqual(resumed_authority.state()["state_version"], 1)
 
+            missing_index_bridge = h2_bridge()
+            indexed_proposals = missing_index_bridge.ingest_engine_observation(
+                envelope("engine-observation:indexed", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            missing_index_bridge.receive_engine_decision(
+                engine_authority().validate_and_apply(indexed_proposals[0])
+            )
+            missing_index_state = missing_index_bridge.world.extension_state("h2_bridge")
+            missing_index_state["engine_events"] = {}
+            missing_index_bridge.world.set_extension_state("h2_bridge", missing_index_state)
+            missing_index_digest = missing_index_bridge.world.state_digest()
+            missing_index_bridge.world.save(path)
+            missing_index_world = type(missing_index_bridge.world).load(
+                path, expected_state_digest=missing_index_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "identity maps do not match applied decisions"):
+                WorldOSBridge(
+                    missing_index_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
             legacy_bridge = h2_bridge()
             legacy_state = legacy_bridge.world.extension_state("h2_bridge")
             legacy_state.pop("buffered_observations")
@@ -428,6 +450,25 @@ class H2BridgeContractTest(unittest.TestCase):
             with self.assertRaisesRegex(BridgeValidationError, "shared across applied and buffered ledgers"):
                 WorldOSBridge(
                     collision_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
+            duplicate_slot_bridge = h2_bridge()
+            duplicate_slot_bridge.ingest_engine_observation(first)
+            duplicate_slot_state = duplicate_slot_bridge.world.extension_state("h2_bridge")
+            duplicate_observation = json.loads(json.dumps(duplicate_slot_state["observations"][0]))
+            duplicate_observation["envelope"]["message_id"] = "engine-observation:duplicate-slot"
+            duplicate_slot_state["observations"].append(duplicate_observation)
+            duplicate_slot_bridge.world.set_extension_state("h2_bridge", duplicate_slot_state)
+            duplicate_slot_digest = duplicate_slot_bridge.world.state_digest()
+            duplicate_slot_bridge.world.save(path)
+            duplicate_slot_world = type(duplicate_slot_bridge.world).load(
+                path, expected_state_digest=duplicate_slot_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "ordering is not unique and contiguous"):
+                WorldOSBridge(
+                    duplicate_slot_world,
                     {"ferryman": "ferry-dock", "baker": "bakery"},
                     PROPOSAL_ORIGIN_KEY,
                 )
