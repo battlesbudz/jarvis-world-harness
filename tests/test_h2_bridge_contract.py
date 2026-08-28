@@ -338,6 +338,32 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
             self.assertEqual(migrated_authority.snapshot()["schema_version"], 3)
 
+            legacy_out_of_order = engine_authority()
+            legacy_second = legacy_out_of_order._process_proposal(second_elias)
+            legacy_first = legacy_out_of_order._process_proposal(first_elias)
+            self.assertEqual((legacy_second.status, legacy_first.reason), ("applied", "stale_sequence"))
+            legacy_state = legacy_out_of_order.snapshot()
+            legacy_state.pop("buffered_proposals")
+            legacy_state.pop("response_batches")
+            legacy_state["schema_version"] = 1
+            canonical = json.dumps(
+                legacy_state, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            legacy_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            engine_path.write_text(
+                json.dumps(
+                    {"format": "jarvis-world-h2-engine", "state": legacy_state, "digest": legacy_digest}
+                ),
+                encoding="utf-8",
+            )
+            migrated_out_of_order = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=legacy_digest,
+            )
+            self.assertEqual(decide(migrated_out_of_order, second_elias), legacy_second)
+            self.assertEqual(decide(migrated_out_of_order, first_elias), legacy_first)
+
             malformed_previous = json.loads(json.dumps(previous_payload))
             del malformed_previous["state"]["processed"][0]["decision"]["outcome"]["sequence"]
             canonical = json.dumps(

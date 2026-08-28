@@ -889,6 +889,7 @@ class EngineAuthority:
             raise BridgeValidationError("incompatible persisted engine authority")
         if not expected_snapshot_digest or digest != expected_snapshot_digest or envelope.get("digest") != digest:
             raise BridgeValidationError("persisted engine authority does not match the trusted snapshot boundary")
+        replay_legacy_v1 = previous_shape and state["schema_version"] == BRIDGE_SCHEMA_VERSION
         if previous_shape:
             try:
                 if state["schema_version"] == 2:
@@ -1080,7 +1081,11 @@ class EngineAuthority:
             authority._processed.values(),
             key=lambda item: item[1].outcome.sequence,
         ):
-            replayed = replay.validate_and_apply(proposal)
+            replayed = (
+                (replay._process_proposal(proposal),)
+                if replay_legacy_v1
+                else replay.validate_and_apply(proposal)
+            )
             if replayed != (decision,):
                 raise BridgeValidationError("persisted engine decisions do not match replayed policy")
         if (
