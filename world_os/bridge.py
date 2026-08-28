@@ -123,8 +123,14 @@ class EngineDecision:
             raise BridgeValidationError("engine decision requires an outcome envelope")
         if self.outcome.payload.get("status") != self.status:
             raise BridgeValidationError("engine outcome status does not match the decision")
-        if set(self.outcome.payload) != {"engine_event_id", "reason", "state_version", "status"}:
+        if set(self.outcome.payload) != {
+            "authority_proof", "engine_event_id", "reason", "state_version", "status"
+        }:
             raise BridgeValidationError("engine outcome payload fields do not match the schema")
+        if not isinstance(self.outcome.payload.get("authority_proof"), str) or not re.fullmatch(
+            r"[0-9a-f]{64}", self.outcome.payload["authority_proof"]
+        ):
+            raise BridgeValidationError("engine outcome authority proof is malformed")
         if not isinstance(self.outcome.payload.get("reason"), str) or not self.outcome.payload["reason"]:
             raise BridgeValidationError("engine outcome requires a non-empty reason")
         state_version = self.outcome.payload.get("state_version")
@@ -141,7 +147,9 @@ class EngineDecision:
                 raise BridgeValidationError("engine event and outcome actors do not match")
             if self.engine_event.payload.get("state_version") != self.outcome.payload.get("state_version"):
                 raise BridgeValidationError("engine event and outcome state versions do not match")
-            if set(self.engine_event.payload) != {"action_type", "command", "destination", "state_version"}:
+            if set(self.engine_event.payload) != {
+                "action_type", "command", "destination", "prior_event_digests", "state_version"
+            }:
                 raise BridgeValidationError("authoritative engine event payload fields do not match the schema")
             if not all(
                 isinstance(self.engine_event.payload.get(key), str) and self.engine_event.payload[key]
@@ -151,6 +159,13 @@ class EngineDecision:
             destination = self.engine_event.payload.get("destination")
             if destination is not None and not isinstance(destination, str):
                 raise BridgeValidationError("authoritative engine event destination is malformed")
+            lineage = self.engine_event.payload.get("prior_event_digests")
+            if (
+                not isinstance(lineage, tuple)
+                or len(lineage) != state_version - 1
+                or any(not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest) for digest in lineage)
+            ):
+                raise BridgeValidationError("authoritative engine event lineage is malformed")
         elif self.engine_event is not None or self.outcome.payload.get("engine_event_id") is not None:
             raise BridgeValidationError("rejected decision cannot reference an engine event")
 
@@ -195,6 +210,16 @@ def _proposal_key(value: bytes | str) -> bytes:
     if not isinstance(key, bytes) or len(key) < 16:
         raise BridgeValidationError("proposal origin key must contain at least 16 bytes")
     return key
+
+
+def _authority_proof(outcome: Envelope, engine_event: Envelope | None, key: bytes) -> str:
+    outcome_data = outcome.to_dict()
+    outcome_data["payload"].pop("authority_proof", None)
+    material = {
+        "outcome": outcome_data,
+        "engine_event": engine_event.to_dict() if engine_event is not None else None,
+    }
+    return hmac.new(key, _canonical(material).encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 class WorldOSBridge:
@@ -368,6 +393,11 @@ class WorldOSBridge:
         return result
 
     def receive_engine_decision(self, decision: EngineDecision) -> None:
+        if not hmac.compare_digest(
+            str(decision.outcome.payload["authority_proof"]),
+            _authority_proof(decision.outcome, decision.engine_event, self._proposal_origin_key),
+        ):
+            raise BridgeValidationError("engine decision does not have a valid authority proof")
         proposal_id = decision.outcome.correlation_id
         proposal = self._pending.get(proposal_id)
         if proposal is None:
@@ -387,6 +417,10 @@ class WorldOSBridge:
             if existing_event_digest is not None and existing_event_digest != engine_event.digest():
                 raise BridgeValidationError("authoritative engine event id was reused with different content")
             state_version = int(engine_event.payload["state_version"])
+            for prior_version, prior_digest in enumerate(engine_event.payload["prior_event_digests"], start=1):
+                existing_prior_digest = self._engine_versions.get(prior_version)
+                if existing_prior_digest is not None and existing_prior_digest != prior_digest:
+                    raise BridgeValidationError("authoritative engine event lineage conflicts with recorded history")
             existing_version_digest = self._engine_versions.get(state_version)
             if existing_version_digest is not None and existing_version_digest != engine_event.digest():
                 raise BridgeValidationError("authoritative engine state version was reused by a different event")
@@ -399,6 +433,11 @@ class WorldOSBridge:
             raise BridgeValidationError("World OS proposal already has an engine outcome")
         self._decisions[decision.outcome.message_id] = decision
         if decision.engine_event is not None:
+            for prior_version, prior_digest in enumerate(
+                decision.engine_event.payload["prior_event_digests"],
+                start=1,
+            ):
+                self._engine_versions[prior_version] = prior_digest
             self._engine_events[decision.engine_event.message_id] = decision.engine_event.digest()
             self._engine_versions[int(decision.engine_event.payload["state_version"])] = decision.engine_event.digest()
         self._persist()
@@ -448,6 +487,7 @@ class EngineAuthority:
         self._last_sequence: dict[str, int] = {}
         self._processed: dict[str, tuple[str, EngineDecision]] = {}
         self._message_conflicts: list[dict[str, str]] = []
+        self._event_history: list[str] = []
         self._decision_sequence = 0
         self._state_version = 0
 
@@ -476,6 +516,7 @@ class EngineAuthority:
                 for message_id, (proposal_digest, decision) in sorted(self._processed.items())
             ],
             "message_conflicts": [dict(item) for item in self._message_conflicts],
+            "event_history": list(self._event_history),
             "decision_sequence": self._decision_sequence,
             "state_version": self._state_version,
         }
@@ -509,7 +550,7 @@ class EngineAuthority:
         expected_fields = {
             "schema_version", "positions", "permissions", "destinations", "blocked_paths",
             "last_action", "last_sequence", "processed", "message_conflicts",
-            "decision_sequence", "state_version",
+            "event_history", "decision_sequence", "state_version",
         }
         digest = hashlib.sha256(_canonical(state).encode("utf-8")).hexdigest()
         if (
@@ -539,6 +580,7 @@ class EngineAuthority:
                     raise BridgeValidationError("persisted engine decision correlation is invalid")
                 authority._processed[message_id] = (str(item["proposal_digest"]), decision)
             authority._message_conflicts = [dict(item) for item in state["message_conflicts"]]
+            authority._event_history = [str(digest) for digest in state["event_history"]]
             authority._decision_sequence = int(state["decision_sequence"])
             authority._state_version = int(state["state_version"])
         except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
@@ -558,7 +600,7 @@ class EngineAuthority:
         engine_event: Envelope | None = None,
     ) -> EngineDecision:
         self._decision_sequence += 1
-        outcome = Envelope(
+        unsigned_outcome = Envelope(
             BRIDGE_SCHEMA_VERSION,
             f"engine-outcome:{proposal.message_id}",
             proposal.message_id,
@@ -572,10 +614,35 @@ class EngineAuthority:
                 "status": status,
             },
         )
+        outcome = Envelope.from_dict(
+            {
+                **unsigned_outcome.to_dict(),
+                "payload": {
+                    **unsigned_outcome.to_dict()["payload"],
+                    "authority_proof": _authority_proof(
+                        unsigned_outcome,
+                        engine_event,
+                        self._proposal_origin_key,
+                    ),
+                },
+            }
+        )
         return EngineDecision(status, outcome, engine_event)
 
     def validate_and_apply(self, proposal: Envelope) -> EngineDecision:
+        authenticated = self._has_valid_origin(proposal)
         existing = self._processed.get(proposal.message_id)
+        if not authenticated:
+            if existing:
+                conflict = {
+                    "message_id": proposal.message_id,
+                    "canonical_digest": existing[0],
+                    "received_digest": proposal.digest(),
+                }
+                if conflict not in self._message_conflicts:
+                    self._message_conflicts.append(conflict)
+                return existing[1]
+            raise BridgeValidationError("proposal does not have a valid World OS origin proof")
         if existing:
             if existing[0] == proposal.digest():
                 return existing[1]
@@ -590,12 +657,10 @@ class EngineAuthority:
 
         reason = self._validate(proposal)
         if reason:
-            authenticated = self._has_valid_origin(proposal)
-            if authenticated and proposal.actor_id in self._positions and proposal.sequence > self._last_sequence.get(proposal.actor_id, 0):
+            if proposal.actor_id in self._positions and proposal.sequence > self._last_sequence.get(proposal.actor_id, 0):
                 self._last_sequence[proposal.actor_id] = proposal.sequence
             decision = self._decision(proposal, "rejected", reason)
-            if authenticated:
-                self._processed[proposal.message_id] = (proposal.digest(), decision)
+            self._processed[proposal.message_id] = (proposal.digest(), decision)
             return decision
 
         action_type = str(proposal.payload["action_type"])
@@ -617,9 +682,11 @@ class EngineAuthority:
                 "action_type": action_type,
                 "command": command,
                 "destination": destination,
+                "prior_event_digests": list(self._event_history),
                 "state_version": self._state_version,
             },
         )
+        self._event_history.append(engine_event.digest())
         decision = self._decision(proposal, "applied", "applied", engine_event)
         self._processed[proposal.message_id] = (proposal.digest(), decision)
         return decision

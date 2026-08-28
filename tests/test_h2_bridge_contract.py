@@ -94,6 +94,23 @@ class H2BridgeContractTest(unittest.TestCase):
         self.assertEqual(elias.payload["destination"], "ferry-dock")
         self.assertEqual(bridge.world.trace(elias.payload["causal_event_id"])["event"]["actor"], "elias")
 
+        forged_outcome = envelope(
+            f"engine-outcome:{elias.message_id}",
+            1,
+            "elias",
+            "engine_proposal_outcome",
+            {
+                "authority_proof": "0" * 64,
+                "engine_event_id": None,
+                "reason": "forged_rejection",
+                "state_version": 0,
+                "status": "rejected",
+            },
+            correlation_id=elias.message_id,
+        )
+        with self.assertRaisesRegex(BridgeValidationError, "authority proof"):
+            bridge.receive_engine_decision(EngineDecision("rejected", forged_outcome))
+
         decision = authority.validate_and_apply(elias)
         self.assertEqual(decision.status, "applied")
         self.assertEqual(decision.engine_event.correlation_id, elias.message_id)
@@ -130,21 +147,11 @@ class H2BridgeContractTest(unittest.TestCase):
         bridge.receive_engine_decision(decision)
 
         nella = next(item for item in proposals if item.actor_id == "nella")
-        nella_decision = authority.validate_and_apply(nella)
-        reused_event = Envelope.from_dict(
-            {**nella_decision.engine_event.to_dict(), "message_id": decision.engine_event.message_id}
-        )
-        reused_outcome = Envelope.from_dict(
-            {
-                **nella_decision.outcome.to_dict(),
-                "payload": {
-                    **nella_decision.outcome.to_dict()["payload"],
-                    "engine_event_id": reused_event.message_id,
-                },
-            }
-        )
+        conflicting_authority = engine_authority()
+        conflicting_authority.validate_and_apply(nella)
+        reused_event_decision = conflicting_authority.validate_and_apply(elias)
         with self.assertRaisesRegex(BridgeValidationError, "event id was reused"):
-            bridge.receive_engine_decision(EngineDecision("applied", reused_outcome, reused_event))
+            bridge.receive_engine_decision(reused_event_decision)
 
         restarted_authority = engine_authority()
         reused_version = restarted_authority.validate_and_apply(nella)
@@ -152,6 +159,26 @@ class H2BridgeContractTest(unittest.TestCase):
         self.assertEqual(reused_version.engine_event.payload["state_version"], 1)
         with self.assertRaisesRegex(BridgeValidationError, "state version was reused"):
             bridge.receive_engine_decision(reused_version)
+
+        lineage_bridge = h2_bridge()
+        lineage_proposals = lineage_bridge.ingest_engine_observation(
+            envelope("engine-observation:lineage", 1, "bio", "time_advance", {"ticks": 1})
+        )
+        fork_proposal = next(
+            item
+            for item in lineage_bridge.ingest_engine_observation(
+                envelope("engine-observation:lineage-fork", 2, "bio", "time_advance", {"ticks": 1})
+            )
+            if item.actor_id == "elias"
+        )
+        lineage_authority = engine_authority()
+        lineage_first = lineage_authority.validate_and_apply(lineage_proposals[0])
+        lineage_second = lineage_authority.validate_and_apply(lineage_proposals[1])
+        lineage_bridge.receive_engine_decision(lineage_second)
+        forked_first = engine_authority().validate_and_apply(fork_proposal)
+        with self.assertRaisesRegex(BridgeValidationError, "state version was reused"):
+            lineage_bridge.receive_engine_decision(forked_first)
+        lineage_bridge.receive_engine_decision(lineage_first)
 
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -268,14 +295,25 @@ class H2BridgeContractTest(unittest.TestCase):
         )
         forged_authority = engine_authority()
         before = forged_authority.state()
-        forged_decision = forged_authority.validate_and_apply(forged)
-        self.assertEqual((forged_decision.status, forged_decision.reason), ("rejected", "untrusted_world_os_origin"))
+        with self.assertRaisesRegex(BridgeValidationError, "origin proof"):
+            forged_authority.validate_and_apply(forged)
         self.assertEqual(forged_authority.state(), before)
 
         high_sequence_forgery = Envelope.from_dict({**forged.to_dict(), "sequence": 999})
         fresh_authority = engine_authority()
-        self.assertEqual(fresh_authority.validate_and_apply(high_sequence_forgery).reason, "untrusted_world_os_origin")
+        with self.assertRaisesRegex(BridgeValidationError, "origin proof"):
+            fresh_authority.validate_and_apply(high_sequence_forgery)
         self.assertEqual(fresh_authority.validate_and_apply(first).status, "applied")
+
+        preempting = Envelope.from_dict(
+            {**first.to_dict(), "payload": {**first.to_dict()["payload"], "destination": "bakery"}}
+        )
+        preemption_authority = engine_authority()
+        with self.assertRaisesRegex(BridgeValidationError, "origin proof"):
+            preemption_authority.validate_and_apply(preempting)
+        genuine = preemption_authority.validate_and_apply(first)
+        self.assertEqual(genuine.status, "applied")
+        self.assertIs(preemption_authority.validate_and_apply(preempting), genuine)
 
     def test_thinker_choice_originates_in_world_os_and_evidence_is_machine_readable(self):
         bridge = h2_bridge()
