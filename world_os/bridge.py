@@ -543,6 +543,17 @@ class WorldOSBridge:
         decision_sequences = [decision.outcome.sequence for decision in self._decisions.values()]
         if len(set(decision_sequences)) != len(decision_sequences):
             raise BridgeValidationError("persisted engine outcome ordering slot is duplicated")
+        ordered_state_versions = [
+            int(decision.outcome.payload["state_version"])
+            for decision in sorted(self._decisions.values(), key=lambda item: item.outcome.sequence)
+        ]
+        if any(
+            later < earlier
+            for earlier, later in zip(ordered_state_versions, ordered_state_versions[1:])
+        ):
+            raise BridgeValidationError(
+                "persisted engine outcome state versions roll back across decision ordering"
+            )
         decision_correlations: set[str] = set()
         expected_engine_events: dict[str, str] = {}
         expected_engine_versions: dict[int, str] = {}
@@ -807,6 +818,22 @@ class WorldOSBridge:
             if existing.digest() != decision.digest():
                 raise BridgeValidationError("engine outcome id was reused with different content")
             return
+        outcome_sequence = decision.outcome.sequence
+        state_version = int(decision.outcome.payload["state_version"])
+        if any(
+            (
+                prior.outcome.sequence < outcome_sequence
+                and int(prior.outcome.payload["state_version"]) > state_version
+            )
+            or (
+                prior.outcome.sequence > outcome_sequence
+                and int(prior.outcome.payload["state_version"]) < state_version
+            )
+            for prior in self._decisions.values()
+        ):
+            raise BridgeValidationError(
+                "engine outcome state version rolls back across decision ordering"
+            )
         if any(item.outcome.correlation_id == proposal_id for item in self._decisions.values()):
             raise BridgeValidationError("World OS proposal already has an engine outcome")
         self._decisions[decision.outcome.message_id] = decision

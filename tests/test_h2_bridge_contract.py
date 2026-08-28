@@ -293,6 +293,42 @@ class H2BridgeContractTest(unittest.TestCase):
             lineage_bridge.receive_engine_decision(forked_first)
         lineage_bridge.receive_engine_decision(lineage_first)
 
+    def test_stale_authority_cannot_roll_back_state_version_with_a_newer_outcome(self):
+        bridge = h2_bridge()
+        first_proposals = bridge.ingest_engine_observation(
+            envelope("engine-observation:rollback:1", 1, "bio", "time_advance", {"ticks": 1})
+        )
+        first = next(item for item in first_proposals if item.actor_id == "elias")
+        second_proposals = bridge.ingest_engine_observation(
+            envelope("engine-observation:rollback:2", 2, "bio", "time_advance", {"ticks": 1})
+        )
+        second = next(item for item in second_proposals if item.actor_id == "elias")
+
+        current_authority = engine_authority()
+        applied = decide(current_authority, first)
+        self.assertEqual(
+            (applied.outcome.sequence, applied.outcome.payload["state_version"]),
+            (1, 1),
+        )
+        bridge.receive_engine_decision(applied)
+
+        stale_authority = EngineAuthority(
+            {"elias": "village-square"},
+            {"elias": set()},
+            {"ferry-dock"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        self.assertEqual(decide(stale_authority, first).outcome.sequence, 1)
+        stale_rejection = decide(stale_authority, second)
+        self.assertEqual(
+            (stale_rejection.outcome.sequence, stale_rejection.outcome.payload["state_version"]),
+            (2, 0),
+        )
+        before_rollback = bridge.world.state_digest()
+        with self.assertRaisesRegex(BridgeValidationError, "state version rolls back"):
+            bridge.receive_engine_decision(stale_rejection)
+        self.assertEqual(bridge.world.state_digest(), before_rollback)
+
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "world.json"
