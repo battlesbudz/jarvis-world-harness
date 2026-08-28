@@ -9,6 +9,9 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
 from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
@@ -153,7 +156,7 @@ class EngineDecision:
         }:
             raise BridgeValidationError("engine outcome payload fields do not match the schema")
         if not isinstance(self.outcome.payload.get("authority_proof"), str) or not re.fullmatch(
-            r"[0-9a-f]{64}", self.outcome.payload["authority_proof"]
+            r"[0-9a-f]{128}", self.outcome.payload["authority_proof"]
         ):
             raise BridgeValidationError("engine outcome authority proof is malformed")
         if not isinstance(self.outcome.payload.get("reason"), str) or not self.outcome.payload["reason"]:
@@ -242,23 +245,69 @@ def _proposal_key(value: bytes | str) -> bytes:
     return key
 
 
-def _authority_proof(outcome: Envelope, engine_event: Envelope | None, key: bytes) -> str:
+def _authority_material(outcome: Envelope, engine_event: Envelope | None) -> bytes:
     outcome_data = outcome.to_dict()
     outcome_data["payload"].pop("authority_proof", None)
     material = {
         "outcome": outcome_data,
         "engine_event": engine_event.to_dict() if engine_event is not None else None,
     }
-    return hmac.new(key, _canonical(material).encode("utf-8"), hashlib.sha256).hexdigest()
+    return _canonical(material).encode("utf-8")
+
+
+def _authority_private_key(value: bytes | Ed25519PrivateKey) -> Ed25519PrivateKey:
+    if isinstance(value, Ed25519PrivateKey):
+        return value
+    if not isinstance(value, bytes) or len(value) != 32:
+        raise BridgeValidationError("engine authority private key must be 32 raw Ed25519 bytes")
+    return Ed25519PrivateKey.from_private_bytes(value)
+
+
+def _authority_public_key(value: bytes | Ed25519PublicKey) -> Ed25519PublicKey:
+    if isinstance(value, Ed25519PublicKey):
+        return value
+    if not isinstance(value, bytes) or len(value) != 32:
+        raise BridgeValidationError("engine authority public key must be 32 raw Ed25519 bytes")
+    return Ed25519PublicKey.from_public_bytes(value)
+
+
+def _authority_proof(
+    outcome: Envelope,
+    engine_event: Envelope | None,
+    private_key: Ed25519PrivateKey,
+) -> str:
+    return private_key.sign(_authority_material(outcome, engine_event)).hex()
+
+
+def _has_valid_authority_proof(
+    outcome: Envelope,
+    engine_event: Envelope | None,
+    proof: Any,
+    public_key: Ed25519PublicKey,
+) -> bool:
+    if not isinstance(proof, str) or not re.fullmatch(r"[0-9a-f]{128}", proof):
+        return False
+    try:
+        public_key.verify(bytes.fromhex(proof), _authority_material(outcome, engine_event))
+    except (InvalidSignature, ValueError):
+        return False
+    return True
 
 
 class WorldOSBridge:
     """Idempotent adapter from authoritative engine observations to World OS proposals."""
 
-    def __init__(self, world: World, role_stations: Mapping[str, str], proposal_origin_key: bytes | str):
+    def __init__(
+        self,
+        world: World,
+        role_stations: Mapping[str, str],
+        proposal_origin_key: bytes | str,
+        engine_authority_public_key: bytes | Ed25519PublicKey,
+    ):
         self.world = world
         self.role_stations = dict(role_stations)
         self._proposal_origin_key = _proposal_key(proposal_origin_key)
+        self._engine_authority_public_key = _authority_public_key(engine_authority_public_key)
         missing_roles = {
             actor.role
             for actor in world.actors.values()
@@ -471,9 +520,11 @@ class WorldOSBridge:
         expected_engine_events: dict[str, str] = {}
         expected_engine_versions: dict[int, str] = {}
         for decision in self._decisions.values():
-            if not hmac.compare_digest(
-                str(decision.outcome.payload["authority_proof"]),
-                _authority_proof(decision.outcome, decision.engine_event, self._proposal_origin_key),
+            if not _has_valid_authority_proof(
+                decision.outcome,
+                decision.engine_event,
+                decision.outcome.payload["authority_proof"],
+                self._engine_authority_public_key,
             ):
                 raise BridgeValidationError("persisted engine decision authority proof is invalid")
             proposal_id = decision.outcome.correlation_id
@@ -687,9 +738,11 @@ class WorldOSBridge:
         return result
 
     def receive_engine_decision(self, decision: EngineDecision) -> None:
-        if not hmac.compare_digest(
-            str(decision.outcome.payload["authority_proof"]),
-            _authority_proof(decision.outcome, decision.engine_event, self._proposal_origin_key),
+        if not _has_valid_authority_proof(
+            decision.outcome,
+            decision.engine_event,
+            decision.outcome.payload["authority_proof"],
+            self._engine_authority_public_key,
         ):
             raise BridgeValidationError("engine decision does not have a valid authority proof")
         proposal_id = decision.outcome.correlation_id
@@ -772,6 +825,7 @@ class EngineAuthority:
         permissions: Mapping[str, Iterable[str]],
         destinations: Iterable[str],
         proposal_origin_key: bytes | str,
+        authority_signing_key: bytes | Ed25519PrivateKey,
         blocked_paths: Iterable[tuple[str, str]] = (),
     ):
         self._initial_positions = dict(actor_positions)
@@ -782,6 +836,8 @@ class EngineAuthority:
         self._destinations = frozenset(destinations)
         self._blocked_paths = frozenset(blocked_paths)
         self._proposal_origin_key = _proposal_key(proposal_origin_key)
+        self._authority_signing_key = _authority_private_key(authority_signing_key)
+        self._authority_verification_key = self._authority_signing_key.public_key()
         self._last_action: dict[str, dict[str, Any]] = {}
         self._last_sequence: dict[str, int] = {}
         self._processed: dict[str, tuple[str, EngineDecision, Envelope]] = {}
@@ -850,6 +906,7 @@ class EngineAuthority:
         cls,
         path: Path,
         proposal_origin_key: bytes | str,
+        authority_signing_key: bytes | Ed25519PrivateKey,
         *,
         expected_snapshot_digest: str,
     ) -> EngineAuthority:
@@ -924,6 +981,7 @@ class EngineAuthority:
                 state["permissions"],
                 state["destinations"],
                 proposal_origin_key,
+                authority_signing_key,
                 (tuple(item) for item in state["blocked_paths"]),
             )
             authority._positions = {str(actor): str(position) for actor, position in state["positions"].items()}
@@ -939,9 +997,11 @@ class EngineAuthority:
                     raise BridgeValidationError("persisted engine proposal identity is duplicated")
                 if decision.outcome.correlation_id != message_id:
                     raise BridgeValidationError("persisted engine decision correlation is invalid")
-                if not hmac.compare_digest(
-                    str(decision.outcome.payload["authority_proof"]),
-                    _authority_proof(decision.outcome, decision.engine_event, authority._proposal_origin_key),
+                if not _has_valid_authority_proof(
+                    decision.outcome,
+                    decision.engine_event,
+                    decision.outcome.payload["authority_proof"],
+                    authority._authority_verification_key,
                 ):
                     raise BridgeValidationError("persisted engine decision authority proof is invalid")
                 proposal = Envelope.from_dict(item["proposal"])
@@ -1078,6 +1138,7 @@ class EngineAuthority:
             authority._permissions,
             authority._destinations,
             proposal_origin_key,
+            authority_signing_key,
             authority._blocked_paths,
         )
         for _proposal_digest, decision, proposal in sorted(
@@ -1135,7 +1196,7 @@ class EngineAuthority:
                     "authority_proof": _authority_proof(
                         unsigned_outcome,
                         engine_event,
-                        self._proposal_origin_key,
+                        self._authority_signing_key,
                     ),
                 },
             }

@@ -5,6 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from world_os import (
     Actor,
     BRIDGE_SCHEMA_VERSION,
@@ -19,6 +21,66 @@ from world_os.scenarios import albion_world
 
 
 PROPOSAL_ORIGIN_KEY = b"h2-deterministic-test-key"
+AUTHORITY_SIGNING_KEY = Ed25519PrivateKey.from_private_bytes(
+    hashlib.sha256(b"h2-deterministic-engine-authority-key").digest()
+)
+AUTHORITY_PUBLIC_KEY = AUTHORITY_SIGNING_KEY.public_key()
+ATTACKER_SIGNING_KEY = Ed25519PrivateKey.from_private_bytes(
+    hashlib.sha256(b"world-os-cannot-sign-engine-results").digest()
+)
+
+_EngineAuthority = EngineAuthority
+_WorldOSBridge = WorldOSBridge
+
+
+class EngineAuthority(_EngineAuthority):
+    def __init__(
+        self,
+        actor_positions,
+        permissions,
+        destinations,
+        proposal_origin_key,
+        authority_signing_key=AUTHORITY_SIGNING_KEY,
+        blocked_paths=(),
+    ):
+        super().__init__(
+            actor_positions,
+            permissions,
+            destinations,
+            proposal_origin_key,
+            authority_signing_key,
+            blocked_paths,
+        )
+
+    @classmethod
+    def load(
+        cls,
+        path,
+        proposal_origin_key,
+        authority_signing_key=AUTHORITY_SIGNING_KEY,
+        *,
+        expected_snapshot_digest,
+    ):
+        return super().load(
+            path,
+            proposal_origin_key,
+            authority_signing_key,
+            expected_snapshot_digest=expected_snapshot_digest,
+        )
+
+
+def WorldOSBridge(
+    world,
+    role_stations,
+    proposal_origin_key,
+    engine_authority_public_key=AUTHORITY_PUBLIC_KEY,
+):
+    return _WorldOSBridge(
+        world,
+        role_stations,
+        proposal_origin_key,
+        engine_authority_public_key,
+    )
 
 
 def envelope(message_id, sequence, actor_id, message_type, payload, correlation_id="h2-run:1"):
@@ -38,6 +100,7 @@ def h2_bridge():
         albion_world(2202),
         {"ferryman": "ferry-dock", "baker": "bakery"},
         PROPOSAL_ORIGIN_KEY,
+        AUTHORITY_PUBLIC_KEY,
     )
 
 
@@ -51,6 +114,7 @@ def engine_authority():
         },
         {"ferry-dock", "bakery", "captain-post"},
         PROPOSAL_ORIGIN_KEY,
+        AUTHORITY_SIGNING_KEY,
     )
 
 
@@ -131,7 +195,7 @@ class H2BridgeContractTest(unittest.TestCase):
             "elias",
             "engine_proposal_outcome",
             {
-                "authority_proof": "0" * 64,
+                "authority_proof": "0" * 128,
                 "engine_event_id": None,
                 "reason": "forged_rejection",
                 "state_version": 0,
@@ -141,6 +205,20 @@ class H2BridgeContractTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(BridgeValidationError, "authority proof"):
             bridge.receive_engine_decision(EngineDecision("rejected", forged_outcome))
+
+        attacker_authority = EngineAuthority(
+            {"elias": "village-square", "nella": "village-square", "mara": "captain-post"},
+            {
+                "elias": {"routine_move"},
+                "nella": {"routine_move"},
+                "mara": {"independent_choice", "values_refusal"},
+            },
+            {"ferry-dock", "bakery", "captain-post"},
+            PROPOSAL_ORIGIN_KEY,
+            ATTACKER_SIGNING_KEY,
+        )
+        with self.assertRaisesRegex(BridgeValidationError, "authority proof"):
+            bridge.receive_engine_decision(decide(attacker_authority, elias))
 
         decision = decide(authority, elias)
         self.assertEqual(decision.status, "applied")
