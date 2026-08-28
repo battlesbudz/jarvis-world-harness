@@ -6,7 +6,7 @@ This repository preserves AAABench's Unreal/MCP/VibeUE control surface, unattend
 
 ## Current scope
 
-**This repository is the development harness and the home of the headless World OS prototype, not the finished game.** H0 established the harness; H1 now builds and verifies the deterministic text simulator.
+**This repository is the development harness and the home of the World OS prototype, not the finished game.** H0 established the harness, H1 proved the deterministic text simulator, and H2 connects it to one playable Unreal greybox.
 
 ## North star
 
@@ -94,7 +94,8 @@ Runtime state, logs, PIDs, thread IDs, and last-run metadata live under `.harnes
 - `spec/CORE-LAWS.md` — protected design invariants.
 - `MILESTONE.md` — the currently authorized milestone.
 - `ACCEPTANCE-TESTS.md` — evidence required before advancing.
-- `milestones/H1/SPEC.md` — finalized scope and evidence contract for the active milestone.
+- `milestones/H1/SPEC.md` — completed deterministic text-simulator contract.
+- `milestones/H2/SPEC.md` — active engine-prototype scope and evidence contract.
 - `HARNESS-RULES.md` — operator/agent boundaries.
 - `docs/ARCHITECTURE.md` — intended split between Unreal and World OS.
 - `bin/run-codex.sh` — resumable Codex runner with structured events.
