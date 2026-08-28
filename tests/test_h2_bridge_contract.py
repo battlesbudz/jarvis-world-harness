@@ -146,6 +146,13 @@ class H2BridgeContractTest(unittest.TestCase):
         with self.assertRaisesRegex(BridgeValidationError, "event id was reused"):
             bridge.receive_engine_decision(EngineDecision("applied", reused_outcome, reused_event))
 
+        restarted_authority = engine_authority()
+        reused_version = restarted_authority.validate_and_apply(nella)
+        self.assertNotEqual(reused_version.engine_event.message_id, decision.engine_event.message_id)
+        self.assertEqual(reused_version.engine_event.payload["state_version"], 1)
+        with self.assertRaisesRegex(BridgeValidationError, "state version was reused"):
+            bridge.receive_engine_decision(reused_version)
+
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "world.json"

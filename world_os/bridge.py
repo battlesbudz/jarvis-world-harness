@@ -217,6 +217,7 @@ class WorldOSBridge:
         self._pending: dict[str, Envelope] = {}
         self._decisions: dict[str, EngineDecision] = {}
         self._engine_events: dict[str, str] = {}
+        self._engine_versions: dict[int, str] = {}
         saved = world.extension_state(_BRIDGE_EXTENSION)
         if saved is not None:
             self._restore(saved)
@@ -239,6 +240,7 @@ class WorldOSBridge:
             "pending": [proposal.to_dict() for proposal in sorted(self._pending.values(), key=lambda item: item.message_id)],
             "decisions": [decision.to_dict() for decision in sorted(self._decisions.values(), key=lambda item: item.outcome.message_id)],
             "engine_events": dict(sorted(self._engine_events.items())),
+            "engine_versions": {str(version): digest for version, digest in sorted(self._engine_versions.items())},
         }
 
     def _persist(self) -> None:
@@ -248,6 +250,7 @@ class WorldOSBridge:
         required = {
             "schema_version", "role_stations", "observations", "last_engine_sequence",
             "proposal_sequence", "pending", "decisions", "engine_events",
+            "engine_versions",
         }
         if set(state) != required or state.get("schema_version") != BRIDGE_SCHEMA_VERSION:
             raise BridgeValidationError("persisted bridge state is incompatible")
@@ -266,6 +269,7 @@ class WorldOSBridge:
             self._pending = {item.message_id: item for item in pending}
             self._decisions = {item.outcome.message_id: item for item in decisions}
             self._engine_events = {str(key): str(value) for key, value in state["engine_events"].items()}
+            self._engine_versions = {int(key): str(value) for key, value in state["engine_versions"].items()}
             self._observations = observations
         except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
             raise BridgeValidationError(f"persisted bridge state is malformed: {error}") from error
@@ -382,6 +386,10 @@ class WorldOSBridge:
             existing_event_digest = self._engine_events.get(engine_event.message_id)
             if existing_event_digest is not None and existing_event_digest != engine_event.digest():
                 raise BridgeValidationError("authoritative engine event id was reused with different content")
+            state_version = int(engine_event.payload["state_version"])
+            existing_version_digest = self._engine_versions.get(state_version)
+            if existing_version_digest is not None and existing_version_digest != engine_event.digest():
+                raise BridgeValidationError("authoritative engine state version was reused by a different event")
         existing = self._decisions.get(decision.outcome.message_id)
         if existing:
             if existing.digest() != decision.digest():
@@ -392,6 +400,7 @@ class WorldOSBridge:
         self._decisions[decision.outcome.message_id] = decision
         if decision.engine_event is not None:
             self._engine_events[decision.engine_event.message_id] = decision.engine_event.digest()
+            self._engine_versions[int(decision.engine_event.payload["state_version"])] = decision.engine_event.digest()
         self._persist()
 
     def evidence(self) -> dict[str, Any]:
