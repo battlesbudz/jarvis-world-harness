@@ -13,7 +13,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
 BRIDGE_SCHEMA_VERSION = 1
-ENGINE_AUTHORITY_SCHEMA_VERSION = 2
+ENGINE_AUTHORITY_SCHEMA_VERSION = 3
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
 
@@ -783,6 +783,7 @@ class EngineAuthority:
         self._last_sequence: dict[str, int] = {}
         self._processed: dict[str, tuple[str, EngineDecision, Envelope]] = {}
         self._buffered_proposals: dict[str, Envelope] = {}
+        self._response_batches: dict[str, tuple[str, ...]] = {}
         self._message_conflicts: list[dict[str, str]] = []
         self._event_history: list[str] = []
         self._decision_sequence = 0
@@ -817,6 +818,10 @@ class EngineAuthority:
             "buffered_proposals": [
                 proposal.to_dict()
                 for proposal in sorted(self._buffered_proposals.values(), key=lambda item: item.message_id)
+            ],
+            "response_batches": [
+                {"message_id": message_id, "decision_ids": list(decision_ids)}
+                for message_id, decision_ids in sorted(self._response_batches.items())
             ],
             "message_conflicts": [dict(item) for item in self._message_conflicts],
             "event_history": list(self._event_history),
@@ -853,14 +858,22 @@ class EngineAuthority:
         expected_fields = {
             "schema_version", "initial_positions", "positions", "permissions", "destinations", "blocked_paths",
             "last_action", "last_sequence", "processed", "message_conflicts",
-            "event_history", "decision_sequence", "state_version", "buffered_proposals",
+            "event_history", "decision_sequence", "state_version", "buffered_proposals", "response_batches",
         }
         digest = hashlib.sha256(_canonical(state).encode("utf-8")).hexdigest()
-        previous_fields = expected_fields - {"buffered_proposals"}
+        version_one_fields = expected_fields - {"buffered_proposals", "response_batches"}
+        version_two_fields = expected_fields - {"response_batches"}
         previous_shape = (
             isinstance(state, dict)
-            and set(state) == previous_fields
-            and _is_supported_schema_version(state.get("schema_version"))
+            and (
+                (set(state) == version_one_fields and _is_supported_schema_version(state.get("schema_version")))
+                or (
+                    set(state) == version_two_fields
+                    and isinstance(state.get("schema_version"), int)
+                    and not isinstance(state.get("schema_version"), bool)
+                    and state.get("schema_version") == 2
+                )
+            )
         )
         if (
             envelope.get("format") != "jarvis-world-h2-engine"
@@ -877,10 +890,31 @@ class EngineAuthority:
         if not expected_snapshot_digest or digest != expected_snapshot_digest or envelope.get("digest") != digest:
             raise BridgeValidationError("persisted engine authority does not match the trusted snapshot boundary")
         if previous_shape:
+            ordered = sorted(
+                state["processed"],
+                key=lambda item: item["decision"]["outcome"]["sequence"],
+            )
+            response_batches = []
+            for index, item in enumerate(ordered):
+                decision_ids = [item["message_id"]]
+                prior = item
+                for following in ordered[index + 1:]:
+                    if (
+                        following["decision"]["outcome"]["sequence"]
+                        != prior["decision"]["outcome"]["sequence"] + 1
+                        or following["proposal"]["actor_id"] != prior["proposal"]["actor_id"]
+                        or following["proposal"]["sequence"] != prior["proposal"]["sequence"] + 1
+                    ):
+                        break
+                    decision_ids.append(following["message_id"])
+                    prior = following
+                response_batches.append({"message_id": item["message_id"], "decision_ids": decision_ids})
+            response_batches.sort(key=lambda item: item["message_id"])
             state = {
                 **state,
                 "schema_version": ENGINE_AUTHORITY_SCHEMA_VERSION,
-                "buffered_proposals": [],
+                "buffered_proposals": state.get("buffered_proposals", []),
+                "response_batches": response_batches,
             }
         try:
             authority = cls(
@@ -932,6 +966,13 @@ class EngineAuthority:
                 if not authority._has_valid_origin(proposal):
                     raise BridgeValidationError("persisted buffered engine proposal origin proof is invalid")
                 authority._buffered_proposals[proposal.message_id] = proposal
+            authority._response_batches = {}
+            for item in state["response_batches"]:
+                message_id = str(item["message_id"])
+                decision_ids = tuple(str(value) for value in item["decision_ids"])
+                if message_id in authority._response_batches:
+                    raise BridgeValidationError("persisted engine response batch identity is duplicated")
+                authority._response_batches[message_id] = decision_ids
             authority._message_conflicts = [dict(item) for item in state["message_conflicts"]]
             authority._event_history = [str(digest) for digest in state["event_history"]]
             authority._decision_sequence = _counter(state["decision_sequence"], "decision_sequence")
@@ -987,6 +1028,22 @@ class EngineAuthority:
         }
         if authority._last_sequence != expected_last_sequence:
             raise BridgeValidationError("persisted engine proposal high-water marks do not match processed decisions")
+        if set(authority._response_batches) != set(authority._processed):
+            raise BridgeValidationError("persisted engine response batches do not cover processed proposals")
+        for message_id, decision_ids in authority._response_batches.items():
+            if not decision_ids or decision_ids[0] != message_id or any(
+                decision_id not in authority._processed for decision_id in decision_ids
+            ):
+                raise BridgeValidationError("persisted engine response batch is invalid")
+            decisions = [authority._processed[decision_id][1] for decision_id in decision_ids]
+            proposals = [authority._processed[decision_id][2] for decision_id in decision_ids]
+            if any(
+                decisions[index].outcome.sequence != decisions[index - 1].outcome.sequence + 1
+                or proposals[index].actor_id != proposals[index - 1].actor_id
+                or proposals[index].sequence != proposals[index - 1].sequence + 1
+                for index in range(1, len(decisions))
+            ):
+                raise BridgeValidationError("persisted engine response batch ordering is invalid")
         buffered_slots: set[tuple[str, int]] = set()
         for proposal in authority._buffered_proposals.values():
             if proposal.actor_id not in authority._positions:
@@ -1091,11 +1148,11 @@ class EngineAuthority:
                 }
                 if conflict not in self._message_conflicts:
                     self._message_conflicts.append(conflict)
-                return (existing[1],)
+                return self._response_batch(proposal.message_id)
             raise BridgeValidationError("proposal does not have a valid World OS origin proof")
         if existing:
             if existing[0] == proposal.digest():
-                return (existing[1],)
+                return self._response_batch(proposal.message_id)
             conflict = {
                 "message_id": proposal.message_id,
                 "canonical_digest": existing[0],
@@ -1103,7 +1160,7 @@ class EngineAuthority:
             }
             if conflict not in self._message_conflicts:
                 self._message_conflicts.append(conflict)
-            return (existing[1],)
+            return self._response_batch(proposal.message_id)
 
         buffered = self._buffered_proposals.get(proposal.message_id)
         if buffered:
@@ -1126,7 +1183,19 @@ class EngineAuthority:
         drained: tuple[EngineDecision, ...] = ()
         if proposal.actor_id in self._positions:
             drained = self._drain_buffer(proposal.actor_id)
-        return (decision, *drained)
+        decisions = (decision, *drained)
+        self._response_batches[proposal.message_id] = tuple(
+            item.outcome.correlation_id for item in decisions
+        )
+        for item in drained:
+            self._response_batches.setdefault(
+                item.outcome.correlation_id,
+                (item.outcome.correlation_id,),
+            )
+        return decisions
+
+    def _response_batch(self, message_id: str) -> tuple[EngineDecision, ...]:
+        return tuple(self._processed[decision_id][1] for decision_id in self._response_batches[message_id])
 
     def _drain_buffer(self, actor_id: str) -> tuple[EngineDecision, ...]:
         decisions: list[EngineDecision] = []

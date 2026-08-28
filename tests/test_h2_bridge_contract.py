@@ -275,11 +275,37 @@ class H2BridgeContractTest(unittest.TestCase):
                 [first_elias.message_id, second_elias.message_id],
             )
             self.assertEqual(resumed_buffer.state()["state_version"], 2)
+            self.assertEqual(resumed_buffer.validate_and_apply(first_elias), drained)
             self.assertEqual(decide(resumed_buffer, second_elias), drained[1])
+            resumed_buffer.save(engine_path)
+            drained_digest = resumed_buffer.snapshot_digest()
+            retry_buffer = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=drained_digest,
+            )
+            self.assertEqual(retry_buffer.validate_and_apply(first_elias), drained)
+
+            version_two_payload = json.loads(engine_path.read_text(encoding="utf-8"))
+            version_two_payload["state"].pop("response_batches")
+            version_two_payload["state"]["schema_version"] = 2
+            canonical = json.dumps(
+                version_two_payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            version_two_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            version_two_payload["digest"] = version_two_digest
+            engine_path.write_text(json.dumps(version_two_payload), encoding="utf-8")
+            migrated_buffer = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=version_two_digest,
+            )
+            self.assertEqual(migrated_buffer.validate_and_apply(first_elias), drained)
 
             authority.save(engine_path)
             previous_payload = json.loads(engine_path.read_text(encoding="utf-8"))
             previous_payload["state"].pop("buffered_proposals")
+            previous_payload["state"].pop("response_batches")
             previous_payload["state"]["schema_version"] = 1
             canonical = json.dumps(
                 previous_payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -293,7 +319,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=previous_digest,
             )
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
-            self.assertEqual(migrated_authority.snapshot()["schema_version"], 2)
+            self.assertEqual(migrated_authority.snapshot()["schema_version"], 3)
 
             missing_index_bridge = h2_bridge()
             indexed_proposals = missing_index_bridge.ingest_engine_observation(
