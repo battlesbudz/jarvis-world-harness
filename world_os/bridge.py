@@ -1026,7 +1026,7 @@ class EngineAuthority:
             key=lambda item: item[1].outcome.sequence,
         ):
             replayed = replay.validate_and_apply(proposal)
-            if replayed is None or replayed != decision:
+            if replayed != (decision,):
                 raise BridgeValidationError("persisted engine decisions do not match replayed policy")
         if (
             replay._positions != authority._positions
@@ -1079,7 +1079,7 @@ class EngineAuthority:
         )
         return EngineDecision(status, outcome, engine_event)
 
-    def validate_and_apply(self, proposal: Envelope) -> EngineDecision | None:
+    def validate_and_apply(self, proposal: Envelope) -> tuple[EngineDecision, ...]:
         authenticated = self._has_valid_origin(proposal)
         existing = self._processed.get(proposal.message_id)
         if not authenticated:
@@ -1091,11 +1091,11 @@ class EngineAuthority:
                 }
                 if conflict not in self._message_conflicts:
                     self._message_conflicts.append(conflict)
-                return existing[1]
+                return (existing[1],)
             raise BridgeValidationError("proposal does not have a valid World OS origin proof")
         if existing:
             if existing[0] == proposal.digest():
-                return existing[1]
+                return (existing[1],)
             conflict = {
                 "message_id": proposal.message_id,
                 "canonical_digest": existing[0],
@@ -1103,12 +1103,12 @@ class EngineAuthority:
             }
             if conflict not in self._message_conflicts:
                 self._message_conflicts.append(conflict)
-            return existing[1]
+            return (existing[1],)
 
         buffered = self._buffered_proposals.get(proposal.message_id)
         if buffered:
             if buffered.digest() == proposal.digest():
-                return None
+                return ()
             raise BridgeValidationError("buffered engine proposal id was reused with different content")
 
         if proposal.actor_id in self._positions:
@@ -1120,14 +1120,16 @@ class EngineAuthority:
                 ):
                     raise BridgeValidationError("buffered engine proposal sequence was reused")
                 self._buffered_proposals[proposal.message_id] = proposal
-                return None
+                return ()
 
         decision = self._process_proposal(proposal)
+        drained: tuple[EngineDecision, ...] = ()
         if proposal.actor_id in self._positions:
-            self._drain_buffer(proposal.actor_id)
-        return decision
+            drained = self._drain_buffer(proposal.actor_id)
+        return (decision, *drained)
 
-    def _drain_buffer(self, actor_id: str) -> None:
+    def _drain_buffer(self, actor_id: str) -> tuple[EngineDecision, ...]:
+        decisions: list[EngineDecision] = []
         while True:
             expected_sequence = self._last_sequence.get(actor_id, 0) + 1
             pending = next(
@@ -1139,9 +1141,9 @@ class EngineAuthority:
                 None,
             )
             if pending is None:
-                return
+                return tuple(decisions)
             del self._buffered_proposals[pending.message_id]
-            self._process_proposal(pending)
+            decisions.append(self._process_proposal(pending))
 
     def _process_proposal(self, proposal: Envelope) -> EngineDecision:
         reason = self._validate(proposal)

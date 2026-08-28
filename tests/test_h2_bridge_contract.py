@@ -54,6 +54,13 @@ def engine_authority():
     )
 
 
+def decide(authority, proposal):
+    decisions = authority.validate_and_apply(proposal)
+    if len(decisions) != 1:
+        raise AssertionError(f"expected exactly one engine decision, received {len(decisions)}")
+    return decisions[0]
+
+
 class H2BridgeContractTest(unittest.TestCase):
     def test_versioned_envelope_round_trip_and_fail_closed_schema(self):
         source_payload = {"ticks": 1, "context": {"tags": ["village"]}}
@@ -92,7 +99,7 @@ class H2BridgeContractTest(unittest.TestCase):
         proposal = h2_bridge().ingest_engine_observation(
             envelope("engine-observation:state-version", 1, "bio", "time_advance", {"ticks": 1})
         )[0]
-        applied = engine_authority().validate_and_apply(proposal)
+        applied = decide(engine_authority(), proposal)
         for malformed_version in (True, 1.0):
             malformed_event = Envelope.from_dict(
                 {
@@ -135,7 +142,7 @@ class H2BridgeContractTest(unittest.TestCase):
         with self.assertRaisesRegex(BridgeValidationError, "authority proof"):
             bridge.receive_engine_decision(EngineDecision("rejected", forged_outcome))
 
-        decision = authority.validate_and_apply(elias)
+        decision = decide(authority, elias)
         self.assertEqual(decision.status, "applied")
         self.assertEqual(decision.engine_event.correlation_id, elias.message_id)
         self.assertEqual(decision.outcome.payload["engine_event_id"], decision.engine_event.message_id)
@@ -165,20 +172,20 @@ class H2BridgeContractTest(unittest.TestCase):
         self.assertEqual(bridge.ingest_engine_observation(observation), proposals)
         self.assertEqual(bridge.world.state_digest(), before_retry)
         self.assertEqual(bridge.world.events, world_events)
-        self.assertIs(authority.validate_and_apply(elias), decision)
+        self.assertIs(decide(authority, elias), decision)
         self.assertEqual(authority.state()["state_version"], 1)
         self.assertEqual(authority.state()["positions"]["elias"], "ferry-dock")
         bridge.receive_engine_decision(decision)
 
         nella = next(item for item in proposals if item.actor_id == "nella")
         conflicting_authority = engine_authority()
-        conflicting_authority.validate_and_apply(nella)
-        reused_event_decision = conflicting_authority.validate_and_apply(elias)
+        decide(conflicting_authority, nella)
+        reused_event_decision = decide(conflicting_authority, elias)
         with self.assertRaisesRegex(BridgeValidationError, "event id was reused"):
             bridge.receive_engine_decision(reused_event_decision)
 
         restarted_authority = engine_authority()
-        reused_version = restarted_authority.validate_and_apply(nella)
+        reused_version = decide(restarted_authority, nella)
         self.assertNotEqual(reused_version.engine_event.message_id, decision.engine_event.message_id)
         self.assertEqual(reused_version.engine_event.payload["state_version"], 1)
         with self.assertRaisesRegex(BridgeValidationError, "state version was reused"):
@@ -196,12 +203,12 @@ class H2BridgeContractTest(unittest.TestCase):
             if item.actor_id == "elias"
         )
         lineage_authority = engine_authority()
-        lineage_first = lineage_authority.validate_and_apply(lineage_proposals[0])
-        lineage_second = lineage_authority.validate_and_apply(lineage_proposals[1])
+        lineage_first = decide(lineage_authority, lineage_proposals[0])
+        lineage_second = decide(lineage_authority, lineage_proposals[1])
         lineage_bridge.receive_engine_decision(lineage_second)
         forked_authority = engine_authority()
-        forked_authority.validate_and_apply(lineage_proposals[0])
-        forked_first = forked_authority.validate_and_apply(fork_proposal)
+        decide(forked_authority, lineage_proposals[0])
+        forked_first = decide(forked_authority, fork_proposal)
         with self.assertRaisesRegex(BridgeValidationError, "state version was reused"):
             lineage_bridge.receive_engine_decision(forked_first)
         lineage_bridge.receive_engine_decision(lineage_first)
@@ -213,7 +220,7 @@ class H2BridgeContractTest(unittest.TestCase):
             observation = envelope("engine-observation:persisted", 1, "bio", "time_advance", {"ticks": 1})
             proposals = bridge.ingest_engine_observation(observation)
             authority = engine_authority()
-            decision = authority.validate_and_apply(proposals[0])
+            decision = decide(authority, proposals[0])
             bridge.receive_engine_decision(decision)
             trusted = bridge.world.state_digest()
             bridge.world.save(path)
@@ -245,14 +252,14 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=engine_digest,
             )
             before_engine_retry = resumed_authority.state()
-            self.assertEqual(resumed_authority.validate_and_apply(proposals[0]), decision)
+            self.assertEqual(decide(resumed_authority, proposals[0]), decision)
             self.assertEqual(resumed_authority.state(), before_engine_retry)
             self.assertEqual(resumed_authority.state()["state_version"], 1)
 
             buffered_authority = engine_authority()
             first_elias = next(item for item in proposals if item.actor_id == "elias")
             second_elias = next(item for item in next_proposals if item.actor_id == "elias")
-            self.assertIsNone(buffered_authority.validate_and_apply(second_elias))
+            self.assertEqual(buffered_authority.validate_and_apply(second_elias), ())
             self.assertEqual(buffered_authority.state()["state_version"], 0)
             buffered_authority.save(engine_path)
             buffered_digest = buffered_authority.snapshot_digest()
@@ -261,9 +268,14 @@ class H2BridgeContractTest(unittest.TestCase):
                 PROPOSAL_ORIGIN_KEY,
                 expected_snapshot_digest=buffered_digest,
             )
-            self.assertEqual(resumed_buffer.validate_and_apply(first_elias).status, "applied")
+            drained = resumed_buffer.validate_and_apply(first_elias)
+            self.assertEqual([item.status for item in drained], ["applied", "applied"])
+            self.assertEqual(
+                [item.outcome.correlation_id for item in drained],
+                [first_elias.message_id, second_elias.message_id],
+            )
             self.assertEqual(resumed_buffer.state()["state_version"], 2)
-            self.assertEqual(resumed_buffer.validate_and_apply(second_elias).status, "applied")
+            self.assertEqual(decide(resumed_buffer, second_elias), drained[1])
 
             authority.save(engine_path)
             previous_payload = json.loads(engine_path.read_text(encoding="utf-8"))
@@ -280,7 +292,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 PROPOSAL_ORIGIN_KEY,
                 expected_snapshot_digest=previous_digest,
             )
-            self.assertEqual(migrated_authority.validate_and_apply(proposals[0]), decision)
+            self.assertEqual(decide(migrated_authority, proposals[0]), decision)
             self.assertEqual(migrated_authority.snapshot()["schema_version"], 2)
 
             missing_index_bridge = h2_bridge()
@@ -288,7 +300,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 envelope("engine-observation:indexed", 1, "bio", "time_advance", {"ticks": 1})
             )
             missing_index_bridge.receive_engine_decision(
-                engine_authority().validate_and_apply(indexed_proposals[0])
+                decide(engine_authority(), indexed_proposals[0])
             )
             missing_index_state = missing_index_bridge.world.extension_state("h2_bridge")
             missing_index_state["engine_events"] = {}
@@ -482,7 +494,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 for _ in range(2)
             ]
             for authority, proposal in zip(rejecting_authorities, proposals):
-                self.assertEqual(authority.validate_and_apply(proposal).status, "rejected")
+                self.assertEqual(decide(authority, proposal).status, "rejected")
             rejected_payloads = load_payloads(rejecting_authorities)
             duplicate_decision_sequence = rejected_payloads[0]
             duplicate_decision_sequence["state"]["processed"].extend(
@@ -497,7 +509,7 @@ class H2BridgeContractTest(unittest.TestCase):
 
             applying_authorities = [engine_authority(), engine_authority()]
             for authority, proposal in zip(applying_authorities, proposals):
-                self.assertEqual(authority.validate_and_apply(proposal).status, "applied")
+                self.assertEqual(decide(authority, proposal).status, "applied")
             applied_payloads = load_payloads(applying_authorities)
             missing_high_water = json.loads(json.dumps(applied_payloads[0]))
             missing_high_water["state"]["last_sequence"] = {}
@@ -570,9 +582,9 @@ class H2BridgeContractTest(unittest.TestCase):
                 )
 
             duplicate_outcome_bridge.receive_engine_decision(
-                rejecting_authority().validate_and_apply(duplicate_outcome_proposals[0])
+                decide(rejecting_authority(), duplicate_outcome_proposals[0])
             )
-            duplicate_outcome = rejecting_authority().validate_and_apply(duplicate_outcome_proposals[1])
+            duplicate_outcome = decide(rejecting_authority(), duplicate_outcome_proposals[1])
             with self.assertRaisesRegex(BridgeValidationError, "outcome sequence was reused"):
                 duplicate_outcome_bridge.receive_engine_decision(duplicate_outcome)
 
@@ -737,11 +749,16 @@ class H2BridgeContractTest(unittest.TestCase):
         )
 
         stale_authority = engine_authority()
-        self.assertIsNone(stale_authority.validate_and_apply(second))
+        self.assertEqual(stale_authority.validate_and_apply(second), ())
         self.assertEqual(stale_authority.state()["state_version"], 0)
-        self.assertEqual(stale_authority.validate_and_apply(first).status, "applied")
+        drained = stale_authority.validate_and_apply(first)
+        self.assertEqual([item.status for item in drained], ["applied", "applied"])
+        self.assertEqual(
+            [item.outcome.correlation_id for item in drained],
+            [first.message_id, second.message_id],
+        )
         self.assertEqual(stale_authority.state()["state_version"], 2)
-        self.assertEqual(stale_authority.validate_and_apply(second).status, "applied")
+        self.assertEqual(decide(stale_authority, second), drained[1])
 
         impossible_authority = EngineAuthority(
             {"elias": "village-square"},
@@ -751,7 +768,7 @@ class H2BridgeContractTest(unittest.TestCase):
             blocked_paths={("elias", "ferry-dock")},
         )
         before = impossible_authority.state()
-        impossible = impossible_authority.validate_and_apply(first)
+        impossible = decide(impossible_authority, first)
         self.assertEqual((impossible.status, impossible.reason), ("rejected", "physically_impossible"))
         self.assertEqual(impossible_authority.state(), before)
 
@@ -762,17 +779,17 @@ class H2BridgeContractTest(unittest.TestCase):
             PROPOSAL_ORIGIN_KEY,
         )
         before = unauthorized_authority.state()
-        unauthorized = unauthorized_authority.validate_and_apply(first)
+        unauthorized = decide(unauthorized_authority, first)
         self.assertEqual((unauthorized.status, unauthorized.reason), ("rejected", "permission_denied"))
         self.assertEqual(unauthorized_authority.state(), before)
 
         authority = engine_authority()
-        canonical = authority.validate_and_apply(first)
+        canonical = decide(authority, first)
         before = authority.state()
         conflicting = Envelope.from_dict(
             {**first.to_dict(), "payload": {**first.to_dict()["payload"], "destination": "bakery"}}
         )
-        self.assertIs(authority.validate_and_apply(conflicting), canonical)
+        self.assertIs(decide(authority, conflicting), canonical)
         self.assertEqual(authority.state(), before)
         self.assertEqual(authority.conflicts()[0]["message_id"], first.message_id)
 
@@ -799,7 +816,7 @@ class H2BridgeContractTest(unittest.TestCase):
         fresh_authority = engine_authority()
         with self.assertRaisesRegex(BridgeValidationError, "origin proof"):
             fresh_authority.validate_and_apply(high_sequence_forgery)
-        self.assertEqual(fresh_authority.validate_and_apply(first).status, "applied")
+        self.assertEqual(decide(fresh_authority, first).status, "applied")
 
         preempting = Envelope.from_dict(
             {**first.to_dict(), "payload": {**first.to_dict()["payload"], "destination": "bakery"}}
@@ -807,9 +824,9 @@ class H2BridgeContractTest(unittest.TestCase):
         preemption_authority = engine_authority()
         with self.assertRaisesRegex(BridgeValidationError, "origin proof"):
             preemption_authority.validate_and_apply(preempting)
-        genuine = preemption_authority.validate_and_apply(first)
+        genuine = decide(preemption_authority, first)
         self.assertEqual(genuine.status, "applied")
-        self.assertIs(preemption_authority.validate_and_apply(preempting), genuine)
+        self.assertIs(decide(preemption_authority, preempting), genuine)
 
     def test_thinker_choice_originates_in_world_os_and_evidence_is_machine_readable(self):
         bridge = h2_bridge()
@@ -827,7 +844,7 @@ class H2BridgeContractTest(unittest.TestCase):
         self.assertEqual(trace["event"]["event_type"], "independent_choice")
         self.assertTrue(any(item["event"]["event_type"] == "request" for item in trace["causes"]))
 
-        decision = authority.validate_and_apply(proposal)
+        decision = decide(authority, proposal)
         bridge.receive_engine_decision(decision)
         evidence = bridge.evidence()
         path = Path(".harness/evidence/h2/bridge-contract.json")
