@@ -558,6 +558,9 @@ class H2BridgeContractTest(unittest.TestCase):
                 envelope("engine-observation:missing-causal", 1, "bio", "time_advance", {"ticks": 1})
             )
             original = proposals[0]
+            later_proposals = bridge.ingest_engine_observation(
+                envelope("engine-observation:alternate-causal", 2, "bio", "time_advance", {"ticks": 1})
+            )
             unsigned = Envelope.from_dict(
                 {
                     **original.to_dict(),
@@ -607,14 +610,18 @@ class H2BridgeContractTest(unittest.TestCase):
                     PROPOSAL_ORIGIN_KEY,
                 )
 
-            alternate_event_id = next(
-                event.id
-                for event in bridge.world.events
-                if event.id != original.payload["causal_event_id"]
+            alternate_source = next(
+                proposal
+                for proposal in later_proposals
+                if proposal.actor_id == original.actor_id
             )
+            alternate_event_id = alternate_source.payload["causal_event_id"]
             alternate_unsigned = Envelope.from_dict(
                 {
                     **original.to_dict(),
+                    "message_id": (
+                        f"world-proposal:{original.correlation_id}:{alternate_event_id}"
+                    ),
                     "payload": {
                         **original.to_dict()["payload"],
                         "causal_event_id": alternate_event_id,
@@ -654,7 +661,7 @@ class H2BridgeContractTest(unittest.TestCase):
             bridge.world.set_extension_state("h2_bridge", state)
             trusted = bridge.world.state_digest()
             bridge.world.save(path)
-            with self.assertRaisesRegex(BridgeValidationError, "causal event identity"):
+            with self.assertRaisesRegex(BridgeValidationError, "causal tick|originate from its observation"):
                 WorldOSBridge(
                     World.load(path, expected_state_digest=trusted),
                     {"ferryman": "ferry-dock", "baker": "bakery"},

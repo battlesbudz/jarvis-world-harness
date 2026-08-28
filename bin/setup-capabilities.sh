@@ -125,7 +125,11 @@ fi
 # Use the interpreter the AGENT will invoke as `python3`, not necessarily this shell's.
 AGENT_PY="$(command -v python3)"
 echo "  python for generator work: $AGENT_PY ($("$AGENT_PY" -V 2>&1))"
-if ! "$AGENT_PY" -m pip install --user --quiet --disable-pip-version-check \
+PIP_SCOPE=(--user)
+if "$AGENT_PY" -c 'import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)'; then
+  PIP_SCOPE=()
+fi
+if ! "$AGENT_PY" -m pip install "${PIP_SCOPE[@]}" --quiet --disable-pip-version-check \
   -r requirements.txt; then
   echo "  ERROR: required harness Python dependencies could not be installed" >&2
   exit 1
@@ -134,7 +138,7 @@ fi
   echo "  ERROR: required bridge dependency is unavailable: cryptography" >&2
   exit 1
 }
-"$AGENT_PY" -m pip install --user --quiet --disable-pip-version-check \
+"$AGENT_PY" -m pip install "${PIP_SCOPE[@]}" --quiet --disable-pip-version-check \
   numpy scipy shapely trimesh networkx scikit-image opencv-python-headless \
   pyproj mapbox_earcut noise pygltflib matplotlib pillow 2>&1 | grep -vi "already satisfied" | tail -3
 "$AGENT_PY" - <<'PY'

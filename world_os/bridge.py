@@ -747,6 +747,7 @@ class WorldOSBridge:
         if self._last_engine_sequence != expected_last_sequence:
             raise BridgeValidationError("persisted engine observation counters do not match the ledger")
         proposal_sequences: dict[str, list[int]] = {}
+        time_observation_ticks: dict[str, set[int]] = {}
         for proposal in self._pending.values():
             proposal_sequences.setdefault(proposal.actor_id, []).append(proposal.sequence)
         expected_proposal_sequence = {
@@ -771,7 +772,14 @@ class WorldOSBridge:
                 raise BridgeValidationError("persisted proposal origin proof is invalid")
             try:
                 causal_event_id = proposal.payload["causal_event_id"]
-                causal_event = self.world.trace(str(causal_event_id))["event"]
+                causal_trace = self.world.trace(str(causal_event_id))
+                causal_event = causal_trace["event"]
+                observation_record = self._observations.get(proposal.correlation_id)
+                if observation_record is None:
+                    raise BridgeValidationError(
+                        "persisted proposal does not match a recorded observation"
+                    )
+                observation = observation_record[0]
                 expected_message_id = (
                     f"world-proposal:{proposal.correlation_id}:{causal_event['id']}"
                 )
@@ -800,12 +808,44 @@ class WorldOSBridge:
                     raise BridgeValidationError(
                         "persisted proposal action does not match its causal event"
                     )
+                if observation.message_type == "time_advance":
+                    time_observation_ticks.setdefault(observation.message_id, set()).add(
+                        int(causal_event["tick"])
+                    )
+                else:
+                    expected_root = f"bridge:{observation.message_id}"
+
+                    def has_expected_root(trace: Mapping[str, Any]) -> bool:
+                        return trace["event"].get("root_input") == expected_root or any(
+                            has_expected_root(cause) for cause in trace.get("causes", ())
+                        )
+
+                    if not has_expected_root(causal_trace):
+                        raise BridgeValidationError(
+                            "persisted proposal causal event does not originate from its observation"
+                        )
             except (KeyError, TypeError, ValueError) as error:
                 if isinstance(error, BridgeValidationError):
                     raise
                 raise BridgeValidationError(
                     "persisted proposal causal event reference is invalid"
                 ) from error
+        time_observations_by_actor: dict[str, list[tuple[int, int]]] = {}
+        for message_id, ticks in time_observation_ticks.items():
+            if len(ticks) != 1:
+                raise BridgeValidationError(
+                    "persisted time observation proposals do not share one causal tick"
+                )
+            observation = self._observations[message_id][0]
+            time_observations_by_actor.setdefault(observation.actor_id, []).append(
+                (observation.sequence, next(iter(ticks)))
+            )
+        for observations in time_observations_by_actor.values():
+            ordered = sorted(observations)
+            if any(later_tick <= earlier_tick for (_, earlier_tick), (_, later_tick) in zip(ordered, ordered[1:])):
+                raise BridgeValidationError(
+                    "persisted proposal causal event does not originate from its observation"
+                )
         if migrated:
             self._persist()
 
