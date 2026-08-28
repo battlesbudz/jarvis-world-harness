@@ -266,6 +266,7 @@ class WorldOSBridge:
         self._engine_versions: dict[int, str] = {}
         self._buffered_observations: dict[str, Envelope] = {}
         self._delivery_results: dict[str, tuple[Envelope, ...]] = {}
+        self._delivery_observations: dict[str, tuple[str, ...]] = {}
         saved = world.extension_state(_BRIDGE_EXTENSION)
         if saved is not None:
             self._restore(saved)
@@ -296,6 +297,10 @@ class WorldOSBridge:
                 message_id: [proposal.to_dict() for proposal in proposals]
                 for message_id, proposals in sorted(self._delivery_results.items())
             },
+            "delivery_observations": {
+                message_id: list(observation_ids)
+                for message_id, observation_ids in sorted(self._delivery_observations.items())
+            },
         }
 
     def _persist(self) -> None:
@@ -306,11 +311,19 @@ class WorldOSBridge:
             "schema_version", "role_stations", "observations", "last_engine_sequence",
             "proposal_sequence", "pending", "decisions", "engine_events",
             "engine_versions", "buffered_observations", "delivery_results",
+            "delivery_observations",
         }
-        legacy_required = required - {"buffered_observations", "delivery_results"}
-        migrated = set(state) == legacy_required
-        if migrated:
+        legacy_required = required - {
+            "buffered_observations", "delivery_results", "delivery_observations"
+        }
+        previous_required = required - {"delivery_observations"}
+        state_fields = set(state)
+        migrated = state_fields == legacy_required or state_fields == previous_required
+        migrate_delivery_observations = migrated
+        if set(state) == legacy_required:
             state = {**dict(state), "buffered_observations": [], "delivery_results": {}}
+        if set(state) == previous_required:
+            state = {**dict(state), "delivery_observations": {}}
         if set(state) != required or not _is_supported_schema_version(state.get("schema_version")):
             raise BridgeValidationError("persisted bridge state is incompatible")
         if state.get("role_stations") != self.role_stations:
@@ -349,6 +362,50 @@ class WorldOSBridge:
                 for message_id, proposals in state["delivery_results"].items()
             }
             self._observations = observations
+            if migrate_delivery_observations:
+                delivery_observations: dict[str, tuple[str, ...]] = {}
+                covered_observations: set[str] = set()
+                for message_id, proposals in self._delivery_results.items():
+                    trigger = observations.get(message_id)
+                    if trigger is None:
+                        delivery_observations[message_id] = (message_id,)
+                        continue
+                    correlated = {
+                        proposal.correlation_id for proposal in proposals
+                        if proposal.correlation_id in observations
+                    }
+                    last_sequence = max(
+                        [trigger[0].sequence]
+                        + [observations[correlation_id][0].sequence for correlation_id in correlated]
+                    )
+                    observation_ids = tuple(
+                        observation.message_id
+                        for observation, _proposals in sorted(
+                            observations.values(), key=lambda item: item[0].sequence
+                        )
+                        if observation.actor_id == trigger[0].actor_id
+                        and trigger[0].sequence <= observation.sequence <= last_sequence
+                    )
+                    delivery_observations[message_id] = observation_ids
+                    covered_observations.update(observation_ids)
+                for message_id, (observation, proposals) in observations.items():
+                    if message_id not in covered_observations:
+                        delivery_observations[message_id] = (message_id,)
+                        self._delivery_results[message_id] = proposals
+                self._delivery_observations = delivery_observations
+            else:
+                if not isinstance(state["delivery_observations"], Mapping):
+                    raise BridgeValidationError("persisted delivery observations must be an object")
+                self._delivery_observations = {
+                    str(message_id): tuple(observation_ids)
+                    for message_id, observation_ids in state["delivery_observations"].items()
+                }
+                if any(
+                    not isinstance(observation_ids, (list, tuple))
+                    or any(not isinstance(item, str) for item in observation_ids)
+                    for observation_ids in state["delivery_observations"].values()
+                ):
+                    raise BridgeValidationError("persisted delivery observation identities are malformed")
         except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
             raise BridgeValidationError(f"persisted bridge state is malformed: {error}") from error
         restored_observation_sequences: dict[str, list[int]] = {}
@@ -362,35 +419,37 @@ class WorldOSBridge:
         if any(proposal.message_id not in self._pending for _observation, proposals in self._observations.values() for proposal in proposals):
             raise BridgeValidationError("persisted observation references an unknown proposal")
         for observation, proposals in self._observations.values():
+            self._validate_observation(observation)
             for proposal in proposals:
                 canonical = self._pending.get(proposal.message_id)
                 if canonical != proposal or proposal.correlation_id != observation.message_id:
                     raise BridgeValidationError("persisted observation proposal does not match the canonical pending proposal")
         delivered_proposal_ids: list[str] = []
-        for message_id, proposals in self._delivery_results.items():
-            if message_id not in self._observations:
-                raise BridgeValidationError("persisted delivery result does not match an applied observation")
-            correlation_ids: list[str] = []
-            for proposal in proposals:
-                canonical = self._pending.get(proposal.message_id)
-                if canonical != proposal:
-                    raise BridgeValidationError("persisted delivery result does not match the canonical pending proposal")
-                if not correlation_ids or correlation_ids[-1] != proposal.correlation_id:
-                    correlation_ids.append(proposal.correlation_id)
-                delivered_proposal_ids.append(proposal.message_id)
-            if correlation_ids and correlation_ids[0] != message_id:
-                raise BridgeValidationError("persisted delivery result does not start with its applied observation")
-            for offset, correlation_id in enumerate(correlation_ids):
-                delivered = self._observations.get(correlation_id)
-                if delivered is None or tuple(
-                    item for item in proposals if item.correlation_id == correlation_id
-                ) != delivered[1]:
-                    raise BridgeValidationError("persisted delivery result correlations do not match applied observations")
-                trigger = self._observations[message_id][0]
-                observation = delivered[0]
-                if observation.actor_id != trigger.actor_id or observation.sequence != trigger.sequence + offset:
-                    raise BridgeValidationError("persisted delivery result observation ordering is invalid")
-        if not migrated and sorted(delivered_proposal_ids) != sorted(self._pending):
+        delivered_observation_ids: list[str] = []
+        if set(self._delivery_results) != set(self._delivery_observations):
+            raise BridgeValidationError("persisted delivery result and observation groups do not match")
+        for message_id, observation_ids in self._delivery_observations.items():
+            if not observation_ids or observation_ids[0] != message_id or len(set(observation_ids)) != len(observation_ids):
+                raise BridgeValidationError("persisted delivery observation group identity is invalid")
+            delivered = [self._observations.get(observation_id) for observation_id in observation_ids]
+            if any(item is None for item in delivered):
+                raise BridgeValidationError("persisted delivery group references an unknown observation")
+            trigger = delivered[0][0]
+            if any(
+                item[0].actor_id != trigger.actor_id or item[0].sequence != trigger.sequence + offset
+                for offset, item in enumerate(delivered)
+            ):
+                raise BridgeValidationError("persisted delivery observation ordering is invalid")
+            expected_proposals = tuple(
+                proposal for item in delivered for proposal in item[1]
+            )
+            if self._delivery_results[message_id] != expected_proposals:
+                raise BridgeValidationError("persisted delivery result does not match its applied observations")
+            delivered_proposal_ids.extend(proposal.message_id for proposal in expected_proposals)
+            delivered_observation_ids.extend(observation_ids)
+        if sorted(delivered_observation_ids) != sorted(self._observations):
+            raise BridgeValidationError("persisted delivery groups do not cover applied observations exactly once")
+        if sorted(delivered_proposal_ids) != sorted(self._pending):
             raise BridgeValidationError("persisted delivery results do not cover the canonical pending proposals exactly once")
         decision_sequences = [decision.outcome.sequence for decision in self._decisions.values()]
         if len(set(decision_sequences)) != len(decision_sequences):
@@ -607,6 +666,7 @@ class WorldOSBridge:
             delivered.extend(proposals)
         result = tuple(delivered)
         self._delivery_results[observation.message_id] = result
+        self._delivery_observations[observation.message_id] = tuple(item.message_id for item in ordered)
         self._persist()
         return result
 

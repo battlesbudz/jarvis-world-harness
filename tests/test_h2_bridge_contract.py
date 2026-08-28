@@ -6,12 +6,14 @@ import unittest
 from pathlib import Path
 
 from world_os import (
+    Actor,
     BRIDGE_SCHEMA_VERSION,
     BridgeValidationError,
     EngineAuthority,
     EngineDecision,
     Envelope,
     WorldOSBridge,
+    World,
 )
 from world_os.scenarios import albion_world
 
@@ -279,9 +281,28 @@ class H2BridgeContractTest(unittest.TestCase):
             tampered_delivery_world = type(tampered_delivery_bridge.world).load(
                 path, expected_state_digest=tampered_delivery_digest
             )
-            with self.assertRaisesRegex(BridgeValidationError, "canonical pending proposal"):
+            with self.assertRaisesRegex(BridgeValidationError, "delivery result"):
                 WorldOSBridge(
                     tampered_delivery_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
+            invalid_observation_bridge = h2_bridge()
+            invalid_observation_bridge.ingest_engine_observation(
+                envelope("engine-observation:invalid-restored", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            invalid_observation_state = invalid_observation_bridge.world.extension_state("h2_bridge")
+            invalid_observation_state["observations"][0]["envelope"]["payload"] = {"ticks": 2}
+            invalid_observation_bridge.world.set_extension_state("h2_bridge", invalid_observation_state)
+            invalid_observation_digest = invalid_observation_bridge.world.state_digest()
+            invalid_observation_bridge.world.save(path)
+            invalid_observation_world = type(invalid_observation_bridge.world).load(
+                path, expected_state_digest=invalid_observation_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "time advance requires one tick"):
+                WorldOSBridge(
+                    invalid_observation_world,
                     {"ferryman": "ferry-dock", "baker": "bakery"},
                     PROPOSAL_ORIGIN_KEY,
                 )
@@ -290,6 +311,7 @@ class H2BridgeContractTest(unittest.TestCase):
             legacy_state = legacy_bridge.world.extension_state("h2_bridge")
             legacy_state.pop("buffered_observations")
             legacy_state.pop("delivery_results")
+            legacy_state.pop("delivery_observations")
             legacy_bridge.world.set_extension_state("h2_bridge", legacy_state)
             legacy_digest = legacy_bridge.world.state_digest()
             legacy_bridge.world.save(path)
@@ -543,6 +565,41 @@ class H2BridgeContractTest(unittest.TestCase):
                     {"ferryman": "ferry-dock", "baker": "bakery"},
                     PROPOSAL_ORIGIN_KEY,
                 )
+
+    def test_delivery_groups_preserve_observations_without_proposals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            world = World(
+                2203,
+                [
+                    Actor("bio", "The Bio", "bio", "wanderer", ("freedom",)),
+                    Actor("mara", "Mara", "thinker", "captain", ("protect_community",)),
+                ],
+                crisis_actor="mara",
+            )
+            bridge = WorldOSBridge(world, {}, PROPOSAL_ORIGIN_KEY)
+            request = envelope(
+                "engine-observation:zero-proposal:2",
+                2,
+                "bio",
+                "npc_request",
+                {"target_id": "mara", "action": "wait"},
+            )
+            self.assertEqual(bridge.ingest_engine_observation(request), ())
+            advance = envelope(
+                "engine-observation:zero-proposal:1", 1, "bio", "time_advance", {"ticks": 1}
+            )
+            delivered = bridge.ingest_engine_observation(advance)
+            self.assertEqual(len(delivered), 1)
+            self.assertEqual(delivered[0].correlation_id, request.message_id)
+
+            path = Path(directory) / "zero-proposal.json"
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+            resumed = WorldOSBridge(
+                World.load(path, expected_state_digest=trusted), {}, PROPOSAL_ORIGIN_KEY
+            )
+            self.assertEqual(resumed.ingest_engine_observation(advance), delivered)
+            self.assertEqual(resumed.ingest_engine_observation(request), delivered)
 
     def test_stale_impossible_unauthorized_and_conflicting_inputs_do_not_mutate(self):
         bridge = h2_bridge()

@@ -1,5 +1,7 @@
 # Progress
 
+- PR #4 twelfth review hardening on 2026-08-28: retry delivery groups now persist drained observation identities separately from emitted proposals, preserving valid zero-proposal observations through reload, and every restored applied observation is revalidated against the live engine-observation contract.
+
 - PR #4 eleventh review hardening on 2026-08-28: restored delivery results now bind exact canonical pending proposals to applied observation correlations, bridge outcomes reject reused ordering slots, and authoritative engine-event state versions require exact non-boolean integers. Focused regressions cover tampered retry envelopes, separate-authority outcome collisions, and boolean/float event versions.
 
 - PR #2 ninth review hardening on 2026-08-24: awakening transitions and their independent goals now use the authoritative internal proposal path; validation recomputes contributor identity, Bio provenance, distinct ticks, threshold score, cognition, location, and payload evidence before either mutation becomes durable. Thinker genesis goals use the same validated path. Fifteen focused tests, the full H1 gate, and the complete H0 regression gate passed.
