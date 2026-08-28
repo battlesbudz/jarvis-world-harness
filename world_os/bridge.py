@@ -896,16 +896,30 @@ class EngineAuthority:
         if any(not re.fullmatch(r"[0-9a-f]{64}", digest) for digest in authority._event_history):
             raise BridgeValidationError("persisted engine event history contains an invalid digest")
         applied_decisions = [
-            decision
-            for _proposal_digest, decision, _proposal in authority._processed.values()
+            (decision, proposal)
+            for _proposal_digest, decision, proposal in authority._processed.values()
             if decision.engine_event is not None
         ]
-        applied_versions = [int(decision.engine_event.payload["state_version"]) for decision in applied_decisions]
+        for decision, proposal in applied_decisions:
+            expected_action = {
+                key: proposal.payload.get(key)
+                for key in ("action_type", "command", "destination")
+            }
+            actual_action = {
+                key: decision.engine_event.payload.get(key)
+                for key in expected_action
+            }
+            if actual_action != expected_action:
+                raise BridgeValidationError("persisted applied decision does not match its authenticated proposal")
+        applied_versions = [
+            int(decision.engine_event.payload["state_version"])
+            for decision, _proposal in applied_decisions
+        ]
         if len(applied_versions) != len(set(applied_versions)):
             raise BridgeValidationError("persisted engine state version is duplicated")
         applied_by_version = {
             int(decision.engine_event.payload["state_version"]): decision.engine_event.digest()
-            for decision in applied_decisions
+            for decision, _proposal in applied_decisions
         }
         expected_history = [applied_by_version.get(version) for version in range(1, authority._state_version + 1)]
         if authority._state_version != len(authority._event_history) or expected_history != authority._event_history:
@@ -926,6 +940,23 @@ class EngineAuthority:
         }
         if authority._last_sequence != expected_last_sequence:
             raise BridgeValidationError("persisted engine proposal high-water marks do not match processed decisions")
+        expected_last_action: dict[str, dict[str, Any]] = {}
+        expected_positions: dict[str, str] = {}
+        for decision, _proposal in sorted(
+            applied_decisions,
+            key=lambda item: int(item[0].engine_event.payload["state_version"]),
+        ):
+            event = decision.engine_event
+            expected_last_action[event.actor_id] = {
+                "action_type": event.payload["action_type"],
+                "command": event.payload["command"],
+            }
+            if isinstance(event.payload["destination"], str):
+                expected_positions[event.actor_id] = event.payload["destination"]
+        if authority._last_action != expected_last_action:
+            raise BridgeValidationError("persisted engine last actions do not match applied event history")
+        if any(authority._positions.get(actor_id) != position for actor_id, position in expected_positions.items()):
+            raise BridgeValidationError("persisted engine positions do not match applied event history")
         return authority
 
     def conflicts(self) -> tuple[dict[str, str], ...]:

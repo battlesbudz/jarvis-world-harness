@@ -470,6 +470,33 @@ class H2BridgeContractTest(unittest.TestCase):
             with self.assertRaisesRegex(BridgeValidationError, "proposal (origin proof|identity or digest)"):
                 EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
 
+            substituted_proposal = json.loads(json.dumps(applied_payloads[0]))
+            alternate_bridge = WorldOSBridge(
+                albion_world(2202),
+                {"ferryman": "bakery", "baker": "ferry-dock"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            alternate_proposals = alternate_bridge.ingest_engine_observation(
+                envelope("engine-observation:duplicate-slots", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            processed = substituted_proposal["state"]["processed"][0]
+            alternate = next(
+                item for item in alternate_proposals
+                if item.message_id == processed["proposal"]["message_id"]
+            )
+            processed["proposal"] = alternate.to_dict()
+            processed["proposal_digest"] = alternate.digest()
+            digest = write_payload(substituted_proposal)
+            with self.assertRaisesRegex(BridgeValidationError, "does not match its authenticated proposal"):
+                EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
+            stale_position = json.loads(json.dumps(applied_payloads[0]))
+            applied_actor = stale_position["state"]["processed"][0]["proposal"]["actor_id"]
+            stale_position["state"]["positions"][applied_actor] = "village-square"
+            digest = write_payload(stale_position)
+            with self.assertRaisesRegex(BridgeValidationError, "positions do not match applied event history"):
+                EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
             duplicate_state_version = applied_payloads[0]
             duplicate_state_version["state"]["processed"].extend(
                 applied_payloads[1]["state"]["processed"]

@@ -1,5 +1,7 @@
 # Progress
 
+- PR #4 fifteenth review hardening on 2026-08-28: restored applied decisions must match their authenticated proposal action fields, while physical positions and derived last-action state must match the ordered authoritative event history.
+
 - PR #4 fourteenth review hardening on 2026-08-28: processed authority records now persist the complete signed World OS proposal; restore revalidates its origin proof, identity, and digest, then derives actor sequence high-water marks exclusively from those authenticated envelopes.
 
 - PR #4 thirteenth review hardening on 2026-08-28: each processed engine proposal now persists its actor and proposal sequence, and restored per-actor high-water marks must exactly match that processed ledger before the authority can accept new work.
