@@ -313,18 +313,29 @@ class WorldOSBridge:
         try:
             pending = [Envelope.from_dict(item) for item in state["pending"]]
             decisions = [EngineDecision.from_dict(item) for item in state["decisions"]]
+            if len({item.message_id for item in pending}) != len(pending):
+                raise BridgeValidationError("persisted pending proposal identity is duplicated")
+            if len({item.outcome.message_id for item in decisions}) != len(decisions):
+                raise BridgeValidationError("persisted engine outcome identity is duplicated")
             observations = {}
             for item in state["observations"]:
                 observation = Envelope.from_dict(item["envelope"])
                 proposals = tuple(Envelope.from_dict(proposal) for proposal in item["proposals"])
+                if observation.message_id in observations:
+                    raise BridgeValidationError("persisted engine observation identity is duplicated")
                 observations[observation.message_id] = (observation, proposals)
             self._last_engine_sequence = _counter_map(state["last_engine_sequence"], "last_engine_sequence")
             self._proposal_sequence = _counter_map(state["proposal_sequence"], "proposal_sequence")
             self._pending = {item.message_id: item for item in pending}
             self._decisions = {item.outcome.message_id: item for item in decisions}
             self._engine_events = {str(key): str(value) for key, value in state["engine_events"].items()}
-            self._engine_versions = {int(key): str(value) for key, value in state["engine_versions"].items()}
+            engine_versions = [(int(key), str(value)) for key, value in state["engine_versions"].items()]
+            if len({version for version, _digest in engine_versions}) != len(engine_versions):
+                raise BridgeValidationError("persisted engine version identity is duplicated")
+            self._engine_versions = dict(engine_versions)
             buffered = [Envelope.from_dict(item) for item in state["buffered_observations"]]
+            if len({item.message_id for item in buffered}) != len(buffered):
+                raise BridgeValidationError("persisted buffered observation identity is duplicated")
             self._buffered_observations = {item.message_id: item for item in buffered}
             self._delivery_results = {
                 str(message_id): tuple(Envelope.from_dict(item) for item in proposals)

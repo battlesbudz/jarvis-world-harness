@@ -393,6 +393,26 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(len(second_proposals), 2)
             self.assertTrue(all(item.correlation_id == second.message_id for item in second_proposals))
 
+            duplicate_bridge = h2_bridge()
+            duplicate_bridge.ingest_engine_observation(second)
+            duplicate_bridge.ingest_engine_observation(
+                envelope("engine-observation:out-of-order:3", 3, "bio", "time_advance", {"ticks": 1})
+            )
+            duplicate_state = duplicate_bridge.world.extension_state("h2_bridge")
+            duplicate_state["buffered_observations"][1]["message_id"] = second.message_id
+            duplicate_bridge.world.set_extension_state("h2_bridge", duplicate_state)
+            duplicate_digest = duplicate_bridge.world.state_digest()
+            duplicate_bridge.world.save(path)
+            duplicate_world = type(duplicate_bridge.world).load(
+                path, expected_state_digest=duplicate_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "buffered observation identity is duplicated"):
+                WorldOSBridge(
+                    duplicate_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
     def test_stale_impossible_unauthorized_and_conflicting_inputs_do_not_mutate(self):
         bridge = h2_bridge()
         first = next(
