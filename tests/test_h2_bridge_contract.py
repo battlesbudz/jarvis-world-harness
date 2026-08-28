@@ -293,7 +293,7 @@ class H2BridgeContractTest(unittest.TestCase):
             lineage_bridge.receive_engine_decision(forked_first)
         lineage_bridge.receive_engine_decision(lineage_first)
 
-    def test_stale_authority_cannot_roll_back_state_version_with_a_newer_outcome(self):
+    def test_state_version_changes_are_bounded_by_outcome_ordering(self):
         bridge = h2_bridge()
         first_proposals = bridge.ingest_engine_observation(
             envelope("engine-observation:rollback:1", 1, "bio", "time_advance", {"ticks": 1})
@@ -325,9 +325,43 @@ class H2BridgeContractTest(unittest.TestCase):
             (2, 0),
         )
         before_rollback = bridge.world.state_digest()
-        with self.assertRaisesRegex(BridgeValidationError, "state version rolls back"):
+        with self.assertRaisesRegex(BridgeValidationError, "state version conflicts"):
             bridge.receive_engine_decision(stale_rejection)
         self.assertEqual(bridge.world.state_digest(), before_rollback)
+
+        hidden_mutation_bridge = h2_bridge()
+        hidden_first = next(
+            item
+            for item in hidden_mutation_bridge.ingest_engine_observation(
+                envelope("engine-observation:hidden:1", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            if item.actor_id == "elias"
+        )
+        hidden_second = next(
+            item
+            for item in hidden_mutation_bridge.ingest_engine_observation(
+                envelope("engine-observation:hidden:2", 2, "bio", "time_advance", {"ticks": 1})
+            )
+            if item.actor_id == "elias"
+        )
+        rejecting_fork = EngineAuthority(
+            {"elias": "village-square"},
+            {"elias": set()},
+            {"ferry-dock"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        hidden_mutation_bridge.receive_engine_decision(decide(rejecting_fork, hidden_first))
+        applying_fork = engine_authority()
+        self.assertEqual(decide(applying_fork, hidden_first).outcome.payload["state_version"], 1)
+        hidden_second_applied = decide(applying_fork, hidden_second)
+        self.assertEqual(
+            (hidden_second_applied.outcome.sequence, hidden_second_applied.outcome.payload["state_version"]),
+            (2, 2),
+        )
+        before_hidden = hidden_mutation_bridge.world.state_digest()
+        with self.assertRaisesRegex(BridgeValidationError, "state version conflicts"):
+            hidden_mutation_bridge.receive_engine_decision(hidden_second_applied)
+        self.assertEqual(hidden_mutation_bridge.world.state_digest(), before_hidden)
 
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:

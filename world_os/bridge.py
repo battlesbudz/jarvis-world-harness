@@ -543,16 +543,23 @@ class WorldOSBridge:
         decision_sequences = [decision.outcome.sequence for decision in self._decisions.values()]
         if len(set(decision_sequences)) != len(decision_sequences):
             raise BridgeValidationError("persisted engine outcome ordering slot is duplicated")
-        ordered_state_versions = [
-            int(decision.outcome.payload["state_version"])
-            for decision in sorted(self._decisions.values(), key=lambda item: item.outcome.sequence)
-        ]
+        ordered_decisions = sorted(self._decisions.values(), key=lambda item: item.outcome.sequence)
         if any(
-            later < earlier
-            for earlier, later in zip(ordered_state_versions, ordered_state_versions[1:])
+            int(later.outcome.payload["state_version"])
+            - int(earlier.outcome.payload["state_version"])
+            not in range(0, later.outcome.sequence - earlier.outcome.sequence + 1)
+            for earlier, later in zip(ordered_decisions, ordered_decisions[1:])
         ):
             raise BridgeValidationError(
-                "persisted engine outcome state versions roll back across decision ordering"
+                "persisted engine outcome state versions conflict with decision ordering"
+            )
+        if (
+            ordered_decisions
+            and int(ordered_decisions[0].outcome.payload["state_version"])
+            > ordered_decisions[0].outcome.sequence
+        ):
+            raise BridgeValidationError(
+                "persisted engine outcome state version exceeds its decision ordering"
             )
         decision_correlations: set[str] = set()
         expected_engine_events: dict[str, str] = {}
@@ -820,19 +827,22 @@ class WorldOSBridge:
             return
         outcome_sequence = decision.outcome.sequence
         state_version = int(decision.outcome.payload["state_version"])
+        if state_version > outcome_sequence:
+            raise BridgeValidationError(
+                "engine outcome state version exceeds its decision ordering"
+            )
         if any(
-            (
-                prior.outcome.sequence < outcome_sequence
-                and int(prior.outcome.payload["state_version"]) > state_version
+            not 0
+            <= (
+                state_version - int(prior.outcome.payload["state_version"])
+                if prior.outcome.sequence < outcome_sequence
+                else int(prior.outcome.payload["state_version"]) - state_version
             )
-            or (
-                prior.outcome.sequence > outcome_sequence
-                and int(prior.outcome.payload["state_version"]) < state_version
-            )
+            <= abs(outcome_sequence - prior.outcome.sequence)
             for prior in self._decisions.values()
         ):
             raise BridgeValidationError(
-                "engine outcome state version rolls back across decision ordering"
+                "engine outcome state version conflicts with decision ordering"
             )
         if any(item.outcome.correlation_id == proposal_id for item in self._decisions.values()):
             raise BridgeValidationError("World OS proposal already has an engine outcome")
