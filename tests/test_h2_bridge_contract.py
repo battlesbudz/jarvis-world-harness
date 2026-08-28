@@ -71,6 +71,17 @@ class H2BridgeContractTest(unittest.TestCase):
         with self.assertRaises(BridgeValidationError):
             envelope("engine-observation:nan", 2, "bio", "time_advance", {"ticks": math.nan})
 
+        incomplete_outcome = envelope(
+            "engine-outcome:incomplete",
+            1,
+            "elias",
+            "engine_proposal_outcome",
+            {"status": "rejected", "engine_event_id": None},
+            correlation_id="world-proposal:incomplete",
+        )
+        with self.assertRaisesRegex(BridgeValidationError, "payload fields"):
+            EngineDecision("rejected", incomplete_outcome)
+
     def test_observation_and_successful_proposal_are_exactly_once(self):
         bridge = h2_bridge()
         authority = engine_authority()
@@ -165,6 +176,19 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(resumed.world.tick, 2)
             self.assertTrue(all(item.sequence == 2 for item in next_proposals))
 
+            engine_path = Path(directory) / "engine.json"
+            authority.save(engine_path)
+            engine_digest = authority.snapshot_digest()
+            resumed_authority = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=engine_digest,
+            )
+            before_engine_retry = resumed_authority.state()
+            self.assertEqual(resumed_authority.validate_and_apply(proposals[0]), decision)
+            self.assertEqual(resumed_authority.state(), before_engine_retry)
+            self.assertEqual(resumed_authority.state()["state_version"], 1)
+
     def test_stale_impossible_unauthorized_and_conflicting_inputs_do_not_mutate(self):
         bridge = h2_bridge()
         first = next(
@@ -240,6 +264,11 @@ class H2BridgeContractTest(unittest.TestCase):
         forged_decision = forged_authority.validate_and_apply(forged)
         self.assertEqual((forged_decision.status, forged_decision.reason), ("rejected", "untrusted_world_os_origin"))
         self.assertEqual(forged_authority.state(), before)
+
+        high_sequence_forgery = Envelope.from_dict({**forged.to_dict(), "sequence": 999})
+        fresh_authority = engine_authority()
+        self.assertEqual(fresh_authority.validate_and_apply(high_sequence_forgery).reason, "untrusted_world_os_origin")
+        self.assertEqual(fresh_authority.validate_and_apply(first).status, "applied")
 
     def test_thinker_choice_originates_in_world_os_and_evidence_is_machine_readable(self):
         bridge = h2_bridge()

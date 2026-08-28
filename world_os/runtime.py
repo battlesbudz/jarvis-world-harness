@@ -898,15 +898,17 @@ class World:
         }
 
     def state(self) -> dict[str, Any]:
-        return {
+        state = {
             "schema_version": SCHEMA_VERSION,
             "seed": self.seed,
             "tick": self.tick,
             "crisis_actor": self.crisis_actor,
             "actors": [self.actors[key].to_dict() for key in sorted(self.actors)],
             "events": [event.to_dict() for event in self.events],
-            "extensions": json.loads(_canonical(self._extensions)),
         }
+        if self._extensions:
+            state["extensions"] = json.loads(_canonical(self._extensions))
+        return state
 
     def extension_state(self, namespace: str) -> dict[str, Any] | None:
         state = self._extensions.get(namespace)
