@@ -691,8 +691,15 @@ class EngineAuthority:
             for item in state["processed"]:
                 decision = EngineDecision.from_dict(item["decision"])
                 message_id = str(item["message_id"])
+                if message_id in authority._processed:
+                    raise BridgeValidationError("persisted engine proposal identity is duplicated")
                 if decision.outcome.correlation_id != message_id:
                     raise BridgeValidationError("persisted engine decision correlation is invalid")
+                if not hmac.compare_digest(
+                    str(decision.outcome.payload["authority_proof"]),
+                    _authority_proof(decision.outcome, decision.engine_event, authority._proposal_origin_key),
+                ):
+                    raise BridgeValidationError("persisted engine decision authority proof is invalid")
                 authority._processed[message_id] = (str(item["proposal_digest"]), decision)
             authority._message_conflicts = [dict(item) for item in state["message_conflicts"]]
             authority._event_history = [str(digest) for digest in state["event_history"]]
@@ -704,20 +711,26 @@ class EngineAuthority:
             raise BridgeValidationError("persisted engine authority does not round-trip exactly")
         if any(not re.fullmatch(r"[0-9a-f]{64}", digest) for digest in authority._event_history):
             raise BridgeValidationError("persisted engine event history contains an invalid digest")
-        applied_by_version = {
-            int(decision.engine_event.payload["state_version"]): decision.engine_event.digest()
+        applied_decisions = [
+            decision
             for _proposal_digest, decision in authority._processed.values()
             if decision.engine_event is not None
+        ]
+        applied_versions = [int(decision.engine_event.payload["state_version"]) for decision in applied_decisions]
+        if len(applied_versions) != len(set(applied_versions)):
+            raise BridgeValidationError("persisted engine state version is duplicated")
+        applied_by_version = {
+            int(decision.engine_event.payload["state_version"]): decision.engine_event.digest()
+            for decision in applied_decisions
         }
         expected_history = [applied_by_version.get(version) for version in range(1, authority._state_version + 1)]
         if authority._state_version != len(authority._event_history) or expected_history != authority._event_history:
             raise BridgeValidationError("persisted engine state version does not match its event history")
-        max_decision_sequence = max(
-            (decision.outcome.sequence for _digest, decision in authority._processed.values()),
-            default=0,
+        decision_sequences = sorted(
+            decision.outcome.sequence for _digest, decision in authority._processed.values()
         )
-        if authority._decision_sequence != max_decision_sequence:
-            raise BridgeValidationError("persisted engine decision counter does not match its ledger")
+        if decision_sequences != list(range(1, authority._decision_sequence + 1)):
+            raise BridgeValidationError("persisted engine decision ordering is not unique and contiguous")
         return authority
 
     def conflicts(self) -> tuple[dict[str, str], ...]:

@@ -307,6 +307,67 @@ class H2BridgeContractTest(unittest.TestCase):
                     expected_snapshot_digest=invalid_counter_digest,
                 )
 
+    def test_engine_restore_rejects_duplicate_ordering_slots(self):
+        with tempfile.TemporaryDirectory() as directory:
+            proposals = h2_bridge().ingest_engine_observation(
+                envelope("engine-observation:duplicate-slots", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            paths = [Path(directory) / f"authority-{index}.json" for index in range(2)]
+
+            def load_payloads(authorities):
+                payloads = []
+                for authority, path in zip(authorities, paths):
+                    authority.save(path)
+                    payloads.append(json.loads(path.read_text(encoding="utf-8")))
+                return payloads
+
+            def write_payload(payload):
+                canonical = json.dumps(
+                    payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+                )
+                digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                payload["digest"] = digest
+                paths[0].write_text(json.dumps(payload), encoding="utf-8")
+                return digest
+
+            rejecting_authorities = [
+                EngineAuthority(
+                    {"elias": "village-square", "nella": "village-square", "mara": "captain-post"},
+                    {"elias": set(), "nella": set(), "mara": set()},
+                    {"ferry-dock", "bakery", "captain-post"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+                for _ in range(2)
+            ]
+            for authority, proposal in zip(rejecting_authorities, proposals):
+                self.assertEqual(authority.validate_and_apply(proposal).status, "rejected")
+            rejected_payloads = load_payloads(rejecting_authorities)
+            duplicate_decision_sequence = rejected_payloads[0]
+            duplicate_decision_sequence["state"]["processed"].extend(
+                rejected_payloads[1]["state"]["processed"]
+            )
+            duplicate_decision_sequence["state"]["last_sequence"].update(
+                rejected_payloads[1]["state"]["last_sequence"]
+            )
+            digest = write_payload(duplicate_decision_sequence)
+            with self.assertRaisesRegex(BridgeValidationError, "ordering is not unique and contiguous"):
+                EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
+            applying_authorities = [engine_authority(), engine_authority()]
+            for authority, proposal in zip(applying_authorities, proposals):
+                self.assertEqual(authority.validate_and_apply(proposal).status, "applied")
+            applied_payloads = load_payloads(applying_authorities)
+            duplicate_state_version = applied_payloads[0]
+            duplicate_state_version["state"]["processed"].extend(
+                applied_payloads[1]["state"]["processed"]
+            )
+            duplicate_state_version["state"]["last_sequence"].update(
+                applied_payloads[1]["state"]["last_sequence"]
+            )
+            digest = write_payload(duplicate_state_version)
+            with self.assertRaisesRegex(BridgeValidationError, "state version is duplicated"):
+                EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
     def test_out_of_order_observations_buffer_across_reload_and_apply_in_order(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "buffered-world.json"
