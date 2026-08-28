@@ -295,12 +295,29 @@ class H2BridgeContractTest(unittest.TestCase):
             version_two_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             version_two_payload["digest"] = version_two_digest
             engine_path.write_text(json.dumps(version_two_payload), encoding="utf-8")
-            migrated_buffer = EngineAuthority.load(
+            with self.assertRaisesRegex(BridgeValidationError, "ambiguous response-batch history"):
+                EngineAuthority.load(
+                    engine_path,
+                    PROPOSAL_ORIGIN_KEY,
+                    expected_snapshot_digest=version_two_digest,
+                )
+
+            authority.save(engine_path)
+            unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))
+            unambiguous_v2["state"].pop("response_batches")
+            unambiguous_v2["state"]["schema_version"] = 2
+            canonical = json.dumps(
+                unambiguous_v2["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            unambiguous_v2_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            unambiguous_v2["digest"] = unambiguous_v2_digest
+            engine_path.write_text(json.dumps(unambiguous_v2), encoding="utf-8")
+            migrated_v2 = EngineAuthority.load(
                 engine_path,
                 PROPOSAL_ORIGIN_KEY,
-                expected_snapshot_digest=version_two_digest,
+                expected_snapshot_digest=unambiguous_v2_digest,
             )
-            self.assertEqual(migrated_buffer.validate_and_apply(first_elias), drained)
+            self.assertEqual(decide(migrated_v2, proposals[0]), decision)
 
             authority.save(engine_path)
             previous_payload = json.loads(engine_path.read_text(encoding="utf-8"))

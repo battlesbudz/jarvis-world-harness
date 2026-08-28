@@ -891,26 +891,19 @@ class EngineAuthority:
             raise BridgeValidationError("persisted engine authority does not match the trusted snapshot boundary")
         if previous_shape:
             try:
-                ordered = sorted(
-                    state["processed"],
-                    key=lambda item: item["decision"]["outcome"]["sequence"],
-                )
-                response_batches = []
-                for index, item in enumerate(ordered):
-                    decision_ids = [item["message_id"]]
-                    prior = item
-                    for following in ordered[index + 1:]:
-                        if (
-                            following["decision"]["outcome"]["sequence"]
-                            != prior["decision"]["outcome"]["sequence"] + 1
-                            or following["proposal"]["actor_id"] != prior["proposal"]["actor_id"]
-                            or following["proposal"]["sequence"] != prior["proposal"]["sequence"] + 1
-                        ):
-                            break
-                        decision_ids.append(following["message_id"])
-                        prior = following
-                    response_batches.append({"message_id": item["message_id"], "decision_ids": decision_ids})
+                if state["schema_version"] == 2:
+                    processed_actors = [item["proposal"]["actor_id"] for item in state["processed"]]
+                    if len(processed_actors) != len(set(processed_actors)):
+                        raise BridgeValidationError(
+                            "persisted v2 engine authority has ambiguous response-batch history"
+                        )
+                response_batches = [
+                    {"message_id": item["message_id"], "decision_ids": [item["message_id"]]}
+                    for item in state["processed"]
+                ]
                 response_batches.sort(key=lambda item: item["message_id"])
+            except BridgeValidationError:
+                raise
             except (KeyError, TypeError, ValueError, AttributeError) as error:
                 raise BridgeValidationError(
                     f"persisted engine authority is malformed: {error}"
