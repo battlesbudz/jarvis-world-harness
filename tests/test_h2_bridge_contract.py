@@ -87,6 +87,23 @@ class H2BridgeContractTest(unittest.TestCase):
         with self.assertRaisesRegex(BridgeValidationError, "payload fields"):
             EngineDecision("rejected", incomplete_outcome)
 
+        proposal = h2_bridge().ingest_engine_observation(
+            envelope("engine-observation:state-version", 1, "bio", "time_advance", {"ticks": 1})
+        )[0]
+        applied = engine_authority().validate_and_apply(proposal)
+        for malformed_version in (True, 1.0):
+            malformed_event = Envelope.from_dict(
+                {
+                    **applied.engine_event.to_dict(),
+                    "payload": {
+                        **applied.engine_event.to_dict()["payload"],
+                        "state_version": malformed_version,
+                    },
+                }
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "event state_version"):
+                EngineDecision("applied", applied.outcome, malformed_event)
+
     def test_observation_and_successful_proposal_are_exactly_once(self):
         bridge = h2_bridge()
         authority = engine_authority()
@@ -250,6 +267,25 @@ class H2BridgeContractTest(unittest.TestCase):
                     PROPOSAL_ORIGIN_KEY,
                 )
 
+            tampered_delivery_bridge = h2_bridge()
+            tampered_delivery_bridge.ingest_engine_observation(
+                envelope("engine-observation:delivery", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            tampered_delivery_state = tampered_delivery_bridge.world.extension_state("h2_bridge")
+            tampered_delivery_state["delivery_results"]["engine-observation:delivery"][0]["payload"]["command"] = "tampered"
+            tampered_delivery_bridge.world.set_extension_state("h2_bridge", tampered_delivery_state)
+            tampered_delivery_digest = tampered_delivery_bridge.world.state_digest()
+            tampered_delivery_bridge.world.save(path)
+            tampered_delivery_world = type(tampered_delivery_bridge.world).load(
+                path, expected_state_digest=tampered_delivery_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "canonical pending proposal"):
+                WorldOSBridge(
+                    tampered_delivery_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
             legacy_bridge = h2_bridge()
             legacy_state = legacy_bridge.world.extension_state("h2_bridge")
             legacy_state.pop("buffered_observations")
@@ -389,6 +425,41 @@ class H2BridgeContractTest(unittest.TestCase):
             digest = write_payload(duplicate_state_version)
             with self.assertRaisesRegex(BridgeValidationError, "state version is duplicated"):
                 EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
+            duplicate_outcome_bridge = h2_bridge()
+            duplicate_outcome_proposals = duplicate_outcome_bridge.ingest_engine_observation(
+                envelope("engine-observation:duplicate-outcomes", 1, "bio", "time_advance", {"ticks": 1})
+            )
+
+            def rejecting_authority():
+                return EngineAuthority(
+                    {"elias": "village-square", "nella": "village-square", "mara": "captain-post"},
+                    {"elias": set(), "nella": set(), "mara": set()},
+                    {"ferry-dock", "bakery", "captain-post"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
+            duplicate_outcome_bridge.receive_engine_decision(
+                rejecting_authority().validate_and_apply(duplicate_outcome_proposals[0])
+            )
+            duplicate_outcome = rejecting_authority().validate_and_apply(duplicate_outcome_proposals[1])
+            with self.assertRaisesRegex(BridgeValidationError, "outcome sequence was reused"):
+                duplicate_outcome_bridge.receive_engine_decision(duplicate_outcome)
+
+            duplicate_outcome_state = duplicate_outcome_bridge.world.extension_state("h2_bridge")
+            duplicate_outcome_state["decisions"].append(duplicate_outcome.to_dict())
+            duplicate_outcome_bridge.world.set_extension_state("h2_bridge", duplicate_outcome_state)
+            duplicate_outcome_digest = duplicate_outcome_bridge.world.state_digest()
+            duplicate_outcome_bridge.world.save(paths[0])
+            duplicate_outcome_world = type(duplicate_outcome_bridge.world).load(
+                paths[0], expected_state_digest=duplicate_outcome_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "outcome ordering slot is duplicated"):
+                WorldOSBridge(
+                    duplicate_outcome_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
 
     def test_out_of_order_observations_buffer_across_reload_and_apply_in_order(self):
         with tempfile.TemporaryDirectory() as directory:

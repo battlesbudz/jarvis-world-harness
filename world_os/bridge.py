@@ -161,7 +161,12 @@ class EngineDecision:
                 raise BridgeValidationError("engine outcome does not reference its authoritative event")
             if self.engine_event.actor_id != self.outcome.actor_id:
                 raise BridgeValidationError("engine event and outcome actors do not match")
-            if self.engine_event.payload.get("state_version") != self.outcome.payload.get("state_version"):
+            engine_state_version = _counter(
+                self.engine_event.payload.get("state_version"),
+                "authoritative engine event state_version",
+                minimum=1,
+            )
+            if engine_state_version != state_version:
                 raise BridgeValidationError("engine event and outcome state versions do not match")
             if set(self.engine_event.payload) != {
                 "action_type", "command", "destination", "prior_event_digests", "state_version"
@@ -346,14 +351,50 @@ class WorldOSBridge:
             self._observations = observations
         except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
             raise BridgeValidationError(f"persisted bridge state is malformed: {error}") from error
+        restored_observation_sequences: dict[str, list[int]] = {}
+        for observation, _proposals in self._observations.values():
+            restored_observation_sequences.setdefault(observation.actor_id, []).append(observation.sequence)
+        if any(
+            sorted(sequences) != list(range(1, len(sequences) + 1))
+            for sequences in restored_observation_sequences.values()
+        ):
+            raise BridgeValidationError("persisted engine observation ordering is not unique and contiguous")
         if any(proposal.message_id not in self._pending for _observation, proposals in self._observations.values() for proposal in proposals):
             raise BridgeValidationError("persisted observation references an unknown proposal")
-        if any(
-            proposal.message_id not in self._pending
-            for proposals in self._delivery_results.values()
-            for proposal in proposals
-        ):
-            raise BridgeValidationError("persisted delivery result references an unknown proposal")
+        for observation, proposals in self._observations.values():
+            for proposal in proposals:
+                canonical = self._pending.get(proposal.message_id)
+                if canonical != proposal or proposal.correlation_id != observation.message_id:
+                    raise BridgeValidationError("persisted observation proposal does not match the canonical pending proposal")
+        delivered_proposal_ids: list[str] = []
+        for message_id, proposals in self._delivery_results.items():
+            if message_id not in self._observations:
+                raise BridgeValidationError("persisted delivery result does not match an applied observation")
+            correlation_ids: list[str] = []
+            for proposal in proposals:
+                canonical = self._pending.get(proposal.message_id)
+                if canonical != proposal:
+                    raise BridgeValidationError("persisted delivery result does not match the canonical pending proposal")
+                if not correlation_ids or correlation_ids[-1] != proposal.correlation_id:
+                    correlation_ids.append(proposal.correlation_id)
+                delivered_proposal_ids.append(proposal.message_id)
+            if correlation_ids and correlation_ids[0] != message_id:
+                raise BridgeValidationError("persisted delivery result does not start with its applied observation")
+            for offset, correlation_id in enumerate(correlation_ids):
+                delivered = self._observations.get(correlation_id)
+                if delivered is None or tuple(
+                    item for item in proposals if item.correlation_id == correlation_id
+                ) != delivered[1]:
+                    raise BridgeValidationError("persisted delivery result correlations do not match applied observations")
+                trigger = self._observations[message_id][0]
+                observation = delivered[0]
+                if observation.actor_id != trigger.actor_id or observation.sequence != trigger.sequence + offset:
+                    raise BridgeValidationError("persisted delivery result observation ordering is invalid")
+        if not migrated and sorted(delivered_proposal_ids) != sorted(self._pending):
+            raise BridgeValidationError("persisted delivery results do not cover the canonical pending proposals exactly once")
+        decision_sequences = [decision.outcome.sequence for decision in self._decisions.values()]
+        if len(set(decision_sequences)) != len(decision_sequences):
+            raise BridgeValidationError("persisted engine outcome ordering slot is duplicated")
         decision_correlations: set[str] = set()
         expected_engine_events: dict[str, str] = {}
         expected_engine_versions: dict[int, str] = {}
@@ -581,6 +622,7 @@ class WorldOSBridge:
             raise BridgeValidationError("engine outcome does not correlate to a pending World OS proposal")
         if decision.outcome.actor_id != proposal.actor_id:
             raise BridgeValidationError("engine outcome actor does not match its proposal")
+        existing = self._decisions.get(decision.outcome.message_id)
         if decision.status == "applied":
             engine_event = decision.engine_event
             expected = {
@@ -601,7 +643,10 @@ class WorldOSBridge:
             existing_version_digest = self._engine_versions.get(state_version)
             if existing_version_digest is not None and existing_version_digest != engine_event.digest():
                 raise BridgeValidationError("authoritative engine state version was reused by a different event")
-        existing = self._decisions.get(decision.outcome.message_id)
+        if existing is None and any(
+            item.outcome.sequence == decision.outcome.sequence for item in self._decisions.values()
+        ):
+            raise BridgeValidationError("engine outcome sequence was reused by a different decision")
         if existing:
             if existing.digest() != decision.digest():
                 raise BridgeValidationError("engine outcome id was reused with different content")
