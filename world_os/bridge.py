@@ -318,7 +318,9 @@ class WorldOSBridge:
         }
         previous_required = required - {"delivery_observations"}
         state_fields = set(state)
-        migrated = state_fields == legacy_required or state_fields == previous_required
+        legacy_migration = state_fields == legacy_required
+        previous_migration = state_fields == previous_required
+        migrated = legacy_migration or previous_migration
         migrate_delivery_observations = migrated
         if set(state) == legacy_required:
             state = {**dict(state), "buffered_observations": [], "delivery_results": {}}
@@ -390,8 +392,9 @@ class WorldOSBridge:
                     covered_observations.update(observation_ids)
                 for message_id, (observation, proposals) in observations.items():
                     if message_id not in covered_observations:
-                        delivery_observations[message_id] = (message_id,)
-                        self._delivery_results[message_id] = proposals
+                        if legacy_migration or not proposals:
+                            delivery_observations[message_id] = (message_id,)
+                            self._delivery_results[message_id] = proposals
                 self._delivery_observations = delivery_observations
             else:
                 if not isinstance(state["delivery_observations"], Mapping):

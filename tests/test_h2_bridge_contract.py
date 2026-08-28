@@ -288,6 +288,26 @@ class H2BridgeContractTest(unittest.TestCase):
                     PROPOSAL_ORIGIN_KEY,
                 )
 
+            incomplete_previous_bridge = h2_bridge()
+            incomplete_previous_bridge.ingest_engine_observation(
+                envelope("engine-observation:missing-delivery", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            incomplete_previous_state = incomplete_previous_bridge.world.extension_state("h2_bridge")
+            incomplete_previous_state.pop("delivery_observations")
+            incomplete_previous_state["delivery_results"] = {}
+            incomplete_previous_bridge.world.set_extension_state("h2_bridge", incomplete_previous_state)
+            incomplete_previous_digest = incomplete_previous_bridge.world.state_digest()
+            incomplete_previous_bridge.world.save(path)
+            incomplete_previous_world = type(incomplete_previous_bridge.world).load(
+                path, expected_state_digest=incomplete_previous_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "cover applied observations"):
+                WorldOSBridge(
+                    incomplete_previous_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
             invalid_observation_bridge = h2_bridge()
             invalid_observation_bridge.ingest_engine_observation(
                 envelope("engine-observation:invalid-restored", 1, "bio", "time_advance", {"ticks": 1})
@@ -600,6 +620,16 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             self.assertEqual(resumed.ingest_engine_observation(advance), delivered)
             self.assertEqual(resumed.ingest_engine_observation(request), delivered)
+
+            previous_state = bridge.world.extension_state("h2_bridge")
+            previous_state.pop("delivery_observations")
+            bridge.world.set_extension_state("h2_bridge", previous_state)
+            previous_digest = bridge.world.state_digest()
+            bridge.world.save(path)
+            migrated = WorldOSBridge(
+                World.load(path, expected_state_digest=previous_digest), {}, PROPOSAL_ORIGIN_KEY
+            )
+            self.assertEqual(migrated.ingest_engine_observation(advance), delivered)
 
     def test_stale_impossible_unauthorized_and_conflicting_inputs_do_not_mutate(self):
         bridge = h2_bridge()
