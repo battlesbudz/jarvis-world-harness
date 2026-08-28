@@ -413,6 +413,25 @@ class H2BridgeContractTest(unittest.TestCase):
                     PROPOSAL_ORIGIN_KEY,
                 )
 
+            collision_bridge = h2_bridge()
+            first = envelope("engine-observation:out-of-order:1", 1, "bio", "time_advance", {"ticks": 1})
+            collision_bridge.ingest_engine_observation(first)
+            collision_bridge.ingest_engine_observation(
+                envelope("engine-observation:out-of-order:3", 3, "bio", "time_advance", {"ticks": 1})
+            )
+            collision_state = collision_bridge.world.extension_state("h2_bridge")
+            collision_state["buffered_observations"][0]["message_id"] = first.message_id
+            collision_bridge.world.set_extension_state("h2_bridge", collision_state)
+            collision_digest = collision_bridge.world.state_digest()
+            collision_bridge.world.save(path)
+            collision_world = type(collision_bridge.world).load(path, expected_state_digest=collision_digest)
+            with self.assertRaisesRegex(BridgeValidationError, "shared across applied and buffered ledgers"):
+                WorldOSBridge(
+                    collision_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
     def test_stale_impossible_unauthorized_and_conflicting_inputs_do_not_mutate(self):
         bridge = h2_bridge()
         first = next(

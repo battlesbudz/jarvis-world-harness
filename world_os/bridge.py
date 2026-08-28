@@ -336,6 +336,8 @@ class WorldOSBridge:
             buffered = [Envelope.from_dict(item) for item in state["buffered_observations"]]
             if len({item.message_id for item in buffered}) != len(buffered):
                 raise BridgeValidationError("persisted buffered observation identity is duplicated")
+            if any(item.message_id in observations for item in buffered):
+                raise BridgeValidationError("persisted observation identity is shared across applied and buffered ledgers")
             self._buffered_observations = {item.message_id: item for item in buffered}
             self._delivery_results = {
                 str(message_id): tuple(Envelope.from_dict(item) for item in proposals)
