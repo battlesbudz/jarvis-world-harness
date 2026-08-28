@@ -457,6 +457,12 @@ class H2BridgeContractTest(unittest.TestCase):
             for authority, proposal in zip(applying_authorities, proposals):
                 self.assertEqual(authority.validate_and_apply(proposal).status, "applied")
             applied_payloads = load_payloads(applying_authorities)
+            missing_high_water = json.loads(json.dumps(applied_payloads[0]))
+            missing_high_water["state"]["last_sequence"] = {}
+            digest = write_payload(missing_high_water)
+            with self.assertRaisesRegex(BridgeValidationError, "high-water marks"):
+                EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
+
             duplicate_state_version = applied_payloads[0]
             duplicate_state_version["state"]["processed"].extend(
                 applied_payloads[1]["state"]["processed"]

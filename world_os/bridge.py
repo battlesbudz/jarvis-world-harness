@@ -771,7 +771,7 @@ class EngineAuthority:
         self._proposal_origin_key = _proposal_key(proposal_origin_key)
         self._last_action: dict[str, dict[str, Any]] = {}
         self._last_sequence: dict[str, int] = {}
-        self._processed: dict[str, tuple[str, EngineDecision]] = {}
+        self._processed: dict[str, tuple[str, EngineDecision, str, int]] = {}
         self._message_conflicts: list[dict[str, str]] = []
         self._event_history: list[str] = []
         self._decision_sequence = 0
@@ -797,9 +797,16 @@ class EngineAuthority:
                 {
                     "message_id": message_id,
                     "proposal_digest": proposal_digest,
+                    "proposal_actor_id": proposal_actor_id,
+                    "proposal_sequence": proposal_sequence,
                     "decision": decision.to_dict(),
                 }
-                for message_id, (proposal_digest, decision) in sorted(self._processed.items())
+                for message_id, (
+                    proposal_digest,
+                    decision,
+                    proposal_actor_id,
+                    proposal_sequence,
+                ) in sorted(self._processed.items())
             ],
             "message_conflicts": [dict(item) for item in self._message_conflicts],
             "event_history": list(self._event_history),
@@ -871,7 +878,18 @@ class EngineAuthority:
                     _authority_proof(decision.outcome, decision.engine_event, authority._proposal_origin_key),
                 ):
                     raise BridgeValidationError("persisted engine decision authority proof is invalid")
-                authority._processed[message_id] = (str(item["proposal_digest"]), decision)
+                proposal_actor_id = str(item["proposal_actor_id"])
+                proposal_sequence = _counter(
+                    item["proposal_sequence"], "processed proposal_sequence", minimum=1
+                )
+                if decision.outcome.actor_id != proposal_actor_id:
+                    raise BridgeValidationError("persisted engine decision actor is invalid")
+                authority._processed[message_id] = (
+                    str(item["proposal_digest"]),
+                    decision,
+                    proposal_actor_id,
+                    proposal_sequence,
+                )
             authority._message_conflicts = [dict(item) for item in state["message_conflicts"]]
             authority._event_history = [str(digest) for digest in state["event_history"]]
             authority._decision_sequence = _counter(state["decision_sequence"], "decision_sequence")
@@ -884,7 +902,7 @@ class EngineAuthority:
             raise BridgeValidationError("persisted engine event history contains an invalid digest")
         applied_decisions = [
             decision
-            for _proposal_digest, decision in authority._processed.values()
+            for _proposal_digest, decision, _actor_id, _sequence in authority._processed.values()
             if decision.engine_event is not None
         ]
         applied_versions = [int(decision.engine_event.payload["state_version"]) for decision in applied_decisions]
@@ -898,10 +916,21 @@ class EngineAuthority:
         if authority._state_version != len(authority._event_history) or expected_history != authority._event_history:
             raise BridgeValidationError("persisted engine state version does not match its event history")
         decision_sequences = sorted(
-            decision.outcome.sequence for _digest, decision in authority._processed.values()
+            decision.outcome.sequence
+            for _digest, decision, _actor_id, _sequence in authority._processed.values()
         )
         if decision_sequences != list(range(1, authority._decision_sequence + 1)):
             raise BridgeValidationError("persisted engine decision ordering is not unique and contiguous")
+        processed_sequences: dict[str, list[int]] = {}
+        for _digest, _decision, actor_id, sequence in authority._processed.values():
+            if actor_id in authority._positions:
+                processed_sequences.setdefault(actor_id, []).append(sequence)
+        expected_last_sequence = {
+            actor_id: max(sequences)
+            for actor_id, sequences in processed_sequences.items()
+        }
+        if authority._last_sequence != expected_last_sequence:
+            raise BridgeValidationError("persisted engine proposal high-water marks do not match processed decisions")
         return authority
 
     def conflicts(self) -> tuple[dict[str, str], ...]:
@@ -975,7 +1004,9 @@ class EngineAuthority:
             if proposal.actor_id in self._positions and proposal.sequence > self._last_sequence.get(proposal.actor_id, 0):
                 self._last_sequence[proposal.actor_id] = proposal.sequence
             decision = self._decision(proposal, "rejected", reason)
-            self._processed[proposal.message_id] = (proposal.digest(), decision)
+            self._processed[proposal.message_id] = (
+                proposal.digest(), decision, proposal.actor_id, proposal.sequence
+            )
             return decision
 
         action_type = str(proposal.payload["action_type"])
@@ -1003,7 +1034,9 @@ class EngineAuthority:
         )
         self._event_history.append(engine_event.digest())
         decision = self._decision(proposal, "applied", "applied", engine_event)
-        self._processed[proposal.message_id] = (proposal.digest(), decision)
+        self._processed[proposal.message_id] = (
+            proposal.digest(), decision, proposal.actor_id, proposal.sequence
+        )
         return decision
 
     def _validate(self, proposal: Envelope) -> str | None:
