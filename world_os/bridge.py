@@ -392,9 +392,10 @@ class WorldOSBridge:
                     covered_observations.update(observation_ids)
                 for message_id, (observation, proposals) in observations.items():
                     if message_id not in covered_observations:
-                        if legacy_migration or not proposals:
-                            delivery_observations[message_id] = (message_id,)
-                            self._delivery_results[message_id] = proposals
+                        if previous_migration and proposals:
+                            continue
+                        delivery_observations[message_id] = (message_id,)
+                        self._delivery_results[message_id] = proposals
                 self._delivery_observations = delivery_observations
             else:
                 if not isinstance(state["delivery_observations"], Mapping):
