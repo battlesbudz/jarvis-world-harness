@@ -1,5 +1,6 @@
 import json
 import math
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from world_os import (
     WorldOSBridge,
 )
 from world_os.scenarios import albion_world
+
+
+PROPOSAL_ORIGIN_KEY = b"h2-deterministic-test-key"
 
 
 def envelope(message_id, sequence, actor_id, message_type, payload, correlation_id="h2-run:1"):
@@ -27,7 +31,11 @@ def envelope(message_id, sequence, actor_id, message_type, payload, correlation_
 
 
 def h2_bridge():
-    return WorldOSBridge(albion_world(2202), {"ferryman": "ferry-dock", "baker": "bakery"})
+    return WorldOSBridge(
+        albion_world(2202),
+        {"ferryman": "ferry-dock", "baker": "bakery"},
+        PROPOSAL_ORIGIN_KEY,
+    )
 
 
 def engine_authority():
@@ -39,6 +47,7 @@ def engine_authority():
             "mara": {"independent_choice", "values_refusal"},
         },
         {"ferry-dock", "bakery", "captain-post"},
+        PROPOSAL_ORIGIN_KEY,
     )
 
 
@@ -68,7 +77,7 @@ class H2BridgeContractTest(unittest.TestCase):
         observation = envelope("engine-observation:1", 1, "bio", "time_advance", {"ticks": 1})
 
         proposals = bridge.ingest_engine_observation(observation)
-        world_digest = bridge.world.state_digest()
+        world_events = bridge.world.events
         elias = next(item for item in proposals if item.actor_id == "elias")
         self.assertEqual(elias.payload["action_type"], "routine_move")
         self.assertEqual(elias.payload["destination"], "ferry-dock")
@@ -100,17 +109,121 @@ class H2BridgeContractTest(unittest.TestCase):
             bridge.ingest_engine_observation(invalid)
         self.assertEqual(bridge.world.state_digest(), before_invalid)
 
+        before_retry = bridge.world.state_digest()
         self.assertEqual(bridge.ingest_engine_observation(observation), proposals)
-        self.assertEqual(bridge.world.state_digest(), world_digest)
+        self.assertEqual(bridge.world.state_digest(), before_retry)
+        self.assertEqual(bridge.world.events, world_events)
         self.assertIs(authority.validate_and_apply(elias), decision)
         self.assertEqual(authority.state()["state_version"], 1)
         self.assertEqual(authority.state()["positions"]["elias"], "ferry-dock")
         bridge.receive_engine_decision(decision)
 
+        nella = next(item for item in proposals if item.actor_id == "nella")
+        nella_decision = authority.validate_and_apply(nella)
+        reused_event = Envelope.from_dict(
+            {**nella_decision.engine_event.to_dict(), "message_id": decision.engine_event.message_id}
+        )
+        reused_outcome = Envelope.from_dict(
+            {
+                **nella_decision.outcome.to_dict(),
+                "payload": {
+                    **nella_decision.outcome.to_dict()["payload"],
+                    "engine_event_id": reused_event.message_id,
+                },
+            }
+        )
+        with self.assertRaisesRegex(BridgeValidationError, "event id was reused"):
+            bridge.receive_engine_decision(EngineDecision("applied", reused_outcome, reused_event))
+
+    def test_observation_ledger_and_proposals_survive_world_reload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "world.json"
+            bridge = h2_bridge()
+            observation = envelope("engine-observation:persisted", 1, "bio", "time_advance", {"ticks": 1})
+            proposals = bridge.ingest_engine_observation(observation)
+            authority = engine_authority()
+            decision = authority.validate_and_apply(proposals[0])
+            bridge.receive_engine_decision(decision)
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+
+            loaded_world = type(bridge.world).load(path, expected_state_digest=trusted)
+            resumed = WorldOSBridge(
+                loaded_world,
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            before_retry = resumed.world.state_digest()
+            self.assertEqual(resumed.ingest_engine_observation(observation), proposals)
+            self.assertEqual(resumed.world.state_digest(), before_retry)
+            self.assertEqual(resumed.world.tick, 1)
+            resumed.receive_engine_decision(decision)
+            self.assertEqual(resumed.world.state_digest(), before_retry)
+
+            next_observation = envelope("engine-observation:after-reload", 2, "bio", "time_advance", {"ticks": 1})
+            next_proposals = resumed.ingest_engine_observation(next_observation)
+            self.assertEqual(resumed.world.tick, 2)
+            self.assertTrue(all(item.sequence == 2 for item in next_proposals))
+
     def test_stale_impossible_unauthorized_and_conflicting_inputs_do_not_mutate(self):
+        bridge = h2_bridge()
+        first = next(
+            item
+            for item in bridge.ingest_engine_observation(
+                envelope("engine-observation:first", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            if item.actor_id == "elias"
+        )
+        second = next(
+            item
+            for item in bridge.ingest_engine_observation(
+                envelope("engine-observation:second", 2, "bio", "time_advance", {"ticks": 1})
+            )
+            if item.actor_id == "elias"
+        )
+
+        stale_authority = engine_authority()
+        self.assertEqual(stale_authority.validate_and_apply(second).status, "applied")
+        before = stale_authority.state()
+        stale = stale_authority.validate_and_apply(first)
+        self.assertEqual((stale.status, stale.reason), ("rejected", "stale_sequence"))
+        self.assertEqual(stale_authority.state(), before)
+
+        impossible_authority = EngineAuthority(
+            {"elias": "village-square"},
+            {"elias": {"routine_move"}},
+            {"ferry-dock"},
+            PROPOSAL_ORIGIN_KEY,
+            blocked_paths={("elias", "ferry-dock")},
+        )
+        before = impossible_authority.state()
+        impossible = impossible_authority.validate_and_apply(first)
+        self.assertEqual((impossible.status, impossible.reason), ("rejected", "physically_impossible"))
+        self.assertEqual(impossible_authority.state(), before)
+
+        unauthorized_authority = EngineAuthority(
+            {"elias": "village-square"},
+            {"elias": set()},
+            {"ferry-dock"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        before = unauthorized_authority.state()
+        unauthorized = unauthorized_authority.validate_and_apply(first)
+        self.assertEqual((unauthorized.status, unauthorized.reason), ("rejected", "permission_denied"))
+        self.assertEqual(unauthorized_authority.state(), before)
+
         authority = engine_authority()
-        valid = envelope(
-            "world-proposal:valid",
+        canonical = authority.validate_and_apply(first)
+        before = authority.state()
+        conflicting = Envelope.from_dict(
+            {**first.to_dict(), "payload": {**first.to_dict()["payload"], "destination": "bakery"}}
+        )
+        self.assertIs(authority.validate_and_apply(conflicting), canonical)
+        self.assertEqual(authority.state(), before)
+        self.assertEqual(authority.conflicts()[0]["message_id"], first.message_id)
+
+        forged = envelope(
+            "world-proposal:forged",
             1,
             "elias",
             "world_action_proposed",
@@ -118,65 +231,15 @@ class H2BridgeContractTest(unittest.TestCase):
                 "action_type": "routine_move",
                 "command": "perform ferryman routine",
                 "destination": "ferry-dock",
-                "causal_event_id": "evt-000001",
+                "causal_event_id": "made-up",
+                "origin_proof": "0" * 64,
             },
         )
-        self.assertEqual(authority.validate_and_apply(valid).status, "applied")
-
-        cases = [
-            (
-                envelope(
-                    "world-proposal:stale",
-                    1,
-                    "elias",
-                    "world_action_proposed",
-                    {**dict(valid.payload), "destination": "bakery"},
-                ),
-                "stale_sequence",
-            ),
-            (
-                envelope(
-                    "world-proposal:impossible",
-                    2,
-                    "elias",
-                    "world_action_proposed",
-                    {**dict(valid.payload), "destination": "missing-place"},
-                ),
-                "physically_impossible",
-            ),
-            (
-                envelope(
-                    "world-proposal:unauthorized",
-                    1,
-                    "mara",
-                    "world_action_proposed",
-                    {**dict(valid.payload), "destination": "captain-post"},
-                ),
-                "permission_denied",
-            ),
-        ]
-        for proposal, reason in cases:
-            before = authority.state()
-            decision = authority.validate_and_apply(proposal)
-            self.assertEqual((decision.status, decision.reason), ("rejected", reason))
-            self.assertEqual(authority.state(), before)
-            self.assertIs(authority.validate_and_apply(proposal), decision)
-
-        repeated_sequence = envelope(
-            "world-proposal:reused-rejected-sequence",
-            2,
-            "elias",
-            "world_action_proposed",
-            {**dict(valid.payload), "destination": "bakery"},
-        )
-        before = authority.state()
-        self.assertEqual(authority.validate_and_apply(repeated_sequence).reason, "stale_sequence")
-        self.assertEqual(authority.state(), before)
-
-        before = authority.state()
-        conflicting = Envelope.from_dict({**valid.to_dict(), "payload": {**dict(valid.payload), "destination": "bakery"}})
-        self.assertEqual(authority.validate_and_apply(conflicting).reason, "message_id_conflict")
-        self.assertEqual(authority.state(), before)
+        forged_authority = engine_authority()
+        before = forged_authority.state()
+        forged_decision = forged_authority.validate_and_apply(forged)
+        self.assertEqual((forged_decision.status, forged_decision.reason), ("rejected", "untrusted_world_os_origin"))
+        self.assertEqual(forged_authority.state(), before)
 
     def test_thinker_choice_originates_in_world_os_and_evidence_is_machine_readable(self):
         bridge = h2_bridge()

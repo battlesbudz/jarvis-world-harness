@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 BRIDGE_SCHEMA_VERSION = 1
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
+_BRIDGE_EXTENSION = "h2_bridge"
 
 
 class BridgeValidationError(ValueError):
@@ -148,13 +150,42 @@ class EngineDecision:
     def digest(self) -> str:
         return hashlib.sha256(_canonical(self.to_dict()).encode("utf-8")).hexdigest()
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> EngineDecision:
+        if not isinstance(data, Mapping) or set(data) != {"status", "outcome", "engine_event"}:
+            raise BridgeValidationError("engine decision fields do not match the schema")
+        engine_event = data["engine_event"]
+        return cls(
+            str(data["status"]),
+            Envelope.from_dict(data["outcome"]),
+            Envelope.from_dict(engine_event) if engine_event is not None else None,
+        )
+
+
+def _origin_material(proposal: Envelope) -> bytes:
+    data = proposal.to_dict()
+    data["payload"].pop("origin_proof", None)
+    return _canonical(data).encode("utf-8")
+
+
+def _origin_proof(proposal: Envelope, key: bytes) -> str:
+    return hmac.new(key, _origin_material(proposal), hashlib.sha256).hexdigest()
+
+
+def _proposal_key(value: bytes | str) -> bytes:
+    key = value.encode("utf-8") if isinstance(value, str) else value
+    if not isinstance(key, bytes) or len(key) < 16:
+        raise BridgeValidationError("proposal origin key must contain at least 16 bytes")
+    return key
+
 
 class WorldOSBridge:
     """Idempotent adapter from authoritative engine observations to World OS proposals."""
 
-    def __init__(self, world: World, role_stations: Mapping[str, str]):
+    def __init__(self, world: World, role_stations: Mapping[str, str], proposal_origin_key: bytes | str):
         self.world = world
         self.role_stations = dict(role_stations)
+        self._proposal_origin_key = _proposal_key(proposal_origin_key)
         missing_roles = {
             actor.role
             for actor in world.actors.values()
@@ -167,11 +198,70 @@ class WorldOSBridge:
         self._proposal_sequence: dict[str, int] = {}
         self._pending: dict[str, Envelope] = {}
         self._decisions: dict[str, EngineDecision] = {}
+        self._engine_events: dict[str, str] = {}
+        saved = world.extension_state(_BRIDGE_EXTENSION)
+        if saved is not None:
+            self._restore(saved)
+        else:
+            self._persist()
+
+    def _state(self) -> dict[str, Any]:
+        return {
+            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "role_stations": dict(sorted(self.role_stations.items())),
+            "observations": [
+                {
+                    "envelope": observation.to_dict(),
+                    "proposals": [proposal.to_dict() for proposal in proposals],
+                }
+                for _message_id, (observation, proposals) in sorted(self._observations.items())
+            ],
+            "last_engine_sequence": dict(sorted(self._last_engine_sequence.items())),
+            "proposal_sequence": dict(sorted(self._proposal_sequence.items())),
+            "pending": [proposal.to_dict() for proposal in sorted(self._pending.values(), key=lambda item: item.message_id)],
+            "decisions": [decision.to_dict() for decision in sorted(self._decisions.values(), key=lambda item: item.outcome.message_id)],
+            "engine_events": dict(sorted(self._engine_events.items())),
+        }
+
+    def _persist(self) -> None:
+        self.world.set_extension_state(_BRIDGE_EXTENSION, self._state())
+
+    def _restore(self, state: Mapping[str, Any]) -> None:
+        required = {
+            "schema_version", "role_stations", "observations", "last_engine_sequence",
+            "proposal_sequence", "pending", "decisions", "engine_events",
+        }
+        if set(state) != required or state.get("schema_version") != BRIDGE_SCHEMA_VERSION:
+            raise BridgeValidationError("persisted bridge state is incompatible")
+        if state.get("role_stations") != self.role_stations:
+            raise BridgeValidationError("persisted bridge role stations do not match configuration")
+        try:
+            pending = [Envelope.from_dict(item) for item in state["pending"]]
+            decisions = [EngineDecision.from_dict(item) for item in state["decisions"]]
+            observations = {}
+            for item in state["observations"]:
+                observation = Envelope.from_dict(item["envelope"])
+                proposals = tuple(Envelope.from_dict(proposal) for proposal in item["proposals"])
+                observations[observation.message_id] = (observation, proposals)
+            self._last_engine_sequence = {str(key): int(value) for key, value in state["last_engine_sequence"].items()}
+            self._proposal_sequence = {str(key): int(value) for key, value in state["proposal_sequence"].items()}
+            self._pending = {item.message_id: item for item in pending}
+            self._decisions = {item.outcome.message_id: item for item in decisions}
+            self._engine_events = {str(key): str(value) for key, value in state["engine_events"].items()}
+            self._observations = observations
+        except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
+            raise BridgeValidationError(f"persisted bridge state is malformed: {error}") from error
+        if any(proposal.message_id not in self._pending for _observation, proposals in self._observations.values() for proposal in proposals):
+            raise BridgeValidationError("persisted observation references an unknown proposal")
+        for proposal in self._pending.values():
+            if not hmac.compare_digest(str(proposal.payload.get("origin_proof", "")), _origin_proof(proposal, self._proposal_origin_key)):
+                raise BridgeValidationError("persisted proposal origin proof is invalid")
+            self.world.trace(str(proposal.payload["causal_event_id"]))
 
     def _proposal(self, event: Event, correlation_id: str, payload: Mapping[str, Any]) -> Envelope:
         sequence = self._proposal_sequence.get(event.actor, 0) + 1
         self._proposal_sequence[event.actor] = sequence
-        proposal = Envelope(
+        unsigned = Envelope(
             BRIDGE_SCHEMA_VERSION,
             f"world-proposal:{correlation_id}:{event.id}",
             correlation_id,
@@ -179,6 +269,9 @@ class WorldOSBridge:
             event.actor,
             "world_action_proposed",
             {**dict(payload), "causal_event_id": event.id},
+        )
+        proposal = Envelope.from_dict(
+            {**unsigned.to_dict(), "payload": {**unsigned.to_dict()["payload"], "origin_proof": _origin_proof(unsigned, self._proposal_origin_key)}}
         )
         self._pending[proposal.message_id] = proposal
         return proposal
@@ -249,6 +342,7 @@ class WorldOSBridge:
         result = tuple(proposals)
         self._last_engine_sequence[observation.actor_id] = observation.sequence
         self._observations[observation.message_id] = (observation, result)
+        self._persist()
         return result
 
     def receive_engine_decision(self, decision: EngineDecision) -> None:
@@ -267,6 +361,9 @@ class WorldOSBridge:
             actual = {key: engine_event.payload.get(key) for key in expected}
             if actual != expected:
                 raise BridgeValidationError("authoritative engine event does not match its World OS proposal")
+            existing_event_digest = self._engine_events.get(engine_event.message_id)
+            if existing_event_digest is not None and existing_event_digest != engine_event.digest():
+                raise BridgeValidationError("authoritative engine event id was reused with different content")
         existing = self._decisions.get(decision.outcome.message_id)
         if existing:
             if existing.digest() != decision.digest():
@@ -275,6 +372,9 @@ class WorldOSBridge:
         if any(item.outcome.correlation_id == proposal_id for item in self._decisions.values()):
             raise BridgeValidationError("World OS proposal already has an engine outcome")
         self._decisions[decision.outcome.message_id] = decision
+        if decision.engine_event is not None:
+            self._engine_events[decision.engine_event.message_id] = decision.engine_event.digest()
+        self._persist()
 
     def evidence(self) -> dict[str, Any]:
         return {
@@ -307,6 +407,7 @@ class EngineAuthority:
         actor_positions: Mapping[str, str],
         permissions: Mapping[str, Iterable[str]],
         destinations: Iterable[str],
+        proposal_origin_key: bytes | str,
         blocked_paths: Iterable[tuple[str, str]] = (),
     ):
         self._positions = dict(actor_positions)
@@ -315,9 +416,11 @@ class EngineAuthority:
             raise BridgeValidationError("every engine actor requires an explicit permission set")
         self._destinations = frozenset(destinations)
         self._blocked_paths = frozenset(blocked_paths)
+        self._proposal_origin_key = _proposal_key(proposal_origin_key)
         self._last_action: dict[str, dict[str, Any]] = {}
         self._last_sequence: dict[str, int] = {}
         self._processed: dict[str, tuple[str, EngineDecision]] = {}
+        self._message_conflicts: list[dict[str, str]] = []
         self._decision_sequence = 0
         self._state_version = 0
 
@@ -328,20 +431,20 @@ class EngineAuthority:
             "last_action": {actor: dict(value) for actor, value in sorted(self._last_action.items())},
         }
 
+    def conflicts(self) -> tuple[dict[str, str], ...]:
+        return tuple(dict(item) for item in self._message_conflicts)
+
     def _decision(
         self,
         proposal: Envelope,
         status: str,
         reason: str,
         engine_event: Envelope | None = None,
-        *,
-        conflict: bool = False,
     ) -> EngineDecision:
         self._decision_sequence += 1
-        suffix = f":conflict:{self._decision_sequence}" if conflict else ""
         outcome = Envelope(
             BRIDGE_SCHEMA_VERSION,
-            f"engine-outcome:{proposal.message_id}{suffix}",
+            f"engine-outcome:{proposal.message_id}",
             proposal.message_id,
             self._decision_sequence,
             proposal.actor_id,
@@ -360,7 +463,14 @@ class EngineAuthority:
         if existing:
             if existing[0] == proposal.digest():
                 return existing[1]
-            return self._decision(proposal, "rejected", "message_id_conflict", conflict=True)
+            conflict = {
+                "message_id": proposal.message_id,
+                "canonical_digest": existing[0],
+                "received_digest": proposal.digest(),
+            }
+            if conflict not in self._message_conflicts:
+                self._message_conflicts.append(conflict)
+            return existing[1]
 
         reason = self._validate(proposal)
         if reason:
@@ -406,8 +516,11 @@ class EngineAuthority:
         action_type = proposal.payload.get("action_type")
         command = proposal.payload.get("command")
         causal_event_id = proposal.payload.get("causal_event_id")
-        if not all(isinstance(value, str) and value for value in (action_type, command, causal_event_id)):
+        origin_proof = proposal.payload.get("origin_proof")
+        if not all(isinstance(value, str) and value for value in (action_type, command, causal_event_id, origin_proof)):
             return "malformed_payload"
+        if not hmac.compare_digest(origin_proof, _origin_proof(proposal, self._proposal_origin_key)):
+            return "untrusted_world_os_origin"
         if action_type not in self._permissions[proposal.actor_id]:
             return "permission_denied"
         destination = proposal.payload.get("destination")

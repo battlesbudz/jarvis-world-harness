@@ -172,6 +172,7 @@ class World:
         self.actors = MappingProxyType(actor_map)
         self.crisis_actor = crisis_actor
         self._events: list[Event] = []
+        self._extensions: dict[str, dict[str, Any]] = {}
         for actor in sorted(self.actors.values(), key=lambda item: item.id):
             if actor.category == "bio":
                 self._record(
@@ -904,7 +905,23 @@ class World:
             "crisis_actor": self.crisis_actor,
             "actors": [self.actors[key].to_dict() for key in sorted(self.actors)],
             "events": [event.to_dict() for event in self.events],
+            "extensions": json.loads(_canonical(self._extensions)),
         }
+
+    def extension_state(self, namespace: str) -> dict[str, Any] | None:
+        state = self._extensions.get(namespace)
+        return json.loads(_canonical(state)) if state is not None else None
+
+    def set_extension_state(self, namespace: str, state: Mapping[str, Any]) -> None:
+        if not isinstance(namespace, str) or not namespace:
+            raise ValidationError("extension namespace must be a non-empty string")
+        try:
+            copied = json.loads(_canonical(dict(state)))
+        except (TypeError, ValueError) as error:
+            raise ValidationError(f"extension state must be a JSON object: {error}") from error
+        if not isinstance(copied, dict):
+            raise ValidationError("extension state must be a JSON object")
+        self._extensions[namespace] = copied
 
     def state_digest(self) -> str:
         return _digest(self.state())
@@ -1014,6 +1031,14 @@ class World:
 
         if len(world.events) != len(saved_events) or world.tick != state["tick"]:
             raise ValidationError("persisted world does not replay to its claimed boundary")
+        extensions = state.get("extensions", {})
+        if not isinstance(extensions, dict) or any(
+            not isinstance(namespace, str) or not isinstance(value, dict)
+            for namespace, value in extensions.items()
+        ):
+            raise ValidationError("persisted world extensions are malformed")
+        for namespace, value in extensions.items():
+            world.set_extension_state(namespace, value)
         return world
 
     @classmethod
