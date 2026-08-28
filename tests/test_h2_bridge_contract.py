@@ -428,6 +428,45 @@ class H2BridgeContractTest(unittest.TestCase):
 
             trusted = bridge.world.state_digest()
             bridge.world.save(path)
+
+            schema_two_world = World.load(path, expected_state_digest=trusted)
+            schema_two_state = schema_two_world.extension_state("h2_bridge")
+            schema_two_state["schema_version"] = 2
+            schema_two_state["decisions"] = schema_two_state.pop("buffered_decisions")
+            event_digest = second.engine_event.digest()
+            schema_two_state["engine_events"] = {
+                second.engine_event.message_id: event_digest
+            }
+            schema_two_state["engine_versions"] = {
+                **{
+                    str(version): digest
+                    for version, digest in enumerate(
+                        second.engine_event.payload["prior_event_digests"], start=1
+                    )
+                },
+                str(second.engine_event.payload["state_version"]): event_digest,
+            }
+            schema_two_world.set_extension_state("h2_bridge", schema_two_state)
+            schema_two_digest = schema_two_world.state_digest()
+            schema_two_world.save(path)
+            migrated = WorldOSBridge(
+                World.load(path, expected_state_digest=schema_two_digest),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            migrated_state = migrated.world.extension_state("h2_bridge")
+            self.assertEqual(
+                (
+                    migrated_state["schema_version"],
+                    len(migrated_state["decisions"]),
+                    len(migrated_state["buffered_decisions"]),
+                    migrated_state["engine_events"],
+                    migrated_state["engine_versions"],
+                ),
+                (3, 0, 1, {}, {}),
+            )
+
+            bridge.world.save(path)
             resumed = WorldOSBridge(
                 World.load(path, expected_state_digest=trusted),
                 {"ferryman": "ferry-dock", "baker": "bakery"},
@@ -439,6 +478,77 @@ class H2BridgeContractTest(unittest.TestCase):
                 (len(resumed_state["decisions"]), len(resumed_state["buffered_decisions"])),
                 (2, 0),
             )
+
+    def test_invalid_replacement_does_not_remove_a_later_buffered_outcome(self):
+        bridge = h2_bridge()
+        first_batch = bridge.ingest_engine_observation(
+            envelope("engine-observation:buffer-retention:1", 1, "bio", "time_advance", {"ticks": 1})
+        )
+        first = next(item for item in first_batch if item.actor_id == "elias")
+        middle = next(item for item in first_batch if item.actor_id == "nella")
+        later = next(
+            item
+            for item in bridge.ingest_engine_observation(
+                envelope("engine-observation:buffer-retention:2", 2, "bio", "time_advance", {"ticks": 1})
+            )
+            if item.actor_id == "elias"
+        )
+        authority = engine_authority()
+        first_applied = decide(authority, first)
+        middle_applied = decide(authority, middle)
+        later_applied = decide(authority, later)
+        bridge.receive_engine_decision(first_applied)
+        bridge.receive_engine_decision(later_applied)
+
+        stale = EngineAuthority(
+            {"elias": "village-square"},
+            {"elias": set()},
+            {"ferry-dock"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        decide(stale, first)
+        invalid_replacement = decide(stale, later)
+        replacement_outcome = Envelope.from_dict(
+            {
+                **invalid_replacement.outcome.to_dict(),
+                "message_id": "engine-outcome:buffer-retention:replacement",
+                "payload": {
+                    **invalid_replacement.outcome.to_dict()["payload"],
+                    "authority_proof": "0" * 128,
+                },
+            }
+        )
+        replacement_proof = AUTHORITY_SIGNING_KEY.sign(
+            _authority_material(replacement_outcome, invalid_replacement.engine_event)
+        ).hex()
+        replacement_outcome = Envelope.from_dict(
+            {
+                **replacement_outcome.to_dict(),
+                "payload": {
+                    **replacement_outcome.to_dict()["payload"],
+                    "authority_proof": replacement_proof,
+                },
+            }
+        )
+        invalid_replacement = EngineDecision(
+            invalid_replacement.status,
+            replacement_outcome,
+            invalid_replacement.engine_event,
+        )
+        with self.assertRaisesRegex(BridgeValidationError, "state version conflicts"):
+            bridge.receive_engine_decision(invalid_replacement)
+        retained_state = bridge.world.extension_state("h2_bridge")
+        self.assertEqual(
+            (len(retained_state["decisions"]), len(retained_state["buffered_decisions"])),
+            (1, 1),
+        )
+
+        bridge.receive_engine_decision(middle_applied)
+        drained_state = bridge.world.extension_state("h2_bridge")
+        self.assertEqual(
+            (len(drained_state["decisions"]), len(drained_state["buffered_decisions"])),
+            (3, 0),
+        )
 
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -389,6 +389,10 @@ class WorldOSBridge:
         self.world.set_extension_state(_BRIDGE_EXTENSION, self._state())
 
     def _restore(self, state: Mapping[str, Any]) -> None:
+        migrate_noncontiguous_decisions = (
+            _is_exact_version(state.get("schema_version"), 1)
+            or _is_exact_version(state.get("schema_version"), 2)
+        )
         required = {
             "schema_version", "role_stations", "observations", "last_engine_sequence",
             "proposal_sequence", "pending", "decisions", "engine_events",
@@ -456,6 +460,18 @@ class WorldOSBridge:
             buffered_decisions = [
                 EngineDecision.from_dict(item) for item in state["buffered_decisions"]
             ]
+            if migrate_noncontiguous_decisions:
+                contiguous: list[EngineDecision] = []
+                noncontiguous: list[EngineDecision] = []
+                expected_sequence = 1
+                for item in sorted(decisions, key=lambda value: value.outcome.sequence):
+                    if item.outcome.sequence == expected_sequence:
+                        contiguous.append(item)
+                        expected_sequence += 1
+                    else:
+                        noncontiguous.append(item)
+                decisions = contiguous
+                buffered_decisions.extend(noncontiguous)
             if len({item.message_id for item in pending}) != len(pending):
                 raise BridgeValidationError("persisted pending proposal identity is duplicated")
             if len({item.outcome.message_id for item in decisions}) != len(decisions):
@@ -487,6 +503,24 @@ class WorldOSBridge:
             if len({version for version, _digest in engine_versions}) != len(engine_versions):
                 raise BridgeValidationError("persisted engine version identity is duplicated")
             self._engine_versions = dict(engine_versions)
+            if migrate_noncontiguous_decisions and buffered_decisions:
+                self._engine_events = {
+                    item.engine_event.message_id: item.engine_event.digest()
+                    for item in decisions
+                    if item.engine_event is not None
+                }
+                rebuilt_versions: dict[int, str] = {}
+                for item in decisions:
+                    if item.engine_event is None:
+                        continue
+                    for version, digest in enumerate(
+                        item.engine_event.payload["prior_event_digests"], start=1
+                    ):
+                        rebuilt_versions[version] = digest
+                    rebuilt_versions[
+                        int(item.engine_event.payload["state_version"])
+                    ] = item.engine_event.digest()
+                self._engine_versions = rebuilt_versions
             buffered = [Envelope.from_dict(item) for item in state["buffered_observations"]]
             if len({item.message_id for item in buffered}) != len(buffered):
                 raise BridgeValidationError("persisted buffered observation identity is duplicated")
@@ -978,21 +1012,26 @@ class WorldOSBridge:
             for item in self._decisions.values()
         ):
             raise BridgeValidationError("World OS proposal already has an engine outcome")
+        superseded_buffered_ids: list[str] = []
         for message_id, buffered in tuple(self._buffered_decisions.items()):
             if buffered.outcome.correlation_id != proposal.message_id:
                 continue
             if buffered.outcome.sequence < decision.outcome.sequence:
                 raise BridgeValidationError("World OS proposal already has a buffered engine outcome")
-            self._buffered_decisions.pop(message_id)
+            superseded_buffered_ids.append(message_id)
         expected_sequence = len(self._decisions) + 1
         if decision.outcome.sequence < expected_sequence:
             raise BridgeValidationError("engine outcome ordering slot is already committed")
         if decision.outcome.sequence > expected_sequence:
+            if superseded_buffered_ids:
+                raise BridgeValidationError("World OS proposal already has a later buffered engine outcome")
             self._buffered_decisions[decision.outcome.message_id] = decision
             self._persist()
             return
 
         self._record_engine_decision(decision)
+        for message_id in superseded_buffered_ids:
+            self._buffered_decisions.pop(message_id)
         while True:
             next_sequence = len(self._decisions) + 1
             buffered = next(
