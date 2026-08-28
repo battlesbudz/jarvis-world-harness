@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import math
 import tempfile
@@ -18,6 +19,7 @@ from world_os import (
     World,
 )
 from world_os.scenarios import albion_world
+from world_os.bridge import _authority_material
 
 
 PROPOSAL_ORIGIN_KEY = b"h2-deterministic-test-key"
@@ -316,6 +318,22 @@ class H2BridgeContractTest(unittest.TestCase):
             resumed.receive_engine_decision(decision)
             self.assertEqual(resumed.world.state_digest(), before_retry)
 
+            legacy_signature_state = bridge.world.extension_state("h2_bridge")
+            legacy_signature_state["schema_version"] = 1
+            legacy_signature_state["decisions"][0]["outcome"]["payload"]["authority_proof"] = "0" * 64
+            bridge.world.set_extension_state("h2_bridge", legacy_signature_state)
+            legacy_signature_digest = bridge.world.state_digest()
+            bridge.world.save(path)
+            legacy_signature_world = type(bridge.world).load(
+                path, expected_state_digest=legacy_signature_digest
+            )
+            with self.assertRaisesRegex(BridgeValidationError, "signature format is incompatible"):
+                WorldOSBridge(
+                    legacy_signature_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
             next_observation = envelope("engine-observation:after-reload", 2, "bio", "time_advance", {"ticks": 1})
             next_proposals = resumed.ingest_engine_observation(next_observation)
             self.assertEqual(resumed.world.tick, 2)
@@ -381,6 +399,34 @@ class H2BridgeContractTest(unittest.TestCase):
                 )
 
             authority.save(engine_path)
+            legacy_authority_payload = json.loads(engine_path.read_text(encoding="utf-8"))
+            legacy_authority_payload["state"]["schema_version"] = 3
+            legacy_proof = hmac.new(
+                PROPOSAL_ORIGIN_KEY,
+                _authority_material(decision.outcome, decision.engine_event),
+                hashlib.sha256,
+            ).hexdigest()
+            legacy_authority_payload["state"]["processed"][0]["decision"]["outcome"]["payload"][
+                "authority_proof"
+            ] = legacy_proof
+            canonical = json.dumps(
+                legacy_authority_payload["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            legacy_authority_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            legacy_authority_payload["digest"] = legacy_authority_digest
+            engine_path.write_text(json.dumps(legacy_authority_payload), encoding="utf-8")
+            migrated_signature_authority = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=legacy_authority_digest,
+            )
+            self.assertEqual(decide(migrated_signature_authority, proposals[0]), decision)
+            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 4)
+
+            authority.save(engine_path)
             unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))
             unambiguous_v2["state"].pop("response_batches")
             unambiguous_v2["state"]["schema_version"] = 2
@@ -414,7 +460,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=previous_digest,
             )
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
-            self.assertEqual(migrated_authority.snapshot()["schema_version"], 3)
+            self.assertEqual(migrated_authority.snapshot()["schema_version"], 4)
 
             legacy_out_of_order = engine_authority()
             legacy_second = legacy_out_of_order._process_proposal(second_elias)

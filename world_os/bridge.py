@@ -16,7 +16,8 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
 BRIDGE_SCHEMA_VERSION = 1
-ENGINE_AUTHORITY_SCHEMA_VERSION = 3
+BRIDGE_STATE_SCHEMA_VERSION = 2
+ENGINE_AUTHORITY_SCHEMA_VERSION = 4
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
 
@@ -35,6 +36,10 @@ def _is_supported_authority_schema_version(value: Any) -> bool:
         and not isinstance(value, bool)
         and value == ENGINE_AUTHORITY_SCHEMA_VERSION
     )
+
+
+def _is_exact_version(value: Any, expected: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value == expected
 
 
 def _counter(value: Any, name: str, *, minimum: int = 0) -> int:
@@ -333,7 +338,7 @@ class WorldOSBridge:
 
     def _state(self) -> dict[str, Any]:
         return {
-            "schema_version": BRIDGE_SCHEMA_VERSION,
+            "schema_version": BRIDGE_STATE_SCHEMA_VERSION,
             "role_stations": dict(sorted(self.role_stations.items())),
             "observations": [
                 {
@@ -384,8 +389,18 @@ class WorldOSBridge:
             state = {**dict(state), "buffered_observations": [], "delivery_results": {}}
         if set(state) == previous_required:
             state = {**dict(state), "delivery_observations": {}}
-        if set(state) != required or not _is_supported_schema_version(state.get("schema_version")):
+        if set(state) != required or not (
+            _is_exact_version(state.get("schema_version"), 1)
+            or _is_exact_version(state.get("schema_version"), BRIDGE_STATE_SCHEMA_VERSION)
+        ):
             raise BridgeValidationError("persisted bridge state is incompatible")
+        if state["schema_version"] == 1:
+            if state["decisions"]:
+                raise BridgeValidationError(
+                    "persisted bridge authority signature format is incompatible"
+                )
+            state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
+            migrated = True
         if state.get("role_stations") != self.role_stations:
             raise BridgeValidationError("persisted bridge role stations do not match configuration")
         try:
@@ -929,10 +944,9 @@ class EngineAuthority:
                 (set(state) == version_one_fields and _is_supported_schema_version(state.get("schema_version")))
                 or (
                     set(state) == version_two_fields
-                    and isinstance(state.get("schema_version"), int)
-                    and not isinstance(state.get("schema_version"), bool)
-                    and state.get("schema_version") == 2
+                    and _is_exact_version(state.get("schema_version"), 2)
                 )
+                or (set(state) == expected_fields and _is_exact_version(state.get("schema_version"), 3))
             )
         )
         if (
@@ -952,20 +966,58 @@ class EngineAuthority:
         replay_legacy_v1 = previous_shape and state["schema_version"] == BRIDGE_SCHEMA_VERSION
         if previous_shape:
             try:
+                legacy_version = state["schema_version"]
+                proposal_key = _proposal_key(proposal_origin_key)
+                signing_key = _authority_private_key(authority_signing_key)
+                for item in state["processed"]:
+                    proof = item["decision"]["outcome"]["payload"]["authority_proof"]
+                    if isinstance(proof, str) and re.fullmatch(r"[0-9a-f]{64}", proof):
+                        item["decision"]["outcome"]["payload"]["authority_proof"] = "0" * 128
+                        decision = EngineDecision.from_dict(item["decision"])
+                        expected_legacy_proof = hmac.new(
+                            proposal_key,
+                            _authority_material(decision.outcome, decision.engine_event),
+                            hashlib.sha256,
+                        ).hexdigest()
+                        if not hmac.compare_digest(proof, expected_legacy_proof):
+                            raise BridgeValidationError(
+                                "persisted legacy engine authority proof is invalid"
+                            )
+                        item["decision"]["outcome"]["payload"]["authority_proof"] = _authority_proof(
+                            decision.outcome,
+                            decision.engine_event,
+                            signing_key,
+                        )
+                    elif isinstance(proof, str) and re.fullmatch(r"[0-9a-f]{128}", proof):
+                        decision = EngineDecision.from_dict(item["decision"])
+                        if not _has_valid_authority_proof(
+                            decision.outcome,
+                            decision.engine_event,
+                            proof,
+                            signing_key.public_key(),
+                        ):
+                            raise BridgeValidationError(
+                                "persisted engine decision authority proof is invalid"
+                            )
+                    else:
+                        raise BridgeValidationError(
+                            "persisted legacy engine authority proof is malformed"
+                        )
                 if state["schema_version"] == 2:
                     processed_actors = [item["proposal"]["actor_id"] for item in state["processed"]]
                     if len(processed_actors) != len(set(processed_actors)):
                         raise BridgeValidationError(
                             "persisted v2 engine authority has ambiguous response-batch history"
                         )
-                response_batches = [
-                    {"message_id": item["message_id"], "decision_ids": [item["message_id"]]}
-                    for item in state["processed"]
-                ]
-                response_batches.sort(key=lambda item: item["message_id"])
-            except BridgeValidationError:
-                raise
-            except (KeyError, TypeError, ValueError, AttributeError) as error:
+                if legacy_version < 3:
+                    response_batches = [
+                        {"message_id": item["message_id"], "decision_ids": [item["message_id"]]}
+                        for item in state["processed"]
+                    ]
+                    response_batches.sort(key=lambda item: item["message_id"])
+                else:
+                    response_batches = state["response_batches"]
+            except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
                 raise BridgeValidationError(
                     f"persisted engine authority is malformed: {error}"
                 ) from error
