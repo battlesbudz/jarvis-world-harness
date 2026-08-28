@@ -289,7 +289,7 @@ class H2BridgeContractTest(unittest.TestCase):
         forked_authority = engine_authority()
         decide(forked_authority, lineage_proposals[0])
         forked_first = decide(forked_authority, fork_proposal)
-        with self.assertRaisesRegex(BridgeValidationError, "state version was reused"):
+        with self.assertRaisesRegex(BridgeValidationError, "sequence was reused"):
             lineage_bridge.receive_engine_decision(forked_first)
         lineage_bridge.receive_engine_decision(lineage_first)
 
@@ -376,9 +376,7 @@ class H2BridgeContractTest(unittest.TestCase):
             {"ferry-dock"},
             PROPOSAL_ORIGIN_KEY,
         )
-        rejected_jump_bridge.receive_engine_decision(
-            decide(visible_rejecting_fork, rejected_first)
-        )
+        visible_first_rejection = decide(visible_rejecting_fork, rejected_first)
         mixed_fork = EngineAuthority(
             {"elias": "village-square", "nella": "village-square"},
             {"elias": {"routine_move"}, "nella": set()},
@@ -395,10 +393,52 @@ class H2BridgeContractTest(unittest.TestCase):
             ),
             ("rejected", 2, 1),
         )
-        before_rejected_jump = rejected_jump_bridge.world.state_digest()
-        with self.assertRaisesRegex(BridgeValidationError, "state version conflicts"):
-            rejected_jump_bridge.receive_engine_decision(rejected_after_hidden_apply)
-        self.assertEqual(rejected_jump_bridge.world.state_digest(), before_rejected_jump)
+        rejected_jump_bridge.receive_engine_decision(rejected_after_hidden_apply)
+        buffered_state = rejected_jump_bridge.world.extension_state("h2_bridge")
+        self.assertEqual(
+            (len(buffered_state["decisions"]), len(buffered_state["buffered_decisions"])),
+            (0, 1),
+        )
+        rejected_jump_bridge.receive_engine_decision(visible_first_rejection)
+        committed_state = rejected_jump_bridge.world.extension_state("h2_bridge")
+        self.assertEqual(
+            (len(committed_state["decisions"]), len(committed_state["buffered_decisions"])),
+            (1, 0),
+        )
+        valid_second_rejection = decide(visible_rejecting_fork, rejected_second)
+        self.assertEqual(valid_second_rejection.outcome.payload["state_version"], 0)
+        rejected_jump_bridge.receive_engine_decision(valid_second_rejection)
+
+    def test_out_of_order_engine_decisions_buffer_across_reload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "buffered-decisions.json"
+            bridge = h2_bridge()
+            proposals = bridge.ingest_engine_observation(
+                envelope("engine-observation:decision-buffer", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            authority = engine_authority()
+            first = decide(authority, proposals[0])
+            second = decide(authority, proposals[1])
+            bridge.receive_engine_decision(second)
+            buffered_state = bridge.world.extension_state("h2_bridge")
+            self.assertEqual(
+                (len(buffered_state["decisions"]), len(buffered_state["buffered_decisions"])),
+                (0, 1),
+            )
+
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+            resumed = WorldOSBridge(
+                World.load(path, expected_state_digest=trusted),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            resumed.receive_engine_decision(first)
+            resumed_state = resumed.world.extension_state("h2_bridge")
+            self.assertEqual(
+                (len(resumed_state["decisions"]), len(resumed_state["buffered_decisions"])),
+                (2, 0),
+            )
 
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -437,7 +477,8 @@ class H2BridgeContractTest(unittest.TestCase):
                 PROPOSAL_ORIGIN_KEY,
             )
             self.assertEqual(
-                migrated_bridge.world.extension_state("h2_bridge")["schema_version"], 2
+                migrated_bridge.world.extension_state("h2_bridge")["schema_version"],
+                3,
             )
 
             legacy_signature_state = bridge.world.extension_state("h2_bridge")

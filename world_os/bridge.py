@@ -16,7 +16,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
 BRIDGE_SCHEMA_VERSION = 1
-BRIDGE_STATE_SCHEMA_VERSION = 2
+BRIDGE_STATE_SCHEMA_VERSION = 3
 ENGINE_AUTHORITY_SCHEMA_VERSION = 4
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
@@ -337,6 +337,7 @@ class WorldOSBridge:
         self._proposal_sequence: dict[str, int] = {}
         self._pending: dict[str, Envelope] = {}
         self._decisions: dict[str, EngineDecision] = {}
+        self._buffered_decisions: dict[str, EngineDecision] = {}
         self._engine_events: dict[str, str] = {}
         self._engine_versions: dict[int, str] = {}
         self._buffered_observations: dict[str, Envelope] = {}
@@ -363,6 +364,12 @@ class WorldOSBridge:
             "proposal_sequence": dict(sorted(self._proposal_sequence.items())),
             "pending": [proposal.to_dict() for proposal in sorted(self._pending.values(), key=lambda item: item.message_id)],
             "decisions": [decision.to_dict() for decision in sorted(self._decisions.values(), key=lambda item: item.outcome.message_id)],
+            "buffered_decisions": [
+                decision.to_dict()
+                for decision in sorted(
+                    self._buffered_decisions.values(), key=lambda item: item.outcome.message_id
+                )
+            ],
             "engine_events": dict(sorted(self._engine_events.items())),
             "engine_versions": {str(version): digest for version, digest in sorted(self._engine_versions.items())},
             "buffered_observations": [
@@ -386,23 +393,36 @@ class WorldOSBridge:
             "schema_version", "role_stations", "observations", "last_engine_sequence",
             "proposal_sequence", "pending", "decisions", "engine_events",
             "engine_versions", "buffered_observations", "delivery_results",
-            "delivery_observations",
+            "delivery_observations", "buffered_decisions",
         }
-        legacy_required = required - {
+        pre_decision_buffer_required = required - {"buffered_decisions"}
+        legacy_required = pre_decision_buffer_required - {
             "buffered_observations", "delivery_results", "delivery_observations"
         }
-        previous_required = required - {"delivery_observations"}
+        current_legacy_required = required - {
+            "buffered_observations", "delivery_results", "delivery_observations"
+        }
+        previous_required = pre_decision_buffer_required - {"delivery_observations"}
+        current_previous_required = required - {"delivery_observations"}
         state_fields = set(state)
-        legacy_migration = state_fields == legacy_required
-        previous_migration = state_fields == previous_required
+        legacy_migration = (
+            state_fields == legacy_required or state_fields == current_legacy_required
+        )
+        previous_migration = (
+            state_fields == previous_required or state_fields == current_previous_required
+        )
         migrated = legacy_migration or previous_migration
         migrate_delivery_observations = migrated
-        if set(state) == legacy_required:
+        if set(state) == legacy_required or set(state) == current_legacy_required:
             state = {**dict(state), "buffered_observations": [], "delivery_results": {}}
-        if set(state) == previous_required:
+        if set(state) == previous_required or set(state) == current_previous_required:
             state = {**dict(state), "delivery_observations": {}}
+        if set(state) == pre_decision_buffer_required:
+            state = {**dict(state), "buffered_decisions": []}
+            migrated = True
         if set(state) != required or not (
             _is_exact_version(state.get("schema_version"), 1)
+            or _is_exact_version(state.get("schema_version"), 2)
             or _is_exact_version(state.get("schema_version"), BRIDGE_STATE_SCHEMA_VERSION)
         ):
             raise BridgeValidationError("persisted bridge state is incompatible")
@@ -425,15 +445,29 @@ class WorldOSBridge:
                 )
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
+        elif state["schema_version"] == 2:
+            state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
+            migrated = True
         if state.get("role_stations") != self.role_stations:
             raise BridgeValidationError("persisted bridge role stations do not match configuration")
         try:
             pending = [Envelope.from_dict(item) for item in state["pending"]]
             decisions = [EngineDecision.from_dict(item) for item in state["decisions"]]
+            buffered_decisions = [
+                EngineDecision.from_dict(item) for item in state["buffered_decisions"]
+            ]
             if len({item.message_id for item in pending}) != len(pending):
                 raise BridgeValidationError("persisted pending proposal identity is duplicated")
             if len({item.outcome.message_id for item in decisions}) != len(decisions):
                 raise BridgeValidationError("persisted engine outcome identity is duplicated")
+            if len({item.outcome.message_id for item in buffered_decisions}) != len(buffered_decisions):
+                raise BridgeValidationError("persisted buffered engine outcome identity is duplicated")
+            if {item.outcome.message_id for item in decisions} & {
+                item.outcome.message_id for item in buffered_decisions
+            }:
+                raise BridgeValidationError(
+                    "persisted engine outcome identity is shared across committed and buffered ledgers"
+                )
             observations = {}
             for item in state["observations"]:
                 observation = Envelope.from_dict(item["envelope"])
@@ -445,6 +479,9 @@ class WorldOSBridge:
             self._proposal_sequence = _counter_map(state["proposal_sequence"], "proposal_sequence")
             self._pending = {item.message_id: item for item in pending}
             self._decisions = {item.outcome.message_id: item for item in decisions}
+            self._buffered_decisions = {
+                item.outcome.message_id: item for item in buffered_decisions
+            }
             self._engine_events = {str(key): str(value) for key, value in state["engine_events"].items()}
             engine_versions = [(int(key), str(value)) for key, value in state["engine_versions"].items()]
             if len({version for version, _digest in engine_versions}) != len(engine_versions):
@@ -556,6 +593,10 @@ class WorldOSBridge:
         if len(set(decision_sequences)) != len(decision_sequences):
             raise BridgeValidationError("persisted engine outcome ordering slot is duplicated")
         ordered_decisions = sorted(self._decisions.values(), key=lambda item: item.outcome.sequence)
+        if [item.outcome.sequence for item in ordered_decisions] != list(
+            range(1, len(ordered_decisions) + 1)
+        ):
+            raise BridgeValidationError("persisted engine outcome ordering is not contiguous")
         if any(
             not _state_advance_is_possible(
                 earlier.outcome.sequence,
@@ -621,6 +662,45 @@ class WorldOSBridge:
             expected_engine_versions[state_version] = event_digest
         if self._engine_events != expected_engine_events or self._engine_versions != expected_engine_versions:
             raise BridgeValidationError("persisted engine identity maps do not match applied decisions")
+
+        buffered_decision_sequences: set[int] = set()
+        buffered_decision_correlations: set[str] = set()
+        for decision in self._buffered_decisions.values():
+            if not _has_valid_authority_proof(
+                decision.outcome,
+                decision.engine_event,
+                decision.outcome.payload["authority_proof"],
+                self._engine_authority_public_key,
+            ):
+                raise BridgeValidationError("persisted buffered engine decision proof is invalid")
+            proposal = self._pending.get(decision.outcome.correlation_id)
+            if proposal is None or proposal.actor_id != decision.outcome.actor_id:
+                raise BridgeValidationError(
+                    "persisted buffered engine decision does not match a pending proposal"
+                )
+            if decision.status == "applied":
+                expected_action = {
+                    key: proposal.payload.get(key)
+                    for key in ("action_type", "command", "destination")
+                }
+                actual_action = {
+                    key: decision.engine_event.payload.get(key) for key in expected_action
+                }
+                if actual_action != expected_action:
+                    raise BridgeValidationError(
+                        "persisted buffered authoritative event does not match its proposal"
+                    )
+            sequence = decision.outcome.sequence
+            correlation = decision.outcome.correlation_id
+            if (
+                sequence <= len(ordered_decisions) + 1
+                or sequence in buffered_decision_sequences
+                or correlation in decision_correlations
+                or correlation in buffered_decision_correlations
+            ):
+                raise BridgeValidationError("persisted buffered engine decision ordering is invalid")
+            buffered_decision_sequences.add(sequence)
+            buffered_decision_correlations.add(correlation)
 
         observation_sequences: dict[str, list[int]] = {}
         for observation, _proposals in self._observations.values():
@@ -792,7 +872,7 @@ class WorldOSBridge:
         self._persist()
         return result
 
-    def receive_engine_decision(self, decision: EngineDecision) -> None:
+    def _validate_engine_decision_envelope(self, decision: EngineDecision) -> Envelope:
         if not _has_valid_authority_proof(
             decision.outcome,
             decision.engine_event,
@@ -806,7 +886,6 @@ class WorldOSBridge:
             raise BridgeValidationError("engine outcome does not correlate to a pending World OS proposal")
         if decision.outcome.actor_id != proposal.actor_id:
             raise BridgeValidationError("engine outcome actor does not match its proposal")
-        existing = self._decisions.get(decision.outcome.message_id)
         if decision.status == "applied":
             engine_event = decision.engine_event
             expected = {
@@ -820,6 +899,50 @@ class WorldOSBridge:
             if existing_event_digest is not None and existing_event_digest != engine_event.digest():
                 raise BridgeValidationError("authoritative engine event id was reused with different content")
             state_version = int(engine_event.payload["state_version"])
+            for prior_version, prior_digest in enumerate(
+                engine_event.payload["prior_event_digests"], start=1
+            ):
+                existing_prior_digest = self._engine_versions.get(prior_version)
+                if existing_prior_digest is not None and existing_prior_digest != prior_digest:
+                    raise BridgeValidationError(
+                        "authoritative engine event lineage conflicts with recorded history"
+                    )
+            existing_version_digest = self._engine_versions.get(state_version)
+            if existing_version_digest is not None and existing_version_digest != engine_event.digest():
+                raise BridgeValidationError(
+                    "authoritative engine state version was reused by a different event"
+                )
+        return proposal
+
+    def _record_engine_decision(self, decision: EngineDecision) -> None:
+        proposal = self._validate_engine_decision_envelope(decision)
+        expected_sequence = len(self._decisions) + 1
+        if decision.outcome.sequence != expected_sequence:
+            raise BridgeValidationError("engine outcome ordering is not contiguous")
+        if any(
+            item.outcome.correlation_id == proposal.message_id
+            for item in self._decisions.values()
+        ):
+            raise BridgeValidationError("World OS proposal already has an engine outcome")
+        if self._decisions:
+            prior = max(self._decisions.values(), key=lambda item: item.outcome.sequence)
+            state_is_possible = _state_advance_is_possible(
+                prior.outcome.sequence,
+                int(prior.outcome.payload["state_version"]),
+                decision,
+            )
+        else:
+            state_is_possible = _state_advance_is_possible(0, 0, decision)
+        if not state_is_possible:
+            raise BridgeValidationError(
+                "engine outcome state version conflicts with decision ordering"
+            )
+        if decision.status == "applied":
+            engine_event = decision.engine_event
+            existing_event_digest = self._engine_events.get(engine_event.message_id)
+            if existing_event_digest is not None and existing_event_digest != engine_event.digest():
+                raise BridgeValidationError("authoritative engine event id was reused with different content")
+            state_version = int(engine_event.payload["state_version"])
             for prior_version, prior_digest in enumerate(engine_event.payload["prior_event_digests"], start=1):
                 existing_prior_digest = self._engine_versions.get(prior_version)
                 if existing_prior_digest is not None and existing_prior_digest != prior_digest:
@@ -827,41 +950,6 @@ class WorldOSBridge:
             existing_version_digest = self._engine_versions.get(state_version)
             if existing_version_digest is not None and existing_version_digest != engine_event.digest():
                 raise BridgeValidationError("authoritative engine state version was reused by a different event")
-        if existing is None and any(
-            item.outcome.sequence == decision.outcome.sequence for item in self._decisions.values()
-        ):
-            raise BridgeValidationError("engine outcome sequence was reused by a different decision")
-        if existing:
-            if existing.digest() != decision.digest():
-                raise BridgeValidationError("engine outcome id was reused with different content")
-            return
-        outcome_sequence = decision.outcome.sequence
-        state_version = int(decision.outcome.payload["state_version"])
-        if not _state_advance_is_possible(0, 0, decision):
-            raise BridgeValidationError(
-                "engine outcome initial state version conflicts with decision ordering"
-            )
-        if any(
-            not (
-                _state_advance_is_possible(
-                    prior.outcome.sequence,
-                    int(prior.outcome.payload["state_version"]),
-                    decision,
-                )
-                if prior.outcome.sequence < outcome_sequence
-                else _state_advance_is_possible(
-                    outcome_sequence,
-                    state_version,
-                    prior,
-                )
-            )
-            for prior in self._decisions.values()
-        ):
-            raise BridgeValidationError(
-                "engine outcome state version conflicts with decision ordering"
-            )
-        if any(item.outcome.correlation_id == proposal_id for item in self._decisions.values()):
-            raise BridgeValidationError("World OS proposal already has an engine outcome")
         self._decisions[decision.outcome.message_id] = decision
         if decision.engine_event is not None:
             for prior_version, prior_digest in enumerate(
@@ -871,6 +959,57 @@ class WorldOSBridge:
                 self._engine_versions[prior_version] = prior_digest
             self._engine_events[decision.engine_event.message_id] = decision.engine_event.digest()
             self._engine_versions[int(decision.engine_event.payload["state_version"])] = decision.engine_event.digest()
+
+    def receive_engine_decision(self, decision: EngineDecision) -> None:
+        proposal = self._validate_engine_decision_envelope(decision)
+        existing = self._decisions.get(decision.outcome.message_id)
+        buffered_existing = self._buffered_decisions.get(decision.outcome.message_id)
+        if existing is not None or buffered_existing is not None:
+            recorded = existing if existing is not None else buffered_existing
+            if recorded.digest() != decision.digest():
+                raise BridgeValidationError("engine outcome id was reused with different content")
+            return
+
+        all_decisions = (*self._decisions.values(), *self._buffered_decisions.values())
+        if any(item.outcome.sequence == decision.outcome.sequence for item in all_decisions):
+            raise BridgeValidationError("engine outcome sequence was reused by a different decision")
+        if any(
+            item.outcome.correlation_id == proposal.message_id
+            for item in self._decisions.values()
+        ):
+            raise BridgeValidationError("World OS proposal already has an engine outcome")
+        for message_id, buffered in tuple(self._buffered_decisions.items()):
+            if buffered.outcome.correlation_id != proposal.message_id:
+                continue
+            if buffered.outcome.sequence < decision.outcome.sequence:
+                raise BridgeValidationError("World OS proposal already has a buffered engine outcome")
+            self._buffered_decisions.pop(message_id)
+        expected_sequence = len(self._decisions) + 1
+        if decision.outcome.sequence < expected_sequence:
+            raise BridgeValidationError("engine outcome ordering slot is already committed")
+        if decision.outcome.sequence > expected_sequence:
+            self._buffered_decisions[decision.outcome.message_id] = decision
+            self._persist()
+            return
+
+        self._record_engine_decision(decision)
+        while True:
+            next_sequence = len(self._decisions) + 1
+            buffered = next(
+                (
+                    item
+                    for item in self._buffered_decisions.values()
+                    if item.outcome.sequence == next_sequence
+                ),
+                None,
+            )
+            if buffered is None:
+                break
+            self._buffered_decisions.pop(buffered.outcome.message_id)
+            try:
+                self._record_engine_decision(buffered)
+            except BridgeValidationError:
+                break
         self._persist()
 
     def evidence(self) -> dict[str, Any]:
@@ -887,6 +1026,12 @@ class WorldOSBridge:
             "proposals": [item.to_dict() for item in sorted(self._pending.values(), key=lambda item: item.message_id)],
             "decisions": [
                 item.to_dict() for item in sorted(self._decisions.values(), key=lambda item: item.outcome.message_id)
+            ],
+            "buffered_decisions": [
+                item.to_dict()
+                for item in sorted(
+                    self._buffered_decisions.values(), key=lambda item: item.outcome.message_id
+                )
             ],
             "causal_traces": {
                 item.message_id: self.world.trace(str(item.payload["causal_event_id"]))
