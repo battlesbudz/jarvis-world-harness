@@ -85,5 +85,7 @@ grep -q 'JWH_GATE_LEASE_FDS=8,9' bin/supervise-codex.sh
 grep -q 'reacquire control/runner locks after milestone gate' bin/supervise-codex.sh
 grep -q 'os.killpg' bin/milestone-gate.py
 grep -q 'process tree terminated' bin/milestone-gate.py
+grep -q -- '-r requirements.txt' bin/setup-capabilities.sh
+grep -q '"cryptography"' bin/setup-capabilities.sh
 
 echo "H0 static harness checks passed"

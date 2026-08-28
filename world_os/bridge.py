@@ -769,7 +769,13 @@ class WorldOSBridge:
         for proposal in self._pending.values():
             if not hmac.compare_digest(str(proposal.payload.get("origin_proof", "")), _origin_proof(proposal, self._proposal_origin_key)):
                 raise BridgeValidationError("persisted proposal origin proof is invalid")
-            self.world.trace(str(proposal.payload["causal_event_id"]))
+            try:
+                causal_event_id = proposal.payload["causal_event_id"]
+                self.world.trace(str(causal_event_id))
+            except (KeyError, TypeError, ValueError) as error:
+                raise BridgeValidationError(
+                    "persisted proposal causal event reference is invalid"
+                ) from error
         if migrated:
             self._persist()
 

@@ -126,12 +126,13 @@ fi
 AGENT_PY="$(command -v python3)"
 echo "  python for generator work: $AGENT_PY ($("$AGENT_PY" -V 2>&1))"
 "$AGENT_PY" -m pip install --user --quiet --disable-pip-version-check \
+  -r requirements.txt \
   numpy scipy shapely trimesh networkx scikit-image opencv-python-headless \
   pyproj mapbox_earcut noise pygltflib matplotlib pillow 2>&1 | grep -vi "already satisfied" | tail -3
 "$AGENT_PY" - <<'PY'
 import importlib
 ok, bad = [], []
-for m in ["numpy","scipy","shapely","trimesh","networkx","skimage","cv2","pyproj",
+for m in ["cryptography","numpy","scipy","shapely","trimesh","networkx","skimage","cv2","pyproj",
           "mapbox_earcut","noise","pygltflib","matplotlib","PIL"]:
     try: importlib.import_module(m); ok.append(m)
     except Exception: bad.append(m)

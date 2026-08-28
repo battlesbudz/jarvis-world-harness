@@ -19,7 +19,7 @@ from world_os import (
     World,
 )
 from world_os.scenarios import albion_world
-from world_os.bridge import _authority_material
+from world_os.bridge import _authority_material, _origin_proof
 
 
 PROPOSAL_ORIGIN_KEY = b"h2-deterministic-test-key"
@@ -549,6 +549,63 @@ class H2BridgeContractTest(unittest.TestCase):
             (len(drained_state["decisions"]), len(drained_state["buffered_decisions"])),
             (3, 0),
         )
+
+    def test_missing_persisted_causal_event_fails_as_bridge_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "missing-causal-event.json"
+            bridge = h2_bridge()
+            proposals = bridge.ingest_engine_observation(
+                envelope("engine-observation:missing-causal", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            original = proposals[0]
+            unsigned = Envelope.from_dict(
+                {
+                    **original.to_dict(),
+                    "payload": {
+                        **original.to_dict()["payload"],
+                        "causal_event_id": "event-that-does-not-exist",
+                        "origin_proof": "0" * 64,
+                    },
+                }
+            )
+            authenticated = Envelope.from_dict(
+                {
+                    **unsigned.to_dict(),
+                    "payload": {
+                        **unsigned.to_dict()["payload"],
+                        "origin_proof": _origin_proof(unsigned, PROPOSAL_ORIGIN_KEY),
+                    },
+                }
+            )
+            state = bridge.world.extension_state("h2_bridge")
+            state["pending"] = [
+                authenticated.to_dict() if item["message_id"] == original.message_id else item
+                for item in state["pending"]
+            ]
+            for observation in state["observations"]:
+                observation["proposals"] = [
+                    authenticated.to_dict()
+                    if item["message_id"] == original.message_id
+                    else item
+                    for item in observation["proposals"]
+                ]
+            for message_id, delivered in state["delivery_results"].items():
+                state["delivery_results"][message_id] = [
+                    authenticated.to_dict()
+                    if item["message_id"] == original.message_id
+                    else item
+                    for item in delivered
+                ]
+            bridge.world.set_extension_state("h2_bridge", state)
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+
+            with self.assertRaisesRegex(BridgeValidationError, "causal event reference"):
+                WorldOSBridge(
+                    World.load(path, expected_state_digest=trusted),
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
 
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
