@@ -1,26 +1,28 @@
-# Active Milestone — H0: Harness Foundation
+# Active Milestone — H1: Text Simulator
 
 ## Goal
 
-Convert the AAABench long-horizon Unreal harness into a Codex-first development harness for Jarvis World OS without prematurely building Jarvis World OS or the full game.
+Build a deterministic, headless Jarvis World OS simulator that proves causal living-world behavior before Unreal integration or large-scale content generation.
+
+## Authorized scope
+
+H1 authorizes the standalone simulation runtime, deterministic fixtures, persistence format, causal traces, and automated evidence defined in `milestones/H1/SPEC.md`.
+
+It does not authorize Unreal assets or gameplay integration, procedural cities, large open-world content generation, production networking, or LLM-dependent state transitions.
 
 ## Required outcomes
 
-1. Product laws are separated from implementation instructions and treated as protected inputs.
-2. A milestone file and acceptance-test file control what Codex is authorized to build.
-3. Codex work emits machine-readable logs suitable for liveness/progress checks.
-4. Codex thread identity is persisted so separate runner invocations resume the same long-horizon work.
-5. The harness distinguishes process liveness from real progress.
-6. A single-instance supervisor can relaunch Codex safely, back off on repeated failures, and honor pause/stop controls.
-7. Manual restart cannot race the supervisor or leave duplicate Codex workers behind.
-8. The architecture supports both:
-   - headless World OS simulation/evals
-   - Unreal/MCP visual/gameplay work
-9. AAABench's useful Unreal control surface, QA tooling, supervision lessons, and MIT attribution are preserved.
-10. The next milestone, **H1 Text Simulator**, is fully specified in `milestones/H1/SPEC.md`, has a committed executable evidence manifest at `milestones/H1/gate.json`, and has finalized acceptance criteria before any implementation or large open-world content generation begins.
+1. Bio, Thinker, and Non-Thinker actors have stable identities and distinct cognition rules.
+2. An append-only event history drives memories, beliefs, relationships, rumors, awakening, agency, and world pressure.
+3. A role-based Non-Thinker can awaken through meaningful relationship evidence without a direct awakening command.
+4. An awakened actor retains prior history, forms independent goals, and can refuse or oppose the Bio.
+5. A town crisis evolves without player action.
+6. Save/reload is deterministic and tampered or incompatible state fails closed.
+7. Machine-readable causal traces explain the required outcomes.
+8. The World OS only proposes actions; an authoritative validator applies legal mutations.
 
 ## Stop condition
 
-H0 is complete when `ACCEPTANCE-TESTS.md` H0 criteria are satisfied and the repository is ready for the H1 text-simulator implementation.
+H1 is complete only when every command in `milestones/H1/gate.json` passes and its evidence covers every H1 criterion in `ACCEPTANCE-TESTS.md`.
 
-Do not implement the Jarvis World OS simulation, large-scale world generation, procedural cities, or full game content in H0.
+Unreal integration remains outside H1.

@@ -6,7 +6,7 @@ This repository preserves AAABench's Unreal/MCP/VibeUE control surface, unattend
 
 ## Current scope
 
-**This repository is the development harness, not Jarvis World OS itself.** H0 builds the machinery that will later let Codex implement and verify Jarvis World OS milestone by milestone.
+**This repository is the development harness and the home of the headless World OS prototype, not the finished game.** H0 established the harness; H1 now builds and verifies the deterministic text simulator.
 
 ## North star
 
@@ -45,7 +45,7 @@ The World OS must never have unrestricted mutation power over Unreal. It propose
 
 ## Codex lifecycle
 
-H0 uses the stable `codex exec` automation surface with JSONL events and persisted session resume.
+The harness uses the stable `codex exec` automation surface with JSONL events and persisted session resume.
 
 Start or resume one Codex turn:
 
@@ -94,7 +94,7 @@ Runtime state, logs, PIDs, thread IDs, and last-run metadata live under `.harnes
 - `spec/CORE-LAWS.md` — protected design invariants.
 - `MILESTONE.md` — the currently authorized milestone.
 - `ACCEPTANCE-TESTS.md` — evidence required before advancing.
-- `milestones/H1/SPEC.md` — finalized scope and evidence contract for the next milestone; it does not authorize H1 during H0.
+- `milestones/H1/SPEC.md` — finalized scope and evidence contract for the active milestone.
 - `HARNESS-RULES.md` — operator/agent boundaries.
 - `docs/ARCHITECTURE.md` — intended split between Unreal and World OS.
 - `bin/run-codex.sh` — resumable Codex runner with structured events.
