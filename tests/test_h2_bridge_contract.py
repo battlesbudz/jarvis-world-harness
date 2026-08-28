@@ -363,6 +363,43 @@ class H2BridgeContractTest(unittest.TestCase):
             hidden_mutation_bridge.receive_engine_decision(hidden_second_applied)
         self.assertEqual(hidden_mutation_bridge.world.state_digest(), before_hidden)
 
+        rejected_jump_bridge = h2_bridge()
+        first_batch = rejected_jump_bridge.ingest_engine_observation(
+            envelope("engine-observation:rejected-jump:1", 1, "bio", "time_advance", {"ticks": 1})
+        )
+        rejected_first = next(item for item in first_batch if item.actor_id == "elias")
+        privately_applied = rejected_first
+        rejected_second = next(item for item in first_batch if item.actor_id == "nella")
+        visible_rejecting_fork = EngineAuthority(
+            {"elias": "village-square"},
+            {"elias": set()},
+            {"ferry-dock"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        rejected_jump_bridge.receive_engine_decision(
+            decide(visible_rejecting_fork, rejected_first)
+        )
+        mixed_fork = EngineAuthority(
+            {"elias": "village-square", "nella": "village-square"},
+            {"elias": {"routine_move"}, "nella": set()},
+            {"ferry-dock", "bakery"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        self.assertEqual(decide(mixed_fork, privately_applied).status, "applied")
+        rejected_after_hidden_apply = decide(mixed_fork, rejected_second)
+        self.assertEqual(
+            (
+                rejected_after_hidden_apply.status,
+                rejected_after_hidden_apply.outcome.sequence,
+                rejected_after_hidden_apply.outcome.payload["state_version"],
+            ),
+            ("rejected", 2, 1),
+        )
+        before_rejected_jump = rejected_jump_bridge.world.state_digest()
+        with self.assertRaisesRegex(BridgeValidationError, "state version conflicts"):
+            rejected_jump_bridge.receive_engine_decision(rejected_after_hidden_apply)
+        self.assertEqual(rejected_jump_bridge.world.state_digest(), before_rejected_jump)
+
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "world.json"
