@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import tempfile
@@ -226,6 +227,52 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(resumed_authority.validate_and_apply(proposals[0]), decision)
             self.assertEqual(resumed_authority.state(), before_engine_retry)
             self.assertEqual(resumed_authority.state()["state_version"], 1)
+
+            legacy_bridge = h2_bridge()
+            legacy_state = legacy_bridge.world.extension_state("h2_bridge")
+            legacy_state.pop("buffered_observations")
+            legacy_state.pop("delivery_results")
+            legacy_bridge.world.set_extension_state("h2_bridge", legacy_state)
+            legacy_digest = legacy_bridge.world.state_digest()
+            legacy_bridge.world.save(path)
+            migrated = WorldOSBridge(
+                type(legacy_bridge.world).load(path, expected_state_digest=legacy_digest),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            migrated_state = migrated.world.extension_state("h2_bridge")
+            self.assertEqual(migrated_state["buffered_observations"], [])
+            self.assertEqual(migrated_state["delivery_results"], {})
+
+            invalid_bridge = h2_bridge()
+            invalid_state = invalid_bridge.world.extension_state("h2_bridge")
+            invalid_state["schema_version"] = True
+            invalid_bridge.world.set_extension_state("h2_bridge", invalid_state)
+            invalid_digest = invalid_bridge.world.state_digest()
+            invalid_bridge.world.save(path)
+            invalid_world = type(invalid_bridge.world).load(path, expected_state_digest=invalid_digest)
+            with self.assertRaisesRegex(BridgeValidationError, "incompatible"):
+                WorldOSBridge(
+                    invalid_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
+            authority.save(engine_path)
+            engine_payload = json.loads(engine_path.read_text(encoding="utf-8"))
+            engine_payload["state"]["schema_version"] = True
+            canonical = json.dumps(
+                engine_payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            invalid_engine_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            engine_payload["digest"] = invalid_engine_digest
+            engine_path.write_text(json.dumps(engine_payload), encoding="utf-8")
+            with self.assertRaisesRegex(BridgeValidationError, "incompatible"):
+                EngineAuthority.load(
+                    engine_path,
+                    PROPOSAL_ORIGIN_KEY,
+                    expected_snapshot_digest=invalid_engine_digest,
+                )
 
     def test_out_of_order_observations_buffer_across_reload_and_apply_in_order(self):
         with tempfile.TemporaryDirectory() as directory:

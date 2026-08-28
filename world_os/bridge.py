@@ -21,6 +21,10 @@ class BridgeValidationError(ValueError):
     pass
 
 
+def _is_supported_schema_version(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value == BRIDGE_SCHEMA_VERSION
+
+
 def _canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
 
@@ -62,11 +66,7 @@ class Envelope:
     payload: Mapping[str, Any]
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.schema_version, int)
-            or isinstance(self.schema_version, bool)
-            or self.schema_version != BRIDGE_SCHEMA_VERSION
-        ):
+        if not _is_supported_schema_version(self.schema_version):
             raise BridgeValidationError(f"unsupported bridge schema version: {self.schema_version!r}")
         for name, value in (
             ("message_id", self.message_id),
@@ -290,7 +290,11 @@ class WorldOSBridge:
             "proposal_sequence", "pending", "decisions", "engine_events",
             "engine_versions", "buffered_observations", "delivery_results",
         }
-        if set(state) != required or state.get("schema_version") != BRIDGE_SCHEMA_VERSION:
+        legacy_required = required - {"buffered_observations", "delivery_results"}
+        migrated = set(state) == legacy_required
+        if migrated:
+            state = {**dict(state), "buffered_observations": [], "delivery_results": {}}
+        if set(state) != required or not _is_supported_schema_version(state.get("schema_version")):
             raise BridgeValidationError("persisted bridge state is incompatible")
         if state.get("role_stations") != self.role_stations:
             raise BridgeValidationError("persisted bridge role stations do not match configuration")
@@ -329,6 +333,8 @@ class WorldOSBridge:
             if not hmac.compare_digest(str(proposal.payload.get("origin_proof", "")), _origin_proof(proposal, self._proposal_origin_key)):
                 raise BridgeValidationError("persisted proposal origin proof is invalid")
             self.world.trace(str(proposal.payload["causal_event_id"]))
+        if migrated:
+            self._persist()
 
     def _proposal(self, event: Event, correlation_id: str, payload: Mapping[str, Any]) -> Envelope:
         sequence = self._proposal_sequence.get(event.actor, 0) + 1
@@ -627,7 +633,7 @@ class EngineAuthority:
             envelope.get("format") != "jarvis-world-h2-engine"
             or not isinstance(state, dict)
             or set(state) != expected_fields
-            or state.get("schema_version") != BRIDGE_SCHEMA_VERSION
+            or not _is_supported_schema_version(state.get("schema_version"))
         ):
             raise BridgeValidationError("incompatible persisted engine authority")
         if not expected_snapshot_digest or digest != expected_snapshot_digest or envelope.get("digest") != digest:
