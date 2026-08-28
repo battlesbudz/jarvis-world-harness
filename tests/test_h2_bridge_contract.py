@@ -321,6 +321,21 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
             self.assertEqual(migrated_authority.snapshot()["schema_version"], 3)
 
+            malformed_previous = json.loads(json.dumps(previous_payload))
+            del malformed_previous["state"]["processed"][0]["decision"]["outcome"]["sequence"]
+            canonical = json.dumps(
+                malformed_previous["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            malformed_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            malformed_previous["digest"] = malformed_digest
+            engine_path.write_text(json.dumps(malformed_previous), encoding="utf-8")
+            with self.assertRaisesRegex(BridgeValidationError, "malformed"):
+                EngineAuthority.load(
+                    engine_path,
+                    PROPOSAL_ORIGIN_KEY,
+                    expected_snapshot_digest=malformed_digest,
+                )
+
             missing_index_bridge = h2_bridge()
             indexed_proposals = missing_index_bridge.ingest_engine_observation(
                 envelope("engine-observation:indexed", 1, "bio", "time_advance", {"ticks": 1})
