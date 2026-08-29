@@ -936,6 +936,20 @@ class H2BridgeContractTest(unittest.TestCase):
                 PROPOSAL_ORIGIN_KEY,
             )
 
+    def test_incompatible_actor_id_fails_before_world_mutation(self):
+        world = World(
+            2204,
+            [
+                Actor("bio one", "Bio One", "bio", "wanderer", ("freedom",)),
+                Actor("mara", "Mara", "thinker", "captain", ("protect_community",)),
+            ],
+            crisis_actor="mara",
+        )
+        before = world.state_digest()
+        with self.assertRaisesRegex(BridgeValidationError, "bridge-compatible"):
+            WorldOSBridge(world, {}, PROPOSAL_ORIGIN_KEY)
+        self.assertEqual(world.state_digest(), before)
+
     def test_cross_bio_time_advances_restore_in_world_tick_order(self):
         world = World(
             2204,

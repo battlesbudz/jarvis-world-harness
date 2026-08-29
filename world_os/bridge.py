@@ -325,6 +325,15 @@ class WorldOSBridge:
         self.role_stations = dict(role_stations)
         self._proposal_origin_key = _proposal_key(proposal_origin_key)
         self._engine_authority_public_key = _authority_public_key(engine_authority_public_key)
+        invalid_actor_ids = sorted(
+            actor_id
+            for actor_id in world.actors
+            if _ID_PATTERN.fullmatch(actor_id) is None
+        )
+        if invalid_actor_ids:
+            raise BridgeValidationError(
+                f"world actor ids are not bridge-compatible: {invalid_actor_ids}"
+            )
         missing_roles = {
             actor.role
             for actor in world.actors.values()
