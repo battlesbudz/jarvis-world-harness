@@ -671,7 +671,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     PROPOSAL_ORIGIN_KEY,
                 )
 
-            omitted_state = clean_state
+            omitted_state = json.loads(json.dumps(clean_state))
             later_ids = {proposal.message_id for proposal in later_proposals}
             omitted_state["pending"] = [
                 alternate.to_dict()
@@ -711,6 +711,83 @@ class H2BridgeContractTest(unittest.TestCase):
                     {"ferryman": "ferry-dock", "baker": "bakery"},
                     PROPOSAL_ORIGIN_KEY,
                 )
+
+            truncated_state = json.loads(json.dumps(clean_state))
+            later_observation_id = later_proposals[0].correlation_id
+            truncated_state["observations"] = [
+                item
+                for item in truncated_state["observations"]
+                if item["envelope"]["message_id"] != later_observation_id
+            ]
+            truncated_state["pending"] = [
+                item
+                for item in truncated_state["pending"]
+                if item["message_id"] not in later_ids
+            ]
+            truncated_state["delivery_results"].pop(later_observation_id)
+            truncated_state["delivery_observations"].pop(later_observation_id)
+            truncated_state["last_engine_sequence"]["bio"] = 1
+            truncated_state["proposal_sequence"] = {}
+            for item in truncated_state["pending"]:
+                actor_id = item["actor_id"]
+                truncated_state["proposal_sequence"][actor_id] = max(
+                    truncated_state["proposal_sequence"].get(actor_id, 0),
+                    item["sequence"],
+                )
+            bridge.world.set_extension_state("h2_bridge", truncated_state)
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+            with self.assertRaisesRegex(BridgeValidationError, "bridge-rooted time events"):
+                WorldOSBridge(
+                    World.load(path, expected_state_digest=trusted),
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
+    def test_legacy_causal_binding_marker_survives_repeated_reload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy-causal-binding.json"
+            bridge = h2_bridge()
+            bridge.ingest_engine_observation(
+                envelope("engine-observation:legacy-causal", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+
+            saved = json.loads(path.read_text(encoding="utf-8"))
+            for event in saved["state"]["events"]:
+                if event["event_type"] == "time_advanced":
+                    event["root_input"] = f"tick:{event['tick']}"
+            extension = saved["state"]["extensions"]["h2_bridge"]
+            extension["schema_version"] = 3
+            extension.pop("legacy_causal_binding")
+            canonical = json.dumps(
+                saved["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            )
+            saved["digest"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            path.write_text(json.dumps(saved), encoding="utf-8")
+
+            legacy_digest = saved["digest"]
+            migrated = WorldOSBridge(
+                World.load(path, expected_state_digest=legacy_digest),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            migrated_state = migrated.world.extension_state("h2_bridge")
+            self.assertEqual(
+                (migrated_state["schema_version"], migrated_state["legacy_causal_binding"]),
+                (4, True),
+            )
+            migrated_digest = migrated.world.state_digest()
+            migrated.world.save(path)
+            reloaded = WorldOSBridge(
+                World.load(path, expected_state_digest=migrated_digest),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            self.assertTrue(
+                reloaded.world.extension_state("h2_bridge")["legacy_causal_binding"]
+            )
 
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
