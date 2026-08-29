@@ -1048,7 +1048,7 @@ class WorldOSBridge:
                 ) from error
         def persisted_time_order(observation: Envelope) -> tuple[int, str]:
             if observation.message_id in self._legacy_time_observations:
-                event_id = self._legacy_time_anchors[observation.message_id]
+                event_id = self._legacy_time_anchors.get(observation.message_id)
                 time_event = next(
                     (event for event in self.world.events if event.id == event_id),
                     None,
