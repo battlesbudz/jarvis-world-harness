@@ -2,6 +2,7 @@ import { clamp, normalizeMovement, type MovementInput } from "./gameState";
 
 export interface InputController {
   movement(): MovementInput;
+  clear(): void;
   dispose(): void;
 }
 
@@ -113,6 +114,9 @@ export function createInputController(
         forward: clamp(keyboard.forward + joystickInput.forward, -1, 1),
         right: clamp(keyboard.right + joystickInput.right, -1, 1),
       });
+    },
+    clear(): void {
+      onFocusLost();
     },
     dispose(): void {
       window.removeEventListener("keydown", onKeyDown);

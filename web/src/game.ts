@@ -127,6 +127,7 @@ export class AlbionGame {
   };
 
   private readonly reset = (): void => {
+    this.input.clear();
     this.player.position.copyFromFloats(SPAWN.x, SPAWN.y, SPAWN.z);
     this.yaw = 0;
     this.pitch = 0.24;

@@ -89,13 +89,18 @@ test("camera drag changes facing and reset restores the exact spawn", async ({ p
   await page.mouse.move(bounds.x + bounds.width * 0.82, bounds.y + bounds.height * 0.5, { steps: 4 });
   await page.mouse.up();
   expect((await snapshot(page)).yaw).not.toBe(0);
-  await hold(page, "KeyW", 350);
+  await page.keyboard.down("KeyW");
+  await page.waitForTimeout(350);
   await page.getByRole("button", { name: "Reset to Bio spawn" }).click();
   const reset = await snapshot(page);
+  await page.waitForTimeout(400);
+  await page.keyboard.up("KeyW");
+  const settled = await snapshot(page);
   expect(reset.resetId).toBe(2);
   expect(reset.position).toEqual({ x: 0, y: 0.9, z: -12 });
   expect(reset.yaw).toBe(0);
   expect(reset.checkpoint).toBe("spawn");
+  expect(settled.position).toEqual({ x: 0, y: 0.9, z: -12 });
 });
 
 test("focus loss clears held movement", async ({ page }) => {
