@@ -829,6 +829,43 @@ class World:
             )
         )
 
+    def record_bridge_causal_anchor(
+        self, message_id: str, time_event_id: str
+    ) -> Event:
+        if not isinstance(message_id, str) or not message_id:
+            raise ValidationError("bridge causal anchor requires a message identity")
+        time_event = self._event(time_event_id)
+        if (
+            time_event.event_type != "time_advanced"
+            or time_event.root_input != f"tick:{time_event.tick}"
+            or time_event.payload.get("tick") != time_event.tick
+        ):
+            raise ValidationError(
+                "bridge causal anchor requires an exact legacy time event"
+            )
+        if any(
+            event.event_type == "bridge_causal_anchor"
+            and (
+                event.payload.get("message_id") == message_id
+                or event.payload.get("time_event_id") == time_event_id
+            )
+            for event in self.events
+        ):
+            raise ValidationError("bridge causal anchor identity is duplicated")
+        return self._record(
+            "bridge_causal_anchor",
+            self.crisis_actor,
+            (),
+            "albion",
+            (),
+            (time_event_id,),
+            f"bridge-legacy:{message_id}",
+            {
+                "message_id": message_id,
+                "time_event_id": time_event_id,
+            },
+        )
+
     def advance(self, ticks: int = 1, *, root_input: str | None = None) -> list[Event]:
         if not isinstance(ticks, int) or isinstance(ticks, bool) or ticks < 0:
             raise ValidationError("logical tick count must be a non-negative integer")
@@ -1027,6 +1064,10 @@ class World:
                     )
             elif event.event_type == "time_advanced":
                 world.advance(root_input=event.root_input)
+            elif event.event_type == "bridge_causal_anchor":
+                world.record_bridge_causal_anchor(
+                    event.payload["message_id"], event.payload["time_event_id"]
+                )
             elif event.event_type == "proposal_rejected":
                 proposal = event.payload.get("proposal")
                 if not isinstance(proposal, Mapping):

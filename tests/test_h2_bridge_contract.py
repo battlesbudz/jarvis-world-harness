@@ -463,7 +463,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["engine_events"],
                     migrated_state["engine_versions"],
                 ),
-                (7, 0, 1, {}, {}),
+                (8, 0, 1, {}, {}),
             )
 
             bridge.world.save(path)
@@ -737,7 +737,7 @@ class H2BridgeContractTest(unittest.TestCase):
             bridge.world.set_extension_state("h2_bridge", truncated_state)
             trusted = bridge.world.state_digest()
             bridge.world.save(path)
-            with self.assertRaisesRegex(BridgeValidationError, "bridge-rooted events"):
+            with self.assertRaisesRegex(BridgeValidationError, "bridge start"):
                 WorldOSBridge(
                     World.load(path, expected_state_digest=trusted),
                     {"ferryman": "ferry-dock", "baker": "bakery"},
@@ -780,7 +780,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["schema_version"],
                     migrated_state["legacy_time_observations"],
                 ),
-                (7, ["engine-observation:legacy-causal"]),
+                (8, ["engine-observation:legacy-causal"]),
             )
             migrated.ingest_engine_observation(
                 envelope(
@@ -867,12 +867,54 @@ class H2BridgeContractTest(unittest.TestCase):
                 PROPOSAL_ORIGIN_KEY,
             )
 
-    def test_bridge_requires_a_pristine_logical_clock(self):
+    def test_bridge_preserves_a_nonzero_start_boundary(self):
         world = albion_world(2202)
         world.advance()
-        with self.assertRaisesRegex(BridgeValidationError, "pristine logical clock"):
+        bridge = WorldOSBridge(
+            world,
+            {"ferryman": "ferry-dock", "baker": "bakery"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        bridge.ingest_engine_observation(
+            envelope(
+                "engine-observation:after-prebridge-tick",
+                1,
+                "bio",
+                "time_advance",
+                {"ticks": 1},
+            )
+        )
+        self.assertEqual(
+            bridge.world.extension_state("h2_bridge")["bridge_start_tick"], 1
+        )
+        previous_state = bridge.world.extension_state("h2_bridge")
+        previous_state["schema_version"] = 7
+        previous_state.pop("bridge_start_tick")
+        bridge.world.set_extension_state("h2_bridge", previous_state)
+        migrated = WorldOSBridge(
+            bridge.world,
+            {"ferryman": "ferry-dock", "baker": "bakery"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        self.assertEqual(
+            migrated.world.extension_state("h2_bridge")["bridge_start_tick"], 1
+        )
+
+    def test_bridge_root_without_the_extension_fails_initialization(self):
+        bridge = h2_bridge()
+        bridge.ingest_engine_observation(
+            envelope(
+                "engine-observation:missing-extension",
+                1,
+                "bio",
+                "npc_request",
+                {"target_id": "mara", "action": "wait"},
+            )
+        )
+        bridge.world._extensions.pop("h2_bridge")
+        with self.assertRaisesRegex(BridgeValidationError, "without its observation ledger"):
             WorldOSBridge(
-                world,
+                bridge.world,
                 {"ferryman": "ferry-dock", "baker": "bakery"},
                 PROPOSAL_ORIGIN_KEY,
             )
@@ -944,7 +986,7 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             self.assertEqual(
                 migrated_bridge.world.extension_state("h2_bridge")["schema_version"],
-                7,
+                8,
             )
 
             legacy_signature_state = bridge.world.extension_state("h2_bridge")

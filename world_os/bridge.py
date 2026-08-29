@@ -16,7 +16,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
 BRIDGE_SCHEMA_VERSION = 1
-BRIDGE_STATE_SCHEMA_VERSION = 7
+BRIDGE_STATE_SCHEMA_VERSION = 8
 ENGINE_AUTHORITY_SCHEMA_VERSION = 4
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
@@ -345,15 +345,18 @@ class WorldOSBridge:
         self._delivery_observations: dict[str, tuple[str, ...]] = {}
         self._legacy_time_observations: set[str] = set()
         self._legacy_time_anchors: dict[str, str] = {}
+        self._bridge_start_tick = self.world.tick
         saved = world.extension_state(_BRIDGE_EXTENSION)
         if saved is not None:
             self._restore(saved)
         else:
-            if self.world.tick != 0 or any(
-                event.event_type == "time_advanced" for event in self.world.events
+            if any(
+                isinstance(event.root_input, str)
+                and event.root_input.startswith("bridge:")
+                for event in self.world.events
             ):
                 raise BridgeValidationError(
-                    "bridge initialization requires a pristine logical clock"
+                    "bridge initialization found history without its observation ledger"
                 )
             self._persist()
 
@@ -393,6 +396,7 @@ class WorldOSBridge:
             },
             "legacy_time_observations": sorted(self._legacy_time_observations),
             "legacy_time_anchors": dict(sorted(self._legacy_time_anchors.items())),
+            "bridge_start_tick": self._bridge_start_tick,
         }
 
     def _persist(self) -> None:
@@ -468,6 +472,26 @@ class WorldOSBridge:
                     f"persisted legacy causal-anchor migration is malformed: {error}"
                 ) from error
             state = {**dict(state), "legacy_time_anchors": anchors}
+        bridge_start_migration = "bridge_start_tick" not in state
+        if bridge_start_migration:
+            try:
+                time_observation_count = sum(
+                    1
+                    for item in state["observations"]
+                    if item["envelope"]["message_type"] == "time_advance"
+                )
+                bridge_start_tick = self.world.tick - time_observation_count
+                if bridge_start_tick < 0:
+                    raise BridgeValidationError(
+                        "persisted bridge start exceeds the logical clock"
+                    )
+            except (KeyError, TypeError) as error:
+                if isinstance(error, BridgeValidationError):
+                    raise
+                raise BridgeValidationError(
+                    f"persisted bridge-start migration is malformed: {error}"
+                ) from error
+            state = {**dict(state), "bridge_start_tick": bridge_start_tick}
         migrate_noncontiguous_decisions = (
             _is_exact_version(state.get("schema_version"), 1)
             or _is_exact_version(state.get("schema_version"), 2)
@@ -477,7 +501,7 @@ class WorldOSBridge:
             "proposal_sequence", "pending", "decisions", "engine_events",
             "engine_versions", "buffered_observations", "delivery_results",
             "delivery_observations", "buffered_decisions", "legacy_time_observations",
-            "legacy_time_anchors",
+            "legacy_time_anchors", "bridge_start_tick",
         }
         pre_decision_buffer_required = required - {"buffered_decisions"}
         legacy_required = pre_decision_buffer_required - {
@@ -500,6 +524,7 @@ class WorldOSBridge:
             or previous_migration
             or causal_binding_migration
             or legacy_anchor_migration
+            or bridge_start_migration
         )
         migrate_delivery_observations = migrated
         if set(state) == legacy_required or set(state) == current_legacy_required:
@@ -516,6 +541,7 @@ class WorldOSBridge:
             or _is_exact_version(state.get("schema_version"), 4)
             or _is_exact_version(state.get("schema_version"), 5)
             or _is_exact_version(state.get("schema_version"), 6)
+            or _is_exact_version(state.get("schema_version"), 7)
             or _is_exact_version(state.get("schema_version"), BRIDGE_STATE_SCHEMA_VERSION)
         ):
             raise BridgeValidationError("persisted bridge state is incompatible")
@@ -538,7 +564,7 @@ class WorldOSBridge:
                 )
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
-        elif state["schema_version"] in {2, 3, 4, 5, 6}:
+        elif state["schema_version"] in {2, 3, 4, 5, 6, 7}:
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
         if state.get("role_stations") != self.role_stations:
@@ -567,6 +593,9 @@ class WorldOSBridge:
                     "persisted legacy causal anchors are malformed"
                 )
             self._legacy_time_anchors = dict(legacy_time_anchors)
+            self._bridge_start_tick = _counter(
+                state["bridge_start_tick"], "bridge_start_tick"
+            )
             pending = [Envelope.from_dict(item) for item in state["pending"]]
             decisions = [EngineDecision.from_dict(item) for item in state["decisions"]]
             buffered_decisions = [
@@ -971,6 +1000,7 @@ class WorldOSBridge:
             event.id
             for event in self.world.events
             if event.event_type == "time_advanced"
+            and event.tick > self._bridge_start_tick
             and event.root_input == f"tick:{event.tick}"
             and event.payload.get("tick") == event.tick
         }
@@ -982,9 +1012,11 @@ class WorldOSBridge:
             raise BridgeValidationError(
                 "persisted time observations have an ambiguous cross-actor order"
             )
-        initial_tick = self.world.tick - len(time_observations)
-        if self._legacy_time_observations and initial_tick < 0:
-            raise BridgeValidationError("persisted time observation count exceeds world tick")
+        if self.world.tick - len(time_observations) != self._bridge_start_tick:
+            raise BridgeValidationError(
+                "persisted time observation count does not match the bridge start"
+            )
+        initial_tick = self._bridge_start_tick
         for offset, observation in enumerate(time_observations, start=1):
             ticks = time_observation_ticks.get(observation.message_id, set())
             expected_tick = initial_tick + offset
