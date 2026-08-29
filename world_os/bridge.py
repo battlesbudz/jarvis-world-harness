@@ -17,7 +17,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 BRIDGE_SCHEMA_VERSION = 1
 BRIDGE_STATE_SCHEMA_VERSION = 10
-ENGINE_AUTHORITY_SCHEMA_VERSION = 4
+ENGINE_AUTHORITY_SCHEMA_VERSION = 5
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
 
@@ -1637,6 +1637,7 @@ class EngineAuthority:
         self._last_action: dict[str, dict[str, Any]] = {}
         self._last_sequence: dict[str, int] = {}
         self._last_global_order = 0
+        self._proposal_order_mode: str | None = None
         self._processed: dict[str, tuple[str, EngineDecision, Envelope]] = {}
         self._buffered_proposals: dict[str, Envelope] = {}
         self._response_batches: dict[str, tuple[str, ...]] = {}
@@ -1662,6 +1663,7 @@ class EngineAuthority:
             "blocked_paths": [list(item) for item in sorted(self._blocked_paths)],
             "last_action": {actor: dict(value) for actor, value in sorted(self._last_action.items())},
             "last_sequence": dict(sorted(self._last_sequence.items())),
+            "proposal_order_mode": self._proposal_order_mode,
             "processed": [
                 {
                     "message_id": message_id,
@@ -1714,12 +1716,17 @@ class EngineAuthority:
             raise BridgeValidationError(f"invalid persisted engine authority: {error}") from error
         expected_fields = {
             "schema_version", "initial_positions", "positions", "permissions", "destinations", "blocked_paths",
-            "last_action", "last_sequence", "processed", "message_conflicts",
+            "last_action", "last_sequence", "proposal_order_mode", "processed", "message_conflicts",
             "event_history", "decision_sequence", "state_version", "buffered_proposals", "response_batches",
         }
         digest = hashlib.sha256(_canonical(state).encode("utf-8")).hexdigest()
-        version_one_fields = expected_fields - {"buffered_proposals", "response_batches"}
-        version_two_fields = expected_fields - {"response_batches"}
+        version_one_fields = expected_fields - {
+            "buffered_proposals", "response_batches", "proposal_order_mode"
+        }
+        version_two_fields = expected_fields - {
+            "response_batches", "proposal_order_mode"
+        }
+        version_three_fields = expected_fields - {"proposal_order_mode"}
         previous_shape = (
             isinstance(state, dict)
             and (
@@ -1728,7 +1735,14 @@ class EngineAuthority:
                     set(state) == version_two_fields
                     and _is_exact_version(state.get("schema_version"), 2)
                 )
-                or (set(state) == expected_fields and _is_exact_version(state.get("schema_version"), 3))
+                or (
+                    set(state) == version_three_fields
+                    and _is_exact_version(state.get("schema_version"), 3)
+                )
+                or (
+                    set(state) == version_three_fields
+                    and _is_exact_version(state.get("schema_version"), 4)
+                )
             )
         )
         if (
@@ -1799,6 +1813,24 @@ class EngineAuthority:
                     response_batches.sort(key=lambda item: item["message_id"])
                 else:
                     response_batches = state["response_batches"]
+                persisted_proposals = [
+                    item["proposal"] for item in state["processed"]
+                ] + list(state.get("buffered_proposals", []))
+                global_markers = [
+                    "global_order" in item["payload"]
+                    for item in persisted_proposals
+                ]
+                if any(global_markers) and not all(global_markers):
+                    raise BridgeValidationError(
+                        "persisted engine authority mixes proposal ordering modes"
+                    )
+                if persisted_proposals and not any(global_markers):
+                    raise BridgeValidationError(
+                        "persisted legacy engine authority history has ambiguous global order"
+                    )
+                proposal_order_mode = (
+                    "global" if persisted_proposals else None
+                )
             except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
                 raise BridgeValidationError(
                     f"persisted engine authority is malformed: {error}"
@@ -1808,6 +1840,7 @@ class EngineAuthority:
                 "schema_version": ENGINE_AUTHORITY_SCHEMA_VERSION,
                 "buffered_proposals": state.get("buffered_proposals", []),
                 "response_batches": response_batches,
+                "proposal_order_mode": proposal_order_mode,
             }
         try:
             authority = cls(
@@ -1823,6 +1856,12 @@ class EngineAuthority:
                 raise BridgeValidationError("persisted engine position identities do not match initial positions")
             authority._last_action = {str(actor): dict(action) for actor, action in state["last_action"].items()}
             authority._last_sequence = _counter_map(state["last_sequence"], "last_sequence", minimum=1)
+            proposal_order_mode = state["proposal_order_mode"]
+            if proposal_order_mode not in {None, "legacy", "global"}:
+                raise BridgeValidationError(
+                    "persisted engine proposal ordering mode is invalid"
+                )
+            authority._proposal_order_mode = proposal_order_mode
             authority._processed = {}
             for item in state["processed"]:
                 decision = EngineDecision.from_dict(item["decision"])
@@ -1924,6 +1963,32 @@ class EngineAuthority:
         }
         if authority._last_sequence != expected_last_sequence:
             raise BridgeValidationError("persisted engine proposal high-water marks do not match processed decisions")
+        persisted_proposals = [
+            proposal
+            for _digest, _decision, proposal in authority._processed.values()
+        ] + list(authority._buffered_proposals.values())
+        has_global_order = [
+            "global_order" in proposal.payload
+            for proposal in persisted_proposals
+        ]
+        if (
+            (not persisted_proposals and authority._proposal_order_mode is not None)
+            or (
+                persisted_proposals
+                and authority._proposal_order_mode is None
+            )
+            or (
+                authority._proposal_order_mode == "legacy"
+                and any(has_global_order)
+            )
+            or (
+                authority._proposal_order_mode == "global"
+                and not all(has_global_order)
+            )
+        ):
+            raise BridgeValidationError(
+                "persisted engine proposal ordering mode does not match its history"
+            )
         global_orders = [
             proposal.payload.get("global_order")
             for _digest, _decision, proposal in authority._processed.values()
@@ -2127,9 +2192,20 @@ class EngineAuthority:
             raise BridgeValidationError("buffered engine proposal id was reused with different content")
 
         global_order = proposal.payload.get("global_order")
+        if global_order is not None and (
+            not isinstance(global_order, int) or isinstance(global_order, bool)
+        ):
+            raise BridgeValidationError("proposal global order is malformed")
+        incoming_order_mode = (
+            "global" if global_order is not None else "legacy"
+        )
+        if self._proposal_order_mode is None:
+            self._proposal_order_mode = incoming_order_mode
+        elif self._proposal_order_mode != incoming_order_mode:
+            raise BridgeValidationError(
+                "proposal ordering mode cannot change within authority history"
+            )
         if global_order is not None:
-            if not isinstance(global_order, int) or isinstance(global_order, bool):
-                raise BridgeValidationError("proposal global order is malformed")
             expected_order = self._last_global_order + 1
             if global_order > expected_order:
                 if any(
@@ -2215,8 +2291,17 @@ class EngineAuthority:
             decisions.append(self._process_proposal(pending))
 
     def _process_proposal(self, proposal: Envelope) -> EngineDecision:
-        reason = self._validate(proposal)
         global_order = proposal.payload.get("global_order")
+        incoming_order_mode = (
+            "global" if global_order is not None else "legacy"
+        )
+        if self._proposal_order_mode is None:
+            self._proposal_order_mode = incoming_order_mode
+        elif self._proposal_order_mode != incoming_order_mode:
+            raise BridgeValidationError(
+                "proposal ordering mode cannot change within authority history"
+            )
+        reason = self._validate(proposal)
         if global_order is None:
             self._last_global_order += 1
         elif global_order > self._last_global_order:

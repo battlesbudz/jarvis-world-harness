@@ -120,25 +120,30 @@ def engine_authority():
     )
 
 
+def legacy_proposal(proposal):
+    if "global_order" not in proposal.payload:
+        return proposal
+    payload = dict(proposal.payload)
+    payload.pop("global_order")
+    payload.pop("origin_proof")
+    unsigned = Envelope.from_dict(
+        {**proposal.to_dict(), "payload": payload}
+    )
+    return Envelope.from_dict(
+        {
+            **unsigned.to_dict(),
+            "payload": {
+                **payload,
+                "origin_proof": _origin_proof(
+                    unsigned, PROPOSAL_ORIGIN_KEY
+                ),
+            },
+        }
+    )
+
+
 def decide(authority, proposal):
-    if "global_order" in proposal.payload:
-        payload = dict(proposal.payload)
-        payload.pop("global_order")
-        payload.pop("origin_proof")
-        unsigned = Envelope.from_dict(
-            {**proposal.to_dict(), "payload": payload}
-        )
-        proposal = Envelope.from_dict(
-            {
-                **unsigned.to_dict(),
-                "payload": {
-                    **payload,
-                    "origin_proof": _origin_proof(
-                        unsigned, PROPOSAL_ORIGIN_KEY
-                    ),
-                },
-            }
-        )
+    proposal = legacy_proposal(proposal)
     decisions = authority.validate_and_apply(proposal)
     if len(decisions) != 1:
         raise AssertionError(f"expected exactly one engine decision, received {len(decisions)}")
@@ -1045,7 +1050,7 @@ class H2BridgeContractTest(unittest.TestCase):
             observation = envelope("engine-observation:persisted", 1, "bio", "time_advance", {"ticks": 1})
             proposals = bridge.ingest_engine_observation(observation)
             authority = engine_authority()
-            decision = decide(authority, proposals[0])
+            decision = authority.validate_and_apply(proposals[0])[0]
             bridge.receive_engine_decision(decision)
             trusted = bridge.world.state_digest()
             bridge.world.save(path)
@@ -1113,10 +1118,33 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(resumed_authority.state(), before_engine_retry)
             self.assertEqual(resumed_authority.state()["state_version"], 1)
 
+            ambiguous_legacy = engine_authority()
+            decide(ambiguous_legacy, proposals[-1])
+            ambiguous_legacy.save(engine_path)
+            ambiguous_payload = json.loads(engine_path.read_text(encoding="utf-8"))
+            ambiguous_payload["state"].pop("proposal_order_mode")
+            ambiguous_payload["state"]["schema_version"] = 4
+            canonical = json.dumps(
+                ambiguous_payload["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            ambiguous_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            ambiguous_payload["digest"] = ambiguous_digest
+            engine_path.write_text(json.dumps(ambiguous_payload), encoding="utf-8")
+            with self.assertRaisesRegex(BridgeValidationError, "ambiguous global order"):
+                EngineAuthority.load(
+                    engine_path,
+                    PROPOSAL_ORIGIN_KEY,
+                    expected_snapshot_digest=ambiguous_digest,
+                )
+
             buffered_authority = engine_authority()
-            first_elias = next(item for item in proposals if item.actor_id == "elias")
-            second_elias = next(item for item in next_proposals if item.actor_id == "elias")
-            self.assertEqual(buffered_authority.validate_and_apply(second_elias), ())
+            first_global, second_global = sorted(
+                proposals, key=lambda item: item.payload["global_order"]
+            )[:2]
+            self.assertEqual(buffered_authority.validate_and_apply(second_global), ())
             self.assertEqual(buffered_authority.state()["state_version"], 0)
             buffered_authority.save(engine_path)
             buffered_digest = buffered_authority.snapshot_digest()
@@ -1125,15 +1153,17 @@ class H2BridgeContractTest(unittest.TestCase):
                 PROPOSAL_ORIGIN_KEY,
                 expected_snapshot_digest=buffered_digest,
             )
-            drained = resumed_buffer.validate_and_apply(first_elias)
+            drained = resumed_buffer.validate_and_apply(first_global)
             self.assertEqual([item.status for item in drained], ["applied", "applied"])
             self.assertEqual(
                 [item.outcome.correlation_id for item in drained],
-                [first_elias.message_id, second_elias.message_id],
+                [first_global.message_id, second_global.message_id],
             )
             self.assertEqual(resumed_buffer.state()["state_version"], 2)
-            self.assertEqual(resumed_buffer.validate_and_apply(first_elias), drained)
-            self.assertEqual(decide(resumed_buffer, second_elias), drained[1])
+            self.assertEqual(resumed_buffer.validate_and_apply(first_global), drained)
+            self.assertEqual(
+                resumed_buffer.validate_and_apply(second_global), (drained[1],)
+            )
             resumed_buffer.save(engine_path)
             drained_digest = resumed_buffer.snapshot_digest()
             retry_buffer = EngineAuthority.load(
@@ -1141,7 +1171,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 PROPOSAL_ORIGIN_KEY,
                 expected_snapshot_digest=drained_digest,
             )
-            self.assertEqual(retry_buffer.validate_and_apply(first_elias), drained)
+            self.assertEqual(retry_buffer.validate_and_apply(first_global), drained)
 
             version_two_payload = json.loads(engine_path.read_text(encoding="utf-8"))
             version_two_payload["state"].pop("response_batches")
@@ -1185,7 +1215,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=legacy_authority_digest,
             )
             self.assertEqual(decide(migrated_signature_authority, proposals[0]), decision)
-            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 4)
+            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 5)
 
             authority.save(engine_path)
             unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))
@@ -1221,11 +1251,17 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=previous_digest,
             )
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
-            self.assertEqual(migrated_authority.snapshot()["schema_version"], 4)
+            self.assertEqual(migrated_authority.snapshot()["schema_version"], 5)
 
+            first_elias = next(item for item in proposals if item.actor_id == "elias")
+            second_elias = next(item for item in next_proposals if item.actor_id == "elias")
             legacy_out_of_order = engine_authority()
-            legacy_second = legacy_out_of_order._process_proposal(second_elias)
-            legacy_first = legacy_out_of_order._process_proposal(first_elias)
+            legacy_second = legacy_out_of_order._process_proposal(
+                legacy_proposal(second_elias)
+            )
+            legacy_first = legacy_out_of_order._process_proposal(
+                legacy_proposal(first_elias)
+            )
             self.assertEqual((legacy_second.status, legacy_first.reason), ("applied", "stale_sequence"))
             legacy_state = legacy_out_of_order.snapshot()
             legacy_state.pop("buffered_proposals")
