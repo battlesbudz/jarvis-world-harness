@@ -89,6 +89,7 @@ test("keyboard movement is physical and the shortcut wall blocks passage", async
   expect(blocked.position.z).toBeGreaterThan(-12);
   expect(blocked.position.z).toBeLessThan(-2.7);
   expect(blocked.collisionCount).toBeGreaterThan(0);
+  expect(blocked.runtimeErrors).toEqual([]);
   const screenshot = `blocked-shortcut-${testInfo.project.name}.png`;
   await page.screenshot({ path: resolve(evidenceDirectory, screenshot) });
   await writeFile(
@@ -125,6 +126,7 @@ test("camera drag changes facing and reset restores the exact spawn", async ({ p
   expect(reset.yaw).toBe(0);
   expect(reset.checkpoint).toBe("spawn");
   expect(settled.position).toEqual({ x: 0, y: 0.9, z: -12 });
+  expect(settled.runtimeErrors).toEqual([]);
 });
 
 test("focus loss clears held movement", async ({ page }) => {
