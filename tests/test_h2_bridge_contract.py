@@ -2380,6 +2380,84 @@ class H2BridgeContractTest(unittest.TestCase):
                     expected_snapshot_digest=gap_digest,
                 )
 
+            schema_five_gap_authority = engine_authority()
+            schema_five_gap_decision = (
+                schema_five_gap_authority._process_proposal(
+                    sequence_two,
+                    enforce_global_actor_sequence=False,
+                    require_contiguous_global_actor_sequence=False,
+                )
+            )
+            self.assertEqual(schema_five_gap_decision.status, "applied")
+            schema_five_gap_authority.save(sequence_path)
+            schema_five_gap_payload = json.loads(
+                sequence_path.read_text(encoding="utf-8")
+            )
+            schema_five_gap_payload["state"].pop(
+                "actor_sequence_policies"
+            )
+            schema_five_gap_payload["state"]["schema_version"] = 5
+            canonical = json.dumps(
+                schema_five_gap_payload["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            schema_five_gap_digest = hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()
+            schema_five_gap_payload["digest"] = schema_five_gap_digest
+            sequence_path.write_text(
+                json.dumps(schema_five_gap_payload), encoding="utf-8"
+            )
+            migrated_schema_five_gap = EngineAuthority.load(
+                sequence_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=schema_five_gap_digest,
+            )
+            migrated_schema_five_gap.save(sequence_path)
+            migrated_schema_five_gap_digest = (
+                migrated_schema_five_gap.snapshot_digest()
+            )
+            reloaded_schema_five_gap = EngineAuthority.load(
+                sequence_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=migrated_schema_five_gap_digest,
+            )
+            self.assertEqual(
+                reloaded_schema_five_gap.snapshot_digest(),
+                migrated_schema_five_gap_digest,
+            )
+
+            schema_five_buffer_payload = json.loads(
+                json.dumps(gap_payload_state)
+            )
+            schema_five_buffer_payload["state"]["schema_version"] = 5
+            canonical = json.dumps(
+                schema_five_buffer_payload["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            schema_five_buffer_digest = hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()
+            schema_five_buffer_payload[
+                "digest"
+            ] = schema_five_buffer_digest
+            sequence_path.write_text(
+                json.dumps(schema_five_buffer_payload), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                BridgeValidationError,
+                "schema-5 buffered proposal policy is ambiguous",
+            ):
+                EngineAuthority.load(
+                    sequence_path,
+                    PROPOSAL_ORIGIN_KEY,
+                    expected_snapshot_digest=schema_five_buffer_digest,
+                )
+
         impossible_authority = EngineAuthority(
             {"elias": "village-square"},
             {"elias": {"routine_move"}},

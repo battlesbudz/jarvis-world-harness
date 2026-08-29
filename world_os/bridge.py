@@ -2032,9 +2032,38 @@ class EngineAuthority:
                             buffered_high_water[actor_id] = max(
                                 high_water, sequence
                             )
+                if (
+                    legacy_version == 5
+                    and proposal_order_mode == "global"
+                ):
+                    buffered_high_water = dict(state["last_sequence"])
+                    for item in sorted(
+                        state.get("buffered_proposals", []),
+                        key=lambda value: value["payload"]["global_order"],
+                    ):
+                        actor_id = item["actor_id"]
+                        sequence = item["sequence"]
+                        high_water = buffered_high_water.get(actor_id, 0)
+                        if (
+                            item["message_type"] == "world_action_proposed"
+                            and actor_id in state["positions"]
+                            and sequence != high_water + 1
+                        ):
+                            raise BridgeValidationError(
+                                "persisted schema-5 buffered proposal policy is ambiguous"
+                            )
+                        if actor_id in state["positions"]:
+                            buffered_high_water[actor_id] = max(
+                                high_water, sequence
+                            )
                 if proposal_order_mode == "global":
                     response_batches = []
-                if legacy_version == 6:
+                if legacy_version == 5:
+                    actor_sequence_policies = {
+                        item["message_id"]: "lenient"
+                        for item in state["processed"]
+                    }
+                elif legacy_version == 6:
                     actor_sequence_policies = {
                         item["message_id"]: (
                             "noncontiguous"
