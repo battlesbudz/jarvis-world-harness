@@ -2221,6 +2221,8 @@ class EngineAuthority:
             not isinstance(global_order, int) or isinstance(global_order, bool)
         ):
             raise BridgeValidationError("proposal global order is malformed")
+        if global_order is not None and global_order < 1:
+            raise BridgeValidationError("proposal global order is stale")
         incoming_order_mode = (
             "global" if global_order is not None else "legacy"
         )

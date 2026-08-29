@@ -1874,6 +1874,35 @@ class H2BridgeContractTest(unittest.TestCase):
             stale_authority.snapshot_digest(), before_stale_global
         )
 
+        zero_payload = dict(first.payload)
+        zero_payload["global_order"] = 0
+        zero_payload.pop("origin_proof")
+        zero_unsigned = Envelope.from_dict(
+            {
+                **first.to_dict(),
+                "message_id": "world-proposal:zero-global-slot",
+                "payload": zero_payload,
+            }
+        )
+        zero_global = Envelope.from_dict(
+            {
+                **zero_unsigned.to_dict(),
+                "payload": {
+                    **zero_payload,
+                    "origin_proof": _origin_proof(
+                        zero_unsigned, PROPOSAL_ORIGIN_KEY
+                    ),
+                },
+            }
+        )
+        pristine_authority = engine_authority()
+        before_zero_global = pristine_authority.snapshot_digest()
+        with self.assertRaisesRegex(BridgeValidationError, "global order is stale"):
+            pristine_authority.validate_and_apply(zero_global)
+        self.assertEqual(
+            pristine_authority.snapshot_digest(), before_zero_global
+        )
+
         impossible_authority = EngineAuthority(
             {"elias": "village-square"},
             {"elias": {"routine_move"}},
