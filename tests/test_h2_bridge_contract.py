@@ -1057,6 +1057,84 @@ class H2BridgeContractTest(unittest.TestCase):
                     PROPOSAL_ORIGIN_KEY,
                 )
 
+    def test_legacy_proposals_are_authenticated_before_global_order_migration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "legacy-proposal-migration.json"
+            bridge = h2_bridge()
+            bridge.ingest_engine_observation(
+                envelope(
+                    "engine-observation:legacy-proposal-migration",
+                    1,
+                    "bio",
+                    "time_advance",
+                    {"ticks": 1},
+                )
+            )
+            legacy_state = bridge.world.extension_state("h2_bridge")
+            legacy_state.pop("proposal_global_order")
+            migrated_by_id = {
+                item["message_id"]: legacy_proposal(
+                    Envelope.from_dict(item)
+                ).to_dict()
+                for item in legacy_state["pending"]
+            }
+            legacy_state["pending"] = [
+                migrated_by_id[item["message_id"]]
+                for item in legacy_state["pending"]
+            ]
+            for observation in legacy_state["observations"]:
+                observation["proposals"] = [
+                    migrated_by_id[item["message_id"]]
+                    for item in observation["proposals"]
+                ]
+            for message_id, proposals in legacy_state[
+                "delivery_results"
+            ].items():
+                legacy_state["delivery_results"][message_id] = [
+                    migrated_by_id[item["message_id"]]
+                    for item in proposals
+                ]
+
+            bridge.world.set_extension_state("h2_bridge", legacy_state)
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+            migrated = WorldOSBridge(
+                World.load(path, expected_state_digest=trusted),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            self.assertEqual(
+                migrated.world.extension_state("h2_bridge")[
+                    "proposal_global_order"
+                ],
+                len(migrated_by_id),
+            )
+
+            tampered_state = json.loads(json.dumps(legacy_state))
+            target_id = tampered_state["pending"][0]["message_id"]
+            for item in tampered_state["pending"]:
+                if item["message_id"] == target_id:
+                    item["payload"]["command"] = "forged command"
+            for observation in tampered_state["observations"]:
+                for item in observation["proposals"]:
+                    if item["message_id"] == target_id:
+                        item["payload"]["command"] = "forged command"
+            for proposals in tampered_state["delivery_results"].values():
+                for item in proposals:
+                    if item["message_id"] == target_id:
+                        item["payload"]["command"] = "forged command"
+            bridge.world.set_extension_state("h2_bridge", tampered_state)
+            tampered_digest = bridge.world.state_digest()
+            bridge.world.save(path)
+            with self.assertRaisesRegex(
+                BridgeValidationError, "legacy proposal origin proof"
+            ):
+                WorldOSBridge(
+                    World.load(path, expected_state_digest=tampered_digest),
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "world.json"

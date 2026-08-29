@@ -615,23 +615,44 @@ class WorldOSBridge:
                     raise BridgeValidationError(
                         "persisted pending proposal ledger must be a list"
                     )
+                legacy_proposals: dict[str, Envelope] = {}
+                for item in pending_items:
+                    proposal = Envelope.from_dict(item)
+                    proof = proposal.payload.get("origin_proof")
+                    if (
+                        not isinstance(proof, str)
+                        or not hmac.compare_digest(
+                            proof,
+                            _origin_proof(
+                                proposal, self._proposal_origin_key
+                            ),
+                        )
+                    ):
+                        raise BridgeValidationError(
+                            "persisted legacy proposal origin proof is invalid"
+                        )
+                    if proposal.message_id in legacy_proposals:
+                        raise BridgeValidationError(
+                            "persisted pending proposal identity is duplicated"
+                        )
+                    legacy_proposals[proposal.message_id] = proposal
                 event_order = {
                     event.id: index for index, event in enumerate(self.world.events)
                 }
                 ordered_items = sorted(
-                    pending_items,
+                    legacy_proposals.values(),
                     key=lambda item: (
-                        event_order[item["payload"]["causal_event_id"]],
-                        item["message_id"],
+                        event_order[item.payload["causal_event_id"]],
+                        item.message_id,
                     ),
                 )
                 migrated_proposals: dict[str, dict[str, Any]] = {}
                 for global_order, item in enumerate(ordered_items, start=1):
                     unsigned = Envelope.from_dict(
                         {
-                            **item,
+                            **item.to_dict(),
                             "payload": {
-                                **item["payload"],
+                                **item.to_dict()["payload"],
                                 "global_order": global_order,
                             },
                         }
@@ -641,18 +662,18 @@ class WorldOSBridge:
                         unsigned, self._proposal_origin_key
                     )
                     migrated_proposals[unsigned.message_id] = migrated
-                if len(migrated_proposals) != len(pending_items):
-                    raise BridgeValidationError(
-                        "persisted pending proposal identity is duplicated"
-                    )
-
                 def migrate_proposal(item: Mapping[str, Any]) -> dict[str, Any]:
-                    message_id = item["message_id"]
-                    if message_id not in migrated_proposals:
+                    proposal = Envelope.from_dict(item)
+                    canonical = legacy_proposals.get(proposal.message_id)
+                    if canonical is None:
                         raise BridgeValidationError(
                             "persisted proposal mirror is not in the pending ledger"
                         )
-                    return migrated_proposals[message_id]
+                    if proposal != canonical:
+                        raise BridgeValidationError(
+                            "persisted legacy proposal mirror does not match the pending ledger"
+                        )
+                    return migrated_proposals[proposal.message_id]
 
                 observations = [
                     {
