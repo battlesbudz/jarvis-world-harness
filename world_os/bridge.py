@@ -830,21 +830,28 @@ class WorldOSBridge:
                 raise BridgeValidationError(
                     "persisted proposal causal event reference is invalid"
                 ) from error
-        time_observations_by_actor: dict[str, list[tuple[int, int]]] = {}
-        for message_id, ticks in time_observation_ticks.items():
-            if len(ticks) != 1:
-                raise BridgeValidationError(
-                    "persisted time observation proposals do not share one causal tick"
-                )
-            observation = self._observations[message_id][0]
-            time_observations_by_actor.setdefault(observation.actor_id, []).append(
-                (observation.sequence, next(iter(ticks)))
+        time_observations = sorted(
+            (
+                observation
+                for observation, _proposals in self._observations.values()
+                if observation.message_type == "time_advance"
+            ),
+            key=lambda item: item.sequence,
+        )
+        time_actors = {item.actor_id for item in time_observations}
+        if len(time_actors) > 1:
+            raise BridgeValidationError(
+                "persisted time observations have an ambiguous cross-actor order"
             )
-        for observations in time_observations_by_actor.values():
-            ordered = sorted(observations)
-            if any(later_tick <= earlier_tick for (_, earlier_tick), (_, later_tick) in zip(ordered, ordered[1:])):
+        initial_tick = self.world.tick - len(time_observations)
+        if initial_tick < 0:
+            raise BridgeValidationError("persisted time observation count exceeds world tick")
+        for offset, observation in enumerate(time_observations, start=1):
+            ticks = time_observation_ticks.get(observation.message_id, set())
+            expected_tick = initial_tick + offset
+            if len(ticks) > 1 or (ticks and ticks != {expected_tick}):
                 raise BridgeValidationError(
-                    "persisted proposal causal event does not originate from its observation"
+                    "persisted proposal causal tick does not match its exact observation"
                 )
         if migrated:
             self._persist()

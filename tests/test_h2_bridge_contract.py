@@ -561,6 +561,9 @@ class H2BridgeContractTest(unittest.TestCase):
             later_proposals = bridge.ingest_engine_observation(
                 envelope("engine-observation:alternate-causal", 2, "bio", "time_advance", {"ticks": 1})
             )
+            clean_state = json.loads(
+                json.dumps(bridge.world.extension_state("h2_bridge"))
+            )
             unsigned = Envelope.from_dict(
                 {
                     **original.to_dict(),
@@ -662,6 +665,47 @@ class H2BridgeContractTest(unittest.TestCase):
             trusted = bridge.world.state_digest()
             bridge.world.save(path)
             with self.assertRaisesRegex(BridgeValidationError, "causal tick|originate from its observation"):
+                WorldOSBridge(
+                    World.load(path, expected_state_digest=trusted),
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
+            omitted_state = clean_state
+            later_ids = {proposal.message_id for proposal in later_proposals}
+            omitted_state["pending"] = [
+                alternate.to_dict()
+                if item["message_id"] == original.message_id
+                else item
+                for item in omitted_state["pending"]
+                if item["message_id"] not in later_ids
+            ]
+            for observation in omitted_state["observations"]:
+                observation["proposals"] = [
+                    alternate.to_dict()
+                    if item["message_id"] == original.message_id
+                    else item
+                    for item in observation["proposals"]
+                    if item["message_id"] not in later_ids
+                ]
+            for message_id, delivered in omitted_state["delivery_results"].items():
+                omitted_state["delivery_results"][message_id] = [
+                    alternate.to_dict()
+                    if item["message_id"] == original.message_id
+                    else item
+                    for item in delivered
+                    if item["message_id"] not in later_ids
+                ]
+            omitted_state["proposal_sequence"] = {}
+            for item in omitted_state["pending"]:
+                actor_id = item["actor_id"]
+                omitted_state["proposal_sequence"][actor_id] = max(
+                    omitted_state["proposal_sequence"].get(actor_id, 0), item["sequence"]
+                )
+            bridge.world.set_extension_state("h2_bridge", omitted_state)
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+            with self.assertRaisesRegex(BridgeValidationError, "exact observation"):
                 WorldOSBridge(
                     World.load(path, expected_state_digest=trusted),
                     {"ferryman": "ferry-dock", "baker": "bakery"},
