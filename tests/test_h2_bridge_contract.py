@@ -858,9 +858,10 @@ class H2BridgeContractTest(unittest.TestCase):
         orphaned_state["proposal_sequence"] = {}
         orphaned_state["legacy_time_observations"] = []
         orphaned_state["legacy_time_anchors"] = {}
+        orphaned_state["bridge_start_tick"] = migrated.world.tick
         migrated.world.set_extension_state("h2_bridge", orphaned_state)
 
-        with self.assertRaisesRegex(BridgeValidationError, "legacy tick events"):
+        with self.assertRaisesRegex(BridgeValidationError, "bridge boundary"):
             WorldOSBridge(
                 migrated.world,
                 {"ferryman": "ferry-dock", "baker": "bakery"},
@@ -915,6 +916,18 @@ class H2BridgeContractTest(unittest.TestCase):
         with self.assertRaisesRegex(BridgeValidationError, "without its observation ledger"):
             WorldOSBridge(
                 bridge.world,
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+
+        legacy_world = albion_world(2202)
+        legacy_time_event = legacy_world.advance()[0]
+        legacy_world.record_bridge_causal_anchor(
+            "engine-observation:missing-legacy-extension", legacy_time_event.id
+        )
+        with self.assertRaisesRegex(BridgeValidationError, "without its observation ledger"):
+            WorldOSBridge(
+                legacy_world,
                 {"ferryman": "ferry-dock", "baker": "bakery"},
                 PROPOSAL_ORIGIN_KEY,
             )

@@ -351,8 +351,14 @@ class WorldOSBridge:
             self._restore(saved)
         else:
             if any(
-                isinstance(event.root_input, str)
-                and event.root_input.startswith("bridge:")
+                event.event_type == "bridge_causal_anchor"
+                or (
+                    isinstance(event.root_input, str)
+                    and (
+                        event.root_input.startswith("bridge:")
+                        or event.root_input.startswith("bridge-legacy:")
+                    )
+                )
                 for event in self.world.events
             ):
                 raise BridgeValidationError(
@@ -1048,6 +1054,36 @@ class WorldOSBridge:
                     raise BridgeValidationError(
                         "persisted legacy causal anchor does not match its world event"
                     )
+            else:
+                direct_time_events = [
+                    event
+                    for event in self.world.events
+                    if event.event_type == "time_advanced"
+                    and event.root_input == f"bridge:{observation.message_id}"
+                ]
+                if (
+                    len(direct_time_events) != 1
+                    or direct_time_events[0].tick != expected_tick
+                    or direct_time_events[0].payload.get("tick") != expected_tick
+                ):
+                    raise BridgeValidationError(
+                        "persisted direct time root does not prove the bridge boundary"
+                    )
+        if (
+            self._bridge_start_tick > 0
+            and any(
+                event.event_type == "time_advanced"
+                and event.tick <= self._bridge_start_tick
+                for event in self.world.events
+            )
+            and not any(
+                observation.message_id not in self._legacy_time_observations
+                for observation in time_observations
+            )
+        ):
+            raise BridgeValidationError(
+                "persisted nonzero bridge boundary lacks a direct time root"
+            )
         bridge_roots = [
             event.root_input.removeprefix("bridge:")
             for event in self.world.events
