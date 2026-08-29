@@ -1313,6 +1313,19 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(
                 migrated_schema_eight.snapshot()["schema_version"], 9
             )
+            migrated_schema_eight.save(engine_path)
+            migrated_schema_eight_digest = (
+                migrated_schema_eight.snapshot_digest()
+            )
+            reloaded_schema_eight = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=migrated_schema_eight_digest,
+            )
+            self.assertEqual(
+                reloaded_schema_eight.snapshot_digest(),
+                migrated_schema_eight_digest,
+            )
 
             authority.save(engine_path)
             unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))

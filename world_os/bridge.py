@@ -2312,14 +2312,16 @@ class EngineAuthority:
                         legacy_full_lineage=legacy_full_lineage,
                     ),
                 )
-            elif previous_shape:
+            else:
+                # Signed legacy decisions can remain in a schema-9 snapshot
+                # after migration. Replay each event in its authenticated
+                # lineage form so repeated reloads and mixed histories remain
+                # byte-for-byte deterministic.
                 replayed = (
                     replay._process_proposal(
                         proposal, legacy_full_lineage=legacy_full_lineage
                     ),
                 )
-            else:
-                replayed = replay.validate_and_apply(proposal)
             if replayed != (decision,):
                 raise BridgeValidationError("persisted engine decisions do not match replayed policy")
         if (
