@@ -426,6 +426,7 @@ class WorldOSBridge:
         self.world.set_extension_state(_BRIDGE_EXTENSION, self._state())
 
     def _restore(self, state: Mapping[str, Any]) -> None:
+        saved_state_schema = state.get("schema_version")
         causal_binding_migration = "legacy_time_observations" not in state
         if causal_binding_migration:
             direct_root_ids = {
@@ -518,18 +519,33 @@ class WorldOSBridge:
         bridge_start_proof_migration = "bridge_start_proof" not in state
         if bridge_start_proof_migration:
             try:
-                bridge_start_tick = _counter(
+                supplied_start_tick = _counter(
                     state["bridge_start_tick"], "bridge_start_tick"
                 )
+                time_observation_count = sum(
+                    1
+                    for item in state["observations"]
+                    if item["envelope"]["message_type"] == "time_advance"
+                )
+                inferred_start_tick = self.world.tick - time_observation_count
             except (KeyError, TypeError, ValueError) as error:
                 if isinstance(error, BridgeValidationError):
                     raise
                 raise BridgeValidationError(
                     f"persisted bridge-start proof migration is malformed: {error}"
                 ) from error
+            if (
+                _is_exact_version(saved_state_schema, BRIDGE_STATE_SCHEMA_VERSION)
+                or supplied_start_tick != 0
+                or inferred_start_tick != 0
+            ):
+                raise BridgeValidationError(
+                    "persisted nonzero bridge start is unverifiable without a proof"
+                )
             state = {
                 **dict(state),
-                "bridge_start_proof": self._bridge_start_proof(bridge_start_tick),
+                "bridge_start_tick": 0,
+                "bridge_start_proof": self._bridge_start_proof(0),
             }
         migrate_noncontiguous_decisions = (
             _is_exact_version(state.get("schema_version"), 1)

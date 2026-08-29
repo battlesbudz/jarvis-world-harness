@@ -810,6 +810,7 @@ class H2BridgeContractTest(unittest.TestCase):
             direct_state = direct_bridge.world.extension_state("h2_bridge")
             direct_state["schema_version"] = 4
             direct_state.pop("legacy_time_observations")
+            direct_state.pop("bridge_start_proof")
             direct_bridge.world.set_extension_state("h2_bridge", direct_state)
             direct_digest = direct_bridge.world.state_digest()
             direct_bridge.world.save(path)
@@ -897,14 +898,12 @@ class H2BridgeContractTest(unittest.TestCase):
         previous_state["schema_version"] = 8
         previous_state.pop("bridge_start_proof")
         bridge.world.set_extension_state("h2_bridge", previous_state)
-        migrated = WorldOSBridge(
-            bridge.world,
-            {"ferryman": "ferry-dock", "baker": "bakery"},
-            PROPOSAL_ORIGIN_KEY,
-        )
-        self.assertEqual(
-            migrated.world.extension_state("h2_bridge")["bridge_start_tick"], 1
-        )
+        with self.assertRaisesRegex(BridgeValidationError, "unverifiable"):
+            WorldOSBridge(
+                bridge.world,
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
 
     def test_bridge_root_without_the_extension_fails_initialization(self):
         bridge = h2_bridge()
