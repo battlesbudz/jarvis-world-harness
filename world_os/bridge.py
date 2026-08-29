@@ -1683,11 +1683,15 @@ class WorldOSBridge:
             )
             if buffered is None:
                 break
-            self._buffered_decisions.pop(buffered.outcome.message_id)
             try:
                 self._record_engine_decision(buffered)
             except BridgeValidationError:
-                break
+                # A committed predecessor can make a future outcome provably
+                # invalid. Keep it durable and surface the conflict so retry
+                # behavior cannot change after the failed drain.
+                self._persist()
+                raise
+            self._buffered_decisions.pop(buffered.outcome.message_id)
         self._persist()
 
     def evidence(self) -> dict[str, Any]:

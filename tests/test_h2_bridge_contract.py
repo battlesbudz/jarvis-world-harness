@@ -605,6 +605,49 @@ class H2BridgeContractTest(unittest.TestCase):
             (3, 0),
         )
 
+    def test_conflicting_buffered_outcome_survives_failed_drain(self):
+        bridge = h2_bridge()
+        proposals = bridge.ingest_engine_observation(
+            envelope(
+                "engine-observation:drain-conflict",
+                1,
+                "bio",
+                "time_advance",
+                {"ticks": 1},
+            )
+        )
+        first, second = proposals[:2]
+
+        applying_authority = engine_authority()
+        decide(applying_authority, first)
+        future_applied = decide(applying_authority, second)
+        bridge.receive_engine_decision(future_applied)
+
+        rejecting_authority = EngineAuthority(
+            {
+                "elias": "village-square",
+                "nella": "village-square",
+                "mara": "captain-post",
+            },
+            {"elias": set(), "nella": set(), "mara": set()},
+            {"ferry-dock", "bakery", "captain-post"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        first_rejected = decide(rejecting_authority, first)
+        with self.assertRaisesRegex(
+            BridgeValidationError, "state version conflicts"
+        ):
+            bridge.receive_engine_decision(first_rejected)
+
+        state = bridge.world.extension_state("h2_bridge")
+        self.assertEqual(
+            (len(state["decisions"]), len(state["buffered_decisions"])),
+            (1, 1),
+        )
+        before_retry = bridge.world.state_digest()
+        bridge.receive_engine_decision(future_applied)
+        self.assertEqual(bridge.world.state_digest(), before_retry)
+
     def test_missing_persisted_causal_event_fails_as_bridge_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "missing-causal-event.json"
