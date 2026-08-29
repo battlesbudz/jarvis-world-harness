@@ -33,6 +33,15 @@ async function holdUntil(page: Page, key: string, condition: (state: GameSnapsho
   }
 }
 
+async function centerOnVillageRoad(page: Page): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const state = await snapshot(page);
+    if (Math.abs(state.position.x) <= 0.75) return;
+    await hold(page, state.position.x > 0 ? "KeyA" : "KeyD", 150);
+  }
+  throw new Error(`could not center on village road: ${JSON.stringify(await snapshot(page))}`);
+}
+
 function projectRevision(): string {
   const revision = process.env.H2_REVISION
     ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: resolve(process.cwd(), ".."), encoding: "utf8" }).trim();
@@ -116,7 +125,7 @@ test("the legitimate route reaches the village destination", async ({ page }, te
   await openGame(page);
   await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
-  await holdUntil(page, "KeyA", (state) => state.position.x <= 0.5);
+  await centerOnVillageRoad(page);
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "complete");
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);
