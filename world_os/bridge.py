@@ -1877,7 +1877,10 @@ class EngineAuthority:
                                     "persisted schema-6 buffered proposal policy is ambiguous"
                                 )
                             if actor_id in state["positions"]:
-                                buffered_high_water[actor_id] = sequence
+                                buffered_high_water[actor_id] = max(
+                                    buffered_high_water.get(actor_id, 0),
+                                    sequence,
+                                )
                 if proposal_order_mode == "global":
                     response_batches = []
             except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
