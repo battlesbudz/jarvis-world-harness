@@ -1129,8 +1129,43 @@ class WorldOSBridge:
                     )
             sequence = decision.outcome.sequence
             correlation = decision.outcome.correlation_id
+            next_sequence = len(ordered_decisions) + 1
+            retained_conflict = False
+            if sequence == next_sequence:
+                if ordered_decisions:
+                    prior = ordered_decisions[-1]
+                    retained_conflict = not _state_advance_is_possible(
+                        prior.outcome.sequence,
+                        int(prior.outcome.payload["state_version"]),
+                        decision,
+                    )
+                else:
+                    retained_conflict = not _state_advance_is_possible(
+                        0, 0, decision
+                    )
+                if decision.engine_event is not None:
+                    event = decision.engine_event
+                    event_digest = event.digest()
+                    existing_event = self._engine_events.get(event.message_id)
+                    retained_conflict = retained_conflict or (
+                        existing_event is not None
+                        and existing_event != event_digest
+                    )
+                    retained_conflict = retained_conflict or any(
+                        self._engine_versions.get(version)
+                        not in {None, digest}
+                        for version, digest in _engine_event_lineage(event)
+                    )
+                    existing_version = self._engine_versions.get(
+                        int(event.payload["state_version"])
+                    )
+                    retained_conflict = retained_conflict or (
+                        existing_version is not None
+                        and existing_version != event_digest
+                    )
             if (
-                sequence <= len(ordered_decisions) + 1
+                sequence < next_sequence
+                or (sequence == next_sequence and not retained_conflict)
                 or sequence in buffered_decision_sequences
                 or correlation in decision_correlations
                 or correlation in buffered_decision_correlations

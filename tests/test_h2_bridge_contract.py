@@ -459,15 +459,24 @@ class H2BridgeContractTest(unittest.TestCase):
             (len(buffered_state["decisions"]), len(buffered_state["buffered_decisions"])),
             (0, 1),
         )
-        rejected_jump_bridge.receive_engine_decision(visible_first_rejection)
+        with self.assertRaisesRegex(
+            BridgeValidationError, "state version conflicts"
+        ):
+            rejected_jump_bridge.receive_engine_decision(
+                visible_first_rejection
+            )
         committed_state = rejected_jump_bridge.world.extension_state("h2_bridge")
         self.assertEqual(
             (len(committed_state["decisions"]), len(committed_state["buffered_decisions"])),
-            (1, 0),
+            (1, 1),
         )
-        valid_second_rejection = decide(visible_rejecting_fork, rejected_second)
-        self.assertEqual(valid_second_rejection.outcome.payload["state_version"], 0)
-        rejected_jump_bridge.receive_engine_decision(valid_second_rejection)
+        before_retry = rejected_jump_bridge.world.state_digest()
+        rejected_jump_bridge.receive_engine_decision(
+            rejected_after_hidden_apply
+        )
+        self.assertEqual(
+            rejected_jump_bridge.world.state_digest(), before_retry
+        )
 
     def test_out_of_order_engine_decisions_buffer_across_reload(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -647,6 +656,18 @@ class H2BridgeContractTest(unittest.TestCase):
         before_retry = bridge.world.state_digest()
         bridge.receive_engine_decision(future_applied)
         self.assertEqual(bridge.world.state_digest(), before_retry)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "retained-buffer-conflict.json"
+            bridge.world.save(path)
+            restored = WorldOSBridge(
+                World.load(path, expected_state_digest=before_retry),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            self.assertEqual(restored.world.state_digest(), before_retry)
+            restored.receive_engine_decision(future_applied)
+            self.assertEqual(restored.world.state_digest(), before_retry)
 
     def test_missing_persisted_causal_event_fails_as_bridge_validation(self):
         with tempfile.TemporaryDirectory() as directory:
