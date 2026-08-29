@@ -2192,6 +2192,8 @@ class EngineAuthority:
             raise BridgeValidationError("buffered engine proposal id was reused with different content")
 
         global_order = proposal.payload.get("global_order")
+        if "global_order" in proposal.payload and global_order is None:
+            raise BridgeValidationError("proposal global order is malformed")
         if global_order is not None and (
             not isinstance(global_order, int) or isinstance(global_order, bool)
         ):

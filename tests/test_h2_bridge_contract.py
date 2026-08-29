@@ -1175,6 +1175,7 @@ class H2BridgeContractTest(unittest.TestCase):
 
             version_two_payload = json.loads(engine_path.read_text(encoding="utf-8"))
             version_two_payload["state"].pop("response_batches")
+            version_two_payload["state"].pop("proposal_order_mode")
             version_two_payload["state"]["schema_version"] = 2
             canonical = json.dumps(
                 version_two_payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -1191,6 +1192,7 @@ class H2BridgeContractTest(unittest.TestCase):
 
             authority.save(engine_path)
             legacy_authority_payload = json.loads(engine_path.read_text(encoding="utf-8"))
+            legacy_authority_payload["state"].pop("proposal_order_mode")
             legacy_authority_payload["state"]["schema_version"] = 3
             legacy_proof = hmac.new(
                 PROPOSAL_ORIGIN_KEY,
@@ -1220,6 +1222,7 @@ class H2BridgeContractTest(unittest.TestCase):
             authority.save(engine_path)
             unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))
             unambiguous_v2["state"].pop("response_batches")
+            unambiguous_v2["state"].pop("proposal_order_mode")
             unambiguous_v2["state"]["schema_version"] = 2
             canonical = json.dumps(
                 unambiguous_v2["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -1238,6 +1241,7 @@ class H2BridgeContractTest(unittest.TestCase):
             previous_payload = json.loads(engine_path.read_text(encoding="utf-8"))
             previous_payload["state"].pop("buffered_proposals")
             previous_payload["state"].pop("response_batches")
+            previous_payload["state"].pop("proposal_order_mode")
             previous_payload["state"]["schema_version"] = 1
             canonical = json.dumps(
                 previous_payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -1266,6 +1270,7 @@ class H2BridgeContractTest(unittest.TestCase):
             legacy_state = legacy_out_of_order.snapshot()
             legacy_state.pop("buffered_proposals")
             legacy_state.pop("response_batches")
+            legacy_state.pop("proposal_order_mode")
             legacy_state["schema_version"] = 1
             canonical = json.dumps(
                 legacy_state, sort_keys=True, separators=(",", ":"), ensure_ascii=True
