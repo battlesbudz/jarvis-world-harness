@@ -1903,6 +1903,74 @@ class H2BridgeContractTest(unittest.TestCase):
             pristine_authority.snapshot_digest(), before_zero_global
         )
 
+        sequence_payload = dict(first.payload)
+        sequence_payload.pop("origin_proof")
+        sequence_two_unsigned = Envelope.from_dict(
+            {
+                **first.to_dict(),
+                "sequence": 2,
+                "payload": sequence_payload,
+            }
+        )
+        sequence_two = Envelope.from_dict(
+            {
+                **sequence_two_unsigned.to_dict(),
+                "payload": {
+                    **sequence_payload,
+                    "origin_proof": _origin_proof(
+                        sequence_two_unsigned, PROPOSAL_ORIGIN_KEY
+                    ),
+                },
+            }
+        )
+        regressing_payload = {
+            **sequence_payload,
+            "global_order": 2,
+        }
+        regressing_unsigned = Envelope.from_dict(
+            {
+                **first.to_dict(),
+                "message_id": "world-proposal:regressing-actor-sequence",
+                "payload": regressing_payload,
+            }
+        )
+        regressing_sequence = Envelope.from_dict(
+            {
+                **regressing_unsigned.to_dict(),
+                "payload": {
+                    **regressing_payload,
+                    "origin_proof": _origin_proof(
+                        regressing_unsigned, PROPOSAL_ORIGIN_KEY
+                    ),
+                },
+            }
+        )
+        sequence_authority = engine_authority()
+        self.assertEqual(
+            sequence_authority.validate_and_apply(sequence_two)[0].status,
+            "applied",
+        )
+        regressing_decision = sequence_authority.validate_and_apply(
+            regressing_sequence
+        )[0]
+        self.assertEqual(
+            (regressing_decision.status, regressing_decision.reason),
+            ("rejected", "stale_sequence"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            sequence_path = Path(directory) / "sequence-authority.json"
+            sequence_authority.save(sequence_path)
+            sequence_digest = sequence_authority.snapshot_digest()
+            restored_sequence_authority = EngineAuthority.load(
+                sequence_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=sequence_digest,
+            )
+            self.assertEqual(
+                restored_sequence_authority.snapshot_digest(),
+                sequence_digest,
+            )
+
         impossible_authority = EngineAuthority(
             {"elias": "village-square"},
             {"elias": {"routine_move"}},

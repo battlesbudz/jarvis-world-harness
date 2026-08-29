@@ -2393,7 +2393,7 @@ class EngineAuthority:
                 or global_order <= self._last_global_order
             ):
                 return "stale_global_order"
-        elif proposal.sequence <= self._last_sequence.get(proposal.actor_id, 0):
+        if proposal.sequence <= self._last_sequence.get(proposal.actor_id, 0):
             return "stale_sequence"
         action_type = proposal.payload.get("action_type")
         command = proposal.payload.get("command")
