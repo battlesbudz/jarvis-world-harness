@@ -2232,6 +2232,8 @@ class EngineAuthority:
             )
         if global_order is not None:
             expected_order = self._last_global_order + 1
+            if global_order < expected_order:
+                raise BridgeValidationError("proposal global order is stale")
             if global_order > expected_order:
                 if any(
                     item.payload.get("global_order") == global_order
