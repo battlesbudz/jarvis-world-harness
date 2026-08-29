@@ -2280,6 +2280,63 @@ class H2BridgeContractTest(unittest.TestCase):
                 migrated_schema_six.snapshot()["schema_version"], 9
             )
 
+            gap_payload = {
+                **dict(first.payload),
+                "global_order": 3,
+            }
+            gap_payload.pop("origin_proof")
+            gap_unsigned = Envelope.from_dict(
+                {
+                    **first.to_dict(),
+                    "message_id": "world-proposal:schema-six-buffered-gap",
+                    "sequence": 3,
+                    "payload": gap_payload,
+                }
+            )
+            buffered_gap = Envelope.from_dict(
+                {
+                    **gap_unsigned.to_dict(),
+                    "payload": {
+                        **gap_payload,
+                        "origin_proof": _origin_proof(
+                            gap_unsigned, PROPOSAL_ORIGIN_KEY
+                        ),
+                    },
+                }
+            )
+            gap_authority = engine_authority()
+            self.assertEqual(len(gap_authority.validate_and_apply(first)), 1)
+            self.assertEqual(
+                gap_authority.validate_and_apply(buffered_gap), ()
+            )
+            gap_authority.save(sequence_path)
+            gap_payload_state = json.loads(
+                sequence_path.read_text(encoding="utf-8")
+            )
+            gap_payload_state["state"]["schema_version"] = 6
+            canonical = json.dumps(
+                gap_payload_state["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            gap_digest = hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()
+            gap_payload_state["digest"] = gap_digest
+            sequence_path.write_text(
+                json.dumps(gap_payload_state), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                BridgeValidationError,
+                "schema-6 buffered proposal policy is ambiguous",
+            ):
+                EngineAuthority.load(
+                    sequence_path,
+                    PROPOSAL_ORIGIN_KEY,
+                    expected_snapshot_digest=gap_digest,
+                )
+
         impossible_authority = EngineAuthority(
             {"elias": "village-square"},
             {"elias": {"routine_move"}},
