@@ -1173,6 +1173,16 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             self.assertEqual(retry_buffer.validate_and_apply(first_global), drained)
 
+            first_elias = next(
+                item for item in proposals if item.actor_id == "elias"
+            )
+            second_elias = next(
+                item for item in next_proposals if item.actor_id == "elias"
+            )
+            ambiguous_v2_authority = engine_authority()
+            decide(ambiguous_v2_authority, first_elias)
+            decide(ambiguous_v2_authority, second_elias)
+            ambiguous_v2_authority.save(engine_path)
             version_two_payload = json.loads(engine_path.read_text(encoding="utf-8"))
             version_two_payload["state"].pop("response_batches")
             version_two_payload["state"].pop("proposal_order_mode")
@@ -1257,8 +1267,6 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
             self.assertEqual(migrated_authority.snapshot()["schema_version"], 5)
 
-            first_elias = next(item for item in proposals if item.actor_id == "elias")
-            second_elias = next(item for item in next_proposals if item.actor_id == "elias")
             legacy_out_of_order = engine_authority()
             legacy_second = legacy_out_of_order._process_proposal(
                 legacy_proposal(second_elias)
@@ -1282,13 +1290,14 @@ class H2BridgeContractTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            migrated_out_of_order = EngineAuthority.load(
-                engine_path,
-                PROPOSAL_ORIGIN_KEY,
-                expected_snapshot_digest=legacy_digest,
-            )
-            self.assertEqual(decide(migrated_out_of_order, second_elias), legacy_second)
-            self.assertEqual(decide(migrated_out_of_order, first_elias), legacy_first)
+            with self.assertRaisesRegex(
+                BridgeValidationError, "ambiguous global order"
+            ):
+                EngineAuthority.load(
+                    engine_path,
+                    PROPOSAL_ORIGIN_KEY,
+                    expected_snapshot_digest=legacy_digest,
+                )
 
             malformed_previous = json.loads(json.dumps(previous_payload))
             del malformed_previous["state"]["processed"][0]["decision"]["outcome"]["sequence"]
