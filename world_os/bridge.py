@@ -20,6 +20,7 @@ BRIDGE_STATE_SCHEMA_VERSION = 6
 ENGINE_AUTHORITY_SCHEMA_VERSION = 4
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
+_BRIDGE_CAUSAL_ANCHOR_EXTENSION = "h2_bridge_causal_anchors"
 
 
 class BridgeValidationError(ValueError):
@@ -345,6 +346,7 @@ class WorldOSBridge:
         self._delivery_observations: dict[str, tuple[str, ...]] = {}
         self._legacy_time_observations: set[str] = set()
         self._legacy_time_anchors: dict[str, str] = {}
+        self._durable_legacy_time_anchors: dict[str, str] = {}
         saved = world.extension_state(_BRIDGE_EXTENSION)
         if saved is not None:
             self._restore(saved)
@@ -391,8 +393,21 @@ class WorldOSBridge:
 
     def _persist(self) -> None:
         self.world.set_extension_state(_BRIDGE_EXTENSION, self._state())
+        self.world.set_extension_state(
+            _BRIDGE_CAUSAL_ANCHOR_EXTENSION,
+            {
+                "schema_version": 1,
+                "legacy_time_anchors": dict(
+                    sorted(self._legacy_time_anchors.items())
+                ),
+            },
+        )
 
     def _restore(self, state: Mapping[str, Any]) -> None:
+        saved_state_schema = state.get("schema_version")
+        durable_anchor_state = self.world.extension_state(
+            _BRIDGE_CAUSAL_ANCHOR_EXTENSION
+        )
         causal_binding_migration = "legacy_time_observations" not in state
         if causal_binding_migration:
             direct_root_ids = {
@@ -560,6 +575,43 @@ class WorldOSBridge:
                     "persisted legacy causal anchors are malformed"
                 )
             self._legacy_time_anchors = dict(legacy_time_anchors)
+            if durable_anchor_state is None:
+                if _is_exact_version(saved_state_schema, BRIDGE_STATE_SCHEMA_VERSION):
+                    raise BridgeValidationError(
+                        "persisted bridge durable causal anchors are missing"
+                    )
+                self._durable_legacy_time_anchors = dict(
+                    self._legacy_time_anchors
+                )
+                migrated = True
+            else:
+                if (
+                    set(durable_anchor_state)
+                    != {"schema_version", "legacy_time_anchors"}
+                    or not _is_exact_version(
+                        durable_anchor_state.get("schema_version"), 1
+                    )
+                    or not isinstance(
+                        durable_anchor_state.get("legacy_time_anchors"), Mapping
+                    )
+                    or any(
+                        not isinstance(message_id, str)
+                        or not isinstance(event_id, str)
+                        for message_id, event_id in durable_anchor_state[
+                            "legacy_time_anchors"
+                        ].items()
+                    )
+                    or len(
+                        set(durable_anchor_state["legacy_time_anchors"].values())
+                    )
+                    != len(durable_anchor_state["legacy_time_anchors"])
+                ):
+                    raise BridgeValidationError(
+                        "persisted bridge durable causal anchors are malformed"
+                    )
+                self._durable_legacy_time_anchors = dict(
+                    durable_anchor_state["legacy_time_anchors"]
+                )
             pending = [Envelope.from_dict(item) for item in state["pending"]]
             decisions = [EngineDecision.from_dict(item) for item in state["decisions"]]
             buffered_decisions = [
@@ -959,6 +1011,10 @@ class WorldOSBridge:
         if set(self._legacy_time_anchors) != self._legacy_time_observations:
             raise BridgeValidationError(
                 "persisted legacy causal anchors do not match legacy observations"
+            )
+        if self._durable_legacy_time_anchors != self._legacy_time_anchors:
+            raise BridgeValidationError(
+                "persisted durable causal anchors do not match the bridge ledger"
             )
         if self._legacy_time_observations and len(time_actors) > 1:
             raise BridgeValidationError(

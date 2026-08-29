@@ -762,6 +762,7 @@ class H2BridgeContractTest(unittest.TestCase):
             extension["schema_version"] = 3
             extension.pop("legacy_time_observations")
             extension.pop("legacy_time_anchors")
+            saved["state"]["extensions"].pop("h2_bridge_causal_anchors")
             canonical = json.dumps(
                 saved["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
             )
@@ -843,6 +844,7 @@ class H2BridgeContractTest(unittest.TestCase):
         legacy_state.pop("legacy_time_anchors")
         legacy_state["legacy_time_observations"] = [observation.message_id]
         bridge.world.set_extension_state("h2_bridge", legacy_state)
+        bridge.world._extensions.pop("h2_bridge_causal_anchors")
 
         migrated = WorldOSBridge(
             bridge.world,
@@ -857,9 +859,10 @@ class H2BridgeContractTest(unittest.TestCase):
         orphaned_state["last_engine_sequence"] = {}
         orphaned_state["proposal_sequence"] = {}
         orphaned_state["legacy_time_observations"] = []
+        orphaned_state["legacy_time_anchors"] = {}
         migrated.world.set_extension_state("h2_bridge", orphaned_state)
 
-        with self.assertRaisesRegex(BridgeValidationError, "legacy causal anchors"):
+        with self.assertRaisesRegex(BridgeValidationError, "durable causal anchors"):
             WorldOSBridge(
                 migrated.world,
                 {"ferryman": "ferry-dock", "baker": "bakery"},
