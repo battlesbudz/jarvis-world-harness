@@ -62,6 +62,14 @@ export function createInputController(
       stopJoystick();
     }
   };
+  const onFocusLost = (): void => {
+    keys.clear();
+    stopJoystick();
+    lookPointer = null;
+  };
+  const onVisibilityChange = (): void => {
+    if (document.visibilityState === "hidden") onFocusLost();
+  };
 
   const onLookDown = (event: PointerEvent): void => {
     if (event.button !== 0) return;
@@ -84,6 +92,8 @@ export function createInputController(
 
   window.addEventListener("keydown", onKeyDown, { passive: false });
   window.addEventListener("keyup", onKeyUp);
+  window.addEventListener("blur", onFocusLost);
+  document.addEventListener("visibilitychange", onVisibilityChange);
   joystick.addEventListener("pointerdown", onJoystickDown);
   joystick.addEventListener("pointermove", onJoystickMove);
   joystick.addEventListener("pointerup", onJoystickUp);
@@ -107,6 +117,8 @@ export function createInputController(
     dispose(): void {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onFocusLost);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       joystick.removeEventListener("pointerdown", onJoystickDown);
       joystick.removeEventListener("pointermove", onJoystickMove);
       joystick.removeEventListener("pointerup", onJoystickUp);

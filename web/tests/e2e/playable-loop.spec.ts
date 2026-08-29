@@ -98,6 +98,19 @@ test("camera drag changes facing and reset restores the exact spawn", async ({ p
   expect(reset.checkpoint).toBe("spawn");
 });
 
+test("focus loss clears held movement", async ({ page }) => {
+  await openGame(page);
+  await page.keyboard.down("KeyD");
+  await page.waitForTimeout(300);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  const stopped = await snapshot(page);
+  await page.waitForTimeout(400);
+  await page.keyboard.up("KeyD");
+  const settled = await snapshot(page);
+  expect(Math.abs(settled.position.x - stopped.position.x)).toBeLessThan(0.2);
+  expect(settled.runtimeErrors).toEqual([]);
+});
+
 test("touch joystick moves the Bio", async ({ page }) => {
   await openGame(page);
   const joystick = page.locator("#joystick");
@@ -131,11 +144,21 @@ test("the legitimate route reaches the village destination", async ({ page }, te
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);
   expect(finalState.runtimeErrors).toEqual([]);
+  const browser = page.context().browser();
+  const environment = {
+    project: testInfo.project.name,
+    browser: {
+      name: browser?.browserType().name() ?? "unknown",
+      version: browser?.version() ?? "unknown",
+    },
+    viewport: page.viewportSize(),
+    deviceScaleFactor: await page.evaluate(() => window.devicePixelRatio),
+  };
   await mkdir(evidenceDirectory, { recursive: true });
   await page.screenshot({ path: resolve(evidenceDirectory, `route-complete-${testInfo.project.name}.png`) });
   await writeFile(
     resolve(evidenceDirectory, `traversal-${testInfo.project.name}.json`),
-    `${JSON.stringify({ revision: projectRevision(), scenario: H2_SCENARIO, finalState }, null, 2)}\n`,
+    `${JSON.stringify({ revision: projectRevision(), scenario: H2_SCENARIO, environment, finalState }, null, 2)}\n`,
   );
 });
 
