@@ -1971,6 +1971,32 @@ class H2BridgeContractTest(unittest.TestCase):
                 sequence_digest,
             )
 
+            strict_schema_six_payload = json.loads(
+                sequence_path.read_text(encoding="utf-8")
+            )
+            strict_schema_six_payload["state"]["schema_version"] = 6
+            canonical = json.dumps(
+                strict_schema_six_payload["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            strict_schema_six_digest = hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()
+            strict_schema_six_payload["digest"] = strict_schema_six_digest
+            sequence_path.write_text(
+                json.dumps(strict_schema_six_payload), encoding="utf-8"
+            )
+            migrated_strict_schema_six = EngineAuthority.load(
+                sequence_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=strict_schema_six_digest,
+            )
+            self.assertEqual(
+                migrated_strict_schema_six.snapshot()["schema_version"], 7
+            )
+
             schema_six_authority = EngineAuthority(
                 {first.actor_id: "village-square"},
                 {first.actor_id: set()},

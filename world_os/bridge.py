@@ -2135,7 +2135,9 @@ class EngineAuthority:
                 replayed = (
                     replay._process_proposal(
                         proposal,
-                        enforce_global_actor_sequence=False,
+                        enforce_global_actor_sequence=(
+                            decision.reason == "stale_sequence"
+                        ),
                     ),
                 )
             else:
