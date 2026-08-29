@@ -950,7 +950,7 @@ class H2BridgeContractTest(unittest.TestCase):
             WorldOSBridge(world, {}, PROPOSAL_ORIGIN_KEY)
         self.assertEqual(world.state_digest(), before)
 
-    def test_cross_bio_time_advances_restore_in_world_tick_order(self):
+    def test_h2_bridge_rejects_multiple_bios_before_world_mutation(self):
         world = World(
             2204,
             [
@@ -960,28 +960,10 @@ class H2BridgeContractTest(unittest.TestCase):
             ],
             crisis_actor="mara",
         )
-        bridge = WorldOSBridge(world, {}, PROPOSAL_ORIGIN_KEY)
-        bridge.ingest_engine_observation(
-            envelope(
-                "engine-observation:z-first-arrival",
-                1,
-                "bio-a",
-                "time_advance",
-                {"ticks": 1},
-            )
-        )
-        bridge.ingest_engine_observation(
-            envelope(
-                "engine-observation:a-second-arrival",
-                1,
-                "bio-b",
-                "time_advance",
-                {"ticks": 1},
-            )
-        )
-
-        restored = WorldOSBridge(bridge.world, {}, PROPOSAL_ORIGIN_KEY)
-        self.assertEqual(restored.world.tick, 2)
+        before = world.state_digest()
+        with self.assertRaisesRegex(BridgeValidationError, "exactly one Bio"):
+            WorldOSBridge(world, {}, PROPOSAL_ORIGIN_KEY)
+        self.assertEqual(world.state_digest(), before)
 
     def test_orphaned_request_root_fails_restore(self):
         with tempfile.TemporaryDirectory() as directory:

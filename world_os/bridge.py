@@ -334,6 +334,13 @@ class WorldOSBridge:
             raise BridgeValidationError(
                 f"world actor ids are not bridge-compatible: {invalid_actor_ids}"
             )
+        bio_actor_ids = sorted(
+            actor.id for actor in world.actors.values() if actor.category == "bio"
+        )
+        if len(bio_actor_ids) != 1:
+            raise BridgeValidationError(
+                f"H2 bridge requires exactly one Bio actor: {bio_actor_ids}"
+            )
         missing_roles = {
             actor.role
             for actor in world.actors.values()
