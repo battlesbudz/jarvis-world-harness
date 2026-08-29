@@ -1847,6 +1847,18 @@ class EngineAuthority:
                     proposal_order_mode = (
                         "global" if persisted_proposals else None
                     )
+                if (
+                    legacy_version == 6
+                    and proposal_order_mode == "global"
+                    and any(
+                        item["sequence"]
+                        <= state["last_sequence"].get(item["actor_id"], 0)
+                        for item in state.get("buffered_proposals", [])
+                    )
+                ):
+                    raise BridgeValidationError(
+                        "persisted schema-6 buffered proposal policy is ambiguous"
+                    )
                 if proposal_order_mode == "global":
                     response_batches = []
             except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
