@@ -1271,7 +1271,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=legacy_authority_digest,
             )
             self.assertEqual(decide(migrated_signature_authority, proposals[0]), decision)
-            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 6)
+            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 7)
 
             authority.save(engine_path)
             unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))
@@ -1309,7 +1309,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=previous_digest,
             )
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
-            self.assertEqual(migrated_authority.snapshot()["schema_version"], 6)
+            self.assertEqual(migrated_authority.snapshot()["schema_version"], 7)
 
             legacy_out_of_order = engine_authority()
             legacy_second = legacy_out_of_order._process_proposal(
@@ -1969,6 +1969,51 @@ class H2BridgeContractTest(unittest.TestCase):
             self.assertEqual(
                 restored_sequence_authority.snapshot_digest(),
                 sequence_digest,
+            )
+
+            schema_six_authority = EngineAuthority(
+                {first.actor_id: "village-square"},
+                {first.actor_id: set()},
+                {"ferry-dock", "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            first_schema_six = schema_six_authority._process_proposal(
+                sequence_two,
+                enforce_global_actor_sequence=False,
+            )
+            second_schema_six = schema_six_authority._process_proposal(
+                regressing_sequence,
+                enforce_global_actor_sequence=False,
+            )
+            self.assertEqual(
+                (first_schema_six.reason, second_schema_six.reason),
+                ("permission_denied", "permission_denied"),
+            )
+            schema_six_authority.save(sequence_path)
+            schema_six_payload = json.loads(
+                sequence_path.read_text(encoding="utf-8")
+            )
+            schema_six_payload["state"]["schema_version"] = 6
+            canonical = json.dumps(
+                schema_six_payload["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            schema_six_digest = hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()
+            schema_six_payload["digest"] = schema_six_digest
+            sequence_path.write_text(
+                json.dumps(schema_six_payload), encoding="utf-8"
+            )
+            migrated_schema_six = EngineAuthority.load(
+                sequence_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=schema_six_digest,
+            )
+            self.assertEqual(
+                migrated_schema_six.snapshot()["schema_version"], 7
             )
 
         impossible_authority = EngineAuthority(

@@ -17,7 +17,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 BRIDGE_SCHEMA_VERSION = 1
 BRIDGE_STATE_SCHEMA_VERSION = 10
-ENGINE_AUTHORITY_SCHEMA_VERSION = 6
+ENGINE_AUTHORITY_SCHEMA_VERSION = 7
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
 
@@ -1747,6 +1747,10 @@ class EngineAuthority:
                     set(state) == expected_fields
                     and _is_exact_version(state.get("schema_version"), 5)
                 )
+                or (
+                    set(state) == expected_fields
+                    and _is_exact_version(state.get("schema_version"), 6)
+                )
             )
         )
         if (
@@ -1764,6 +1768,7 @@ class EngineAuthority:
         if not expected_snapshot_digest or digest != expected_snapshot_digest or envelope.get("digest") != digest:
             raise BridgeValidationError("persisted engine authority does not match the trusted snapshot boundary")
         replay_legacy_v1 = previous_shape and state["schema_version"] == BRIDGE_SCHEMA_VERSION
+        replay_schema_six = previous_shape and state["schema_version"] == 6
         if previous_shape:
             try:
                 legacy_version = state["schema_version"]
@@ -1820,7 +1825,7 @@ class EngineAuthority:
                 persisted_proposals = [
                     item["proposal"] for item in state["processed"]
                 ] + list(state.get("buffered_proposals", []))
-                if legacy_version == 5:
+                if legacy_version in {5, 6}:
                     proposal_order_mode = state["proposal_order_mode"]
                     if proposal_order_mode not in {None, "legacy", "global"}:
                         raise BridgeValidationError(
@@ -2124,11 +2129,17 @@ class EngineAuthority:
             authority._processed.values(),
             key=lambda item: item[1].outcome.sequence,
         ):
-            replayed = (
-                (replay._process_proposal(proposal),)
-                if replay_legacy_v1
-                else replay.validate_and_apply(proposal)
-            )
+            if replay_legacy_v1:
+                replayed = (replay._process_proposal(proposal),)
+            elif replay_schema_six:
+                replayed = (
+                    replay._process_proposal(
+                        proposal,
+                        enforce_global_actor_sequence=False,
+                    ),
+                )
+            else:
+                replayed = replay.validate_and_apply(proposal)
             if replayed != (decision,):
                 raise BridgeValidationError("persisted engine decisions do not match replayed policy")
         if (
@@ -2325,7 +2336,12 @@ class EngineAuthority:
             del self._buffered_proposals[pending.message_id]
             decisions.append(self._process_proposal(pending))
 
-    def _process_proposal(self, proposal: Envelope) -> EngineDecision:
+    def _process_proposal(
+        self,
+        proposal: Envelope,
+        *,
+        enforce_global_actor_sequence: bool = True,
+    ) -> EngineDecision:
         global_order = proposal.payload.get("global_order")
         incoming_order_mode = (
             "global" if global_order is not None else "legacy"
@@ -2336,7 +2352,10 @@ class EngineAuthority:
             raise BridgeValidationError(
                 "proposal ordering mode cannot change within authority history"
             )
-        reason = self._validate(proposal)
+        reason = self._validate(
+            proposal,
+            enforce_global_actor_sequence=enforce_global_actor_sequence,
+        )
         if global_order is None:
             self._last_global_order += 1
         elif global_order > self._last_global_order:
@@ -2380,7 +2399,12 @@ class EngineAuthority:
         )
         return decision
 
-    def _validate(self, proposal: Envelope) -> str | None:
+    def _validate(
+        self,
+        proposal: Envelope,
+        *,
+        enforce_global_actor_sequence: bool = True,
+    ) -> str | None:
         if proposal.message_type != "world_action_proposed":
             return "unsupported_message_type"
         if proposal.actor_id not in self._positions:
@@ -2393,7 +2417,11 @@ class EngineAuthority:
                 or global_order <= self._last_global_order
             ):
                 return "stale_global_order"
-        if proposal.sequence <= self._last_sequence.get(proposal.actor_id, 0):
+        if (
+            (global_order is None or enforce_global_actor_sequence)
+            and proposal.sequence
+            <= self._last_sequence.get(proposal.actor_id, 0)
+        ):
             return "stale_sequence"
         action_type = proposal.payload.get("action_type")
         command = proposal.payload.get("command")
