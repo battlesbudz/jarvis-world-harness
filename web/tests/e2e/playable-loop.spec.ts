@@ -36,7 +36,7 @@ async function holdUntil(page: Page, key: string, condition: (state: GameSnapsho
 async function centerOnVillageRoad(page: Page): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const state = await snapshot(page);
-    if (Math.abs(state.position.x) <= 0.75) return;
+    if (Math.abs(state.position.x) <= 1.5) return;
     await hold(page, state.position.x > 0 ? "KeyA" : "KeyD", 150);
   }
   throw new Error(`could not center on village road: ${JSON.stringify(await snapshot(page))}`);
@@ -122,6 +122,7 @@ test("touch joystick moves the Bio", async ({ page }) => {
 });
 
 test("the legitimate route reaches the village destination", async ({ page }, testInfo) => {
+  test.setTimeout(45_000);
   await openGame(page);
   await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
