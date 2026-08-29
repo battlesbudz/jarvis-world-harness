@@ -1867,7 +1867,9 @@ class EngineAuthority:
                             actor_id = item["actor_id"]
                             sequence = item["sequence"]
                             if (
-                                actor_id in state["positions"]
+                                item["message_type"]
+                                == "world_action_proposed"
+                                and actor_id in state["positions"]
                                 and sequence
                                 <= buffered_high_water.get(actor_id, 0)
                             ):
