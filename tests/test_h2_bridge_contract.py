@@ -746,6 +746,9 @@ class H2BridgeContractTest(unittest.TestCase):
                     if item["message_id"] not in later_ids
                 ]
             omitted_state["proposal_sequence"] = {}
+            omitted_state["proposal_global_order"] = len(
+                omitted_state["pending"]
+            )
             for item in omitted_state["pending"]:
                 actor_id = item["actor_id"]
                 omitted_state["proposal_sequence"][actor_id] = max(
@@ -777,6 +780,9 @@ class H2BridgeContractTest(unittest.TestCase):
             truncated_state["delivery_observations"].pop(later_observation_id)
             truncated_state["last_engine_sequence"]["bio"] = 1
             truncated_state["proposal_sequence"] = {}
+            truncated_state["proposal_global_order"] = len(
+                truncated_state["pending"]
+            )
             for item in truncated_state["pending"]:
                 actor_id = item["actor_id"]
                 truncated_state["proposal_sequence"][actor_id] = max(
@@ -906,6 +912,7 @@ class H2BridgeContractTest(unittest.TestCase):
         orphaned_state["delivery_observations"] = {}
         orphaned_state["last_engine_sequence"] = {}
         orphaned_state["proposal_sequence"] = {}
+        orphaned_state["proposal_global_order"] = 0
         orphaned_state["legacy_time_observations"] = []
         orphaned_state["legacy_time_anchors"] = {}
         orphaned_state["bridge_start_tick"] = migrated.world.tick
@@ -1033,6 +1040,7 @@ class H2BridgeContractTest(unittest.TestCase):
             state["delivery_observations"] = {}
             state["last_engine_sequence"] = {}
             state["proposal_sequence"] = {}
+            state["proposal_global_order"] = 0
             bridge.world.set_extension_state("h2_bridge", state)
             trusted = bridge.world.state_digest()
             bridge.world.save(path)
@@ -1504,7 +1512,10 @@ class H2BridgeContractTest(unittest.TestCase):
                 EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
 
             no_gap_buffer = load_payloads([engine_authority()])[0]
-            no_gap_buffer["state"]["buffered_proposals"] = [proposals[0].to_dict()]
+            no_gap_buffer["state"]["buffered_proposals"] = [
+                legacy_proposal(proposals[0]).to_dict()
+            ]
+            no_gap_buffer["state"]["proposal_order_mode"] = "legacy"
             digest = write_payload(no_gap_buffer)
             with self.assertRaisesRegex(BridgeValidationError, "does not follow a real gap"):
                 EngineAuthority.load(paths[0], PROPOSAL_ORIGIN_KEY, expected_snapshot_digest=digest)
@@ -1775,20 +1786,18 @@ class H2BridgeContractTest(unittest.TestCase):
 
     def test_stale_impossible_unauthorized_and_conflicting_inputs_do_not_mutate(self):
         bridge = h2_bridge()
-        first = next(
-            item
-            for item in bridge.ingest_engine_observation(
-                envelope("engine-observation:first", 1, "bio", "time_advance", {"ticks": 1})
-            )
-            if item.actor_id == "elias"
-        )
-        second = next(
-            item
-            for item in bridge.ingest_engine_observation(
-                envelope("engine-observation:second", 2, "bio", "time_advance", {"ticks": 1})
-            )
-            if item.actor_id == "elias"
-        )
+        first, second = sorted(
+            bridge.ingest_engine_observation(
+                envelope(
+                    "engine-observation:first",
+                    1,
+                    "bio",
+                    "time_advance",
+                    {"ticks": 1},
+                )
+            ),
+            key=lambda item: item.payload["global_order"],
+        )[:2]
 
         stale_authority = engine_authority()
         self.assertEqual(stale_authority.validate_and_apply(second), ())

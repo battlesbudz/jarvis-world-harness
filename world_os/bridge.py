@@ -1831,6 +1831,23 @@ class EngineAuthority:
                 proposal_order_mode = (
                     "global" if persisted_proposals else None
                 )
+                if proposal_order_mode == "global":
+                    ordered_ids = [
+                        item["message_id"]
+                        for item in sorted(
+                            state["processed"],
+                            key=lambda item: item["proposal"]["payload"][
+                                "global_order"
+                            ],
+                        )
+                    ]
+                    response_batches = [
+                        {
+                            "message_id": message_id,
+                            "decision_ids": ordered_ids[index:],
+                        }
+                        for index, message_id in enumerate(ordered_ids)
+                    ]
             except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
                 raise BridgeValidationError(
                     f"persisted engine authority is malformed: {error}"
@@ -2046,6 +2063,22 @@ class EngineAuthority:
                 for index in range(1, len(decisions))
             ):
                 raise BridgeValidationError("persisted engine response batch ordering is invalid")
+        if authority._proposal_order_mode == "global":
+            ordered_ids = [
+                proposal.message_id
+                for _digest, _decision, proposal in sorted(
+                    authority._processed.values(),
+                    key=lambda item: item[2].payload["global_order"],
+                )
+            ]
+            expected_batches = {
+                message_id: tuple(ordered_ids[index:])
+                for index, message_id in enumerate(ordered_ids)
+            }
+            if authority._response_batches != expected_batches:
+                raise BridgeValidationError(
+                    "persisted global response batches are not canonical"
+                )
         buffered_slots: set[tuple[str, int]] = set()
         buffered_global_orders: set[int] = set()
         for proposal in authority._buffered_proposals.values():
@@ -2238,14 +2271,7 @@ class EngineAuthority:
             drained = self._drain_buffer(proposal.actor_id)
         decisions = (decision, *drained)
         if global_order is not None:
-            self._response_batches[proposal.message_id] = tuple(
-                item.outcome.correlation_id for item in decisions
-            )
-            for item in drained:
-                self._response_batches.setdefault(
-                    item.outcome.correlation_id,
-                    (item.outcome.correlation_id,),
-                )
+            self._canonicalize_global_response_batches()
         else:
             self._response_batches[proposal.message_id] = tuple(
                 item.outcome.correlation_id for item in decisions
@@ -2256,6 +2282,17 @@ class EngineAuthority:
                     (item.outcome.correlation_id,),
                 )
         return decisions
+
+    def _canonicalize_global_response_batches(self) -> None:
+        ordered = sorted(
+            self._processed.values(),
+            key=lambda item: item[2].payload["global_order"],
+        )
+        ordered_ids = [item[2].message_id for item in ordered]
+        self._response_batches = {
+            message_id: tuple(ordered_ids[index:])
+            for index, message_id in enumerate(ordered_ids)
+        }
 
     def _response_batch(self, message_id: str) -> tuple[EngineDecision, ...]:
         return tuple(self._processed[decision_id][1] for decision_id in self._response_batches[message_id])
