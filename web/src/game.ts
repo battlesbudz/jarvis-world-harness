@@ -1,4 +1,5 @@
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera.js";
+import "@babylonjs/core/Collisions/collisionCoordinator.js";
 import { Engine } from "@babylonjs/core/Engines/engine.js";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight.js";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight.js";
@@ -141,20 +142,28 @@ export class AlbionGame {
 
   private readonly frame = (): void => {
     if (this.disposed) return;
-    const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
-    this.movePlayer(deltaSeconds);
-    this.updateCamera();
-    this.updateRoute();
-    this.scene.render();
-    if (!this.ready) {
-      this.ready = true;
-      this.elements.status.textContent = "Ready";
-      this.elements.objective.textContent = "Follow the lanterns to the village square";
-      document.body.dataset.gameReady = "true";
-    }
-    if (!this.elements.diagnostics.hidden) {
-      const position = this.player.position;
-      this.elements.diagnostics.textContent = `${position.x.toFixed(2)}, ${position.z.toFixed(2)} · ${this.checkpoint}`;
+    try {
+      const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
+      this.movePlayer(deltaSeconds);
+      this.updateCamera();
+      this.updateRoute();
+      this.scene.render();
+      if (!this.ready) {
+        this.ready = true;
+        this.elements.status.textContent = "Ready";
+        this.elements.objective.textContent = "Follow the lanterns to the village square";
+        document.body.dataset.gameReady = "true";
+      }
+      if (!this.elements.diagnostics.hidden) {
+        const position = this.player.position;
+        this.elements.diagnostics.textContent = `${position.x.toFixed(2)}, ${position.z.toFixed(2)} · ${this.checkpoint}`;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.runtimeErrors.push(message);
+      this.elements.status.textContent = "Albion stopped safely";
+      this.elements.objective.textContent = message;
+      this.engine.stopRenderLoop(this.frame);
     }
   };
 
