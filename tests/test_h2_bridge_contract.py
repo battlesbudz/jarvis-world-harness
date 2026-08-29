@@ -463,7 +463,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["engine_events"],
                     migrated_state["engine_versions"],
                 ),
-                (4, 0, 1, {}, {}),
+                (5, 0, 1, {}, {}),
             )
 
             bridge.world.save(path)
@@ -737,7 +737,7 @@ class H2BridgeContractTest(unittest.TestCase):
             bridge.world.set_extension_state("h2_bridge", truncated_state)
             trusted = bridge.world.state_digest()
             bridge.world.save(path)
-            with self.assertRaisesRegex(BridgeValidationError, "bridge-rooted time events"):
+            with self.assertRaisesRegex(BridgeValidationError, "bridge-rooted events"):
                 WorldOSBridge(
                     World.load(path, expected_state_digest=trusted),
                     {"ferryman": "ferry-dock", "baker": "bakery"},
@@ -760,7 +760,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     event["root_input"] = f"tick:{event['tick']}"
             extension = saved["state"]["extensions"]["h2_bridge"]
             extension["schema_version"] = 3
-            extension.pop("legacy_causal_binding")
+            extension.pop("legacy_time_observations")
             canonical = json.dumps(
                 saved["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
             )
@@ -775,8 +775,20 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             migrated_state = migrated.world.extension_state("h2_bridge")
             self.assertEqual(
-                (migrated_state["schema_version"], migrated_state["legacy_causal_binding"]),
-                (4, True),
+                (
+                    migrated_state["schema_version"],
+                    migrated_state["legacy_time_observations"],
+                ),
+                (5, ["engine-observation:legacy-causal"]),
+            )
+            migrated.ingest_engine_observation(
+                envelope(
+                    "engine-observation:direct-after-legacy",
+                    2,
+                    "bio",
+                    "time_advance",
+                    {"ticks": 1},
+                )
             )
             migrated_digest = migrated.world.state_digest()
             migrated.world.save(path)
@@ -785,9 +797,61 @@ class H2BridgeContractTest(unittest.TestCase):
                 {"ferryman": "ferry-dock", "baker": "bakery"},
                 PROPOSAL_ORIGIN_KEY,
             )
-            self.assertTrue(
-                reloaded.world.extension_state("h2_bridge")["legacy_causal_binding"]
+            self.assertEqual(
+                reloaded.world.extension_state("h2_bridge")["legacy_time_observations"],
+                ["engine-observation:legacy-causal"],
             )
+
+            direct_bridge = h2_bridge()
+            direct_bridge.ingest_engine_observation(
+                envelope("engine-observation:schema-four-direct", 1, "bio", "time_advance", {"ticks": 1})
+            )
+            direct_state = direct_bridge.world.extension_state("h2_bridge")
+            direct_state["schema_version"] = 4
+            direct_state.pop("legacy_time_observations")
+            direct_bridge.world.set_extension_state("h2_bridge", direct_state)
+            direct_digest = direct_bridge.world.state_digest()
+            direct_bridge.world.save(path)
+            direct_migrated = WorldOSBridge(
+                World.load(path, expected_state_digest=direct_digest),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            self.assertEqual(
+                direct_migrated.world.extension_state("h2_bridge")[
+                    "legacy_time_observations"
+                ],
+                [],
+            )
+
+    def test_orphaned_request_root_fails_restore(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "orphaned-request-root.json"
+            bridge = h2_bridge()
+            request = envelope(
+                "engine-observation:orphaned-request",
+                1,
+                "bio",
+                "npc_request",
+                {"target_id": "mara", "action": "wait"},
+            )
+            bridge.ingest_engine_observation(request)
+            state = bridge.world.extension_state("h2_bridge")
+            state["observations"] = []
+            state["pending"] = []
+            state["delivery_results"] = {}
+            state["delivery_observations"] = {}
+            state["last_engine_sequence"] = {}
+            state["proposal_sequence"] = {}
+            bridge.world.set_extension_state("h2_bridge", state)
+            trusted = bridge.world.state_digest()
+            bridge.world.save(path)
+            with self.assertRaisesRegex(BridgeValidationError, "bridge-rooted events"):
+                WorldOSBridge(
+                    World.load(path, expected_state_digest=trusted),
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
 
     def test_observation_ledger_and_proposals_survive_world_reload(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -827,7 +891,7 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             self.assertEqual(
                 migrated_bridge.world.extension_state("h2_bridge")["schema_version"],
-                4,
+                5,
             )
 
             legacy_signature_state = bridge.world.extension_state("h2_bridge")
