@@ -568,15 +568,85 @@ class WorldOSBridge:
         proposal_global_order_migration = "proposal_global_order" not in state
         if proposal_global_order_migration:
             try:
-                proposal_global_order = len(state["pending"])
-            except (KeyError, TypeError) as error:
+                pending_items = state["pending"]
+                if not isinstance(pending_items, list):
+                    raise BridgeValidationError(
+                        "persisted pending proposal ledger must be a list"
+                    )
+                event_order = {
+                    event.id: index for index, event in enumerate(self.world.events)
+                }
+                ordered_items = sorted(
+                    pending_items,
+                    key=lambda item: (
+                        event_order[item["payload"]["causal_event_id"]],
+                        item["message_id"],
+                    ),
+                )
+                migrated_proposals: dict[str, dict[str, Any]] = {}
+                for global_order, item in enumerate(ordered_items, start=1):
+                    unsigned = Envelope.from_dict(
+                        {
+                            **item,
+                            "payload": {
+                                **item["payload"],
+                                "global_order": global_order,
+                            },
+                        }
+                    )
+                    migrated = unsigned.to_dict()
+                    migrated["payload"]["origin_proof"] = _origin_proof(
+                        unsigned, self._proposal_origin_key
+                    )
+                    migrated_proposals[unsigned.message_id] = migrated
+                if len(migrated_proposals) != len(pending_items):
+                    raise BridgeValidationError(
+                        "persisted pending proposal identity is duplicated"
+                    )
+
+                def migrate_proposal(item: Mapping[str, Any]) -> dict[str, Any]:
+                    message_id = item["message_id"]
+                    if message_id not in migrated_proposals:
+                        raise BridgeValidationError(
+                            "persisted proposal mirror is not in the pending ledger"
+                        )
+                    return migrated_proposals[message_id]
+
+                observations = [
+                    {
+                        **item,
+                        "proposals": [
+                            migrate_proposal(proposal)
+                            for proposal in item["proposals"]
+                        ],
+                    }
+                    for item in state["observations"]
+                ]
+                delivery_results = {
+                    message_id: [
+                        migrate_proposal(proposal) for proposal in proposals
+                    ]
+                    for message_id, proposals in state.get(
+                        "delivery_results", {}
+                    ).items()
+                }
+                proposal_global_order = len(pending_items)
+            except (BridgeValidationError, KeyError, TypeError, ValueError) as error:
+                if isinstance(error, BridgeValidationError):
+                    raise
                 raise BridgeValidationError(
                     f"persisted proposal-order migration is malformed: {error}"
                 ) from error
             state = {
                 **dict(state),
+                "observations": observations,
+                "pending": [
+                    migrated_proposals[item["message_id"]] for item in pending_items
+                ],
                 "proposal_global_order": proposal_global_order,
             }
+            if "delivery_results" in state:
+                state = {**state, "delivery_results": delivery_results}
         migrate_noncontiguous_decisions = (
             _is_exact_version(state.get("schema_version"), 1)
             or _is_exact_version(state.get("schema_version"), 2)
@@ -1914,8 +1984,6 @@ class EngineAuthority:
         buffered_slots: set[tuple[str, int]] = set()
         buffered_global_orders: set[int] = set()
         for proposal in authority._buffered_proposals.values():
-            if proposal.actor_id not in authority._positions:
-                raise BridgeValidationError("persisted buffered engine proposal has an unknown actor")
             global_order = proposal.payload.get("global_order")
             if global_order is not None:
                 if (
@@ -1929,6 +1997,10 @@ class EngineAuthority:
                     )
                 buffered_global_orders.add(global_order)
                 continue
+            if proposal.actor_id not in authority._positions:
+                raise BridgeValidationError(
+                    "persisted buffered engine proposal has an unknown actor"
+                )
             if proposal.sequence <= authority._last_sequence.get(proposal.actor_id, 0) + 1:
                 raise BridgeValidationError("persisted buffered engine proposal does not follow a real gap")
             slot = (proposal.actor_id, proposal.sequence)
@@ -2088,7 +2160,10 @@ class EngineAuthority:
             drained = self._drain_buffer(proposal.actor_id)
         decisions = (decision, *drained)
         if global_order is not None:
-            for item in decisions:
+            self._response_batches[proposal.message_id] = tuple(
+                item.outcome.correlation_id for item in decisions
+            )
+            for item in drained:
                 self._response_batches.setdefault(
                     item.outcome.correlation_id,
                     (item.outcome.correlation_id,),

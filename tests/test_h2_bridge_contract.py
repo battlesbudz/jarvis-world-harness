@@ -507,7 +507,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["engine_events"],
                     migrated_state["engine_versions"],
                 ),
-                (9, 0, 1, {}, {}),
+                (10, 0, 1, {}, {}),
             )
 
             bridge.world.save(path)
@@ -824,7 +824,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["schema_version"],
                     migrated_state["legacy_time_observations"],
                 ),
-                (9, ["engine-observation:legacy-causal"]),
+                (10, ["engine-observation:legacy-causal"]),
             )
             migrated.ingest_engine_observation(
                 envelope(
@@ -1076,7 +1076,7 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             self.assertEqual(
                 migrated_bridge.world.extension_state("h2_bridge")["schema_version"],
-                9,
+                10,
             )
 
             legacy_signature_state = bridge.world.extension_state("h2_bridge")
