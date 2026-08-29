@@ -40,7 +40,9 @@ try {
   elements.diagnostics.hidden = !new URLSearchParams(window.location.search).has("test");
   const game = new AlbionGame(elements, runtimeErrors);
   window.__JARVIS_H2__ = { snapshot: () => game.snapshot() };
-  window.addEventListener("pagehide", () => game.dispose(), { once: true });
+  window.addEventListener("pagehide", (event) => {
+    if (!event.persisted) game.dispose();
+  });
 } catch (error) {
   recordError(error);
   const status = document.getElementById("status");

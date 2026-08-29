@@ -142,6 +142,15 @@ test("focus loss clears held movement", async ({ page }) => {
   expect(settled.runtimeErrors).toEqual([]);
 });
 
+test("a back-forward-cache page hide keeps the game playable", async ({ page }) => {
+  await openGame(page);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
+  await hold(page, "KeyD", 350);
+  const state = await snapshot(page);
+  expect(state.position.x).toBeGreaterThan(0.5);
+  expect(state.runtimeErrors).toEqual([]);
+});
+
 test("touch joystick moves the Bio", async ({ page }) => {
   await openGame(page);
   const joystick = page.locator("#joystick");
