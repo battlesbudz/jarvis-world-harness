@@ -1181,6 +1181,42 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             self.assertEqual(retry_buffer.validate_and_apply(first_global), drained)
 
+            schema_five_payload = json.loads(
+                engine_path.read_text(encoding="utf-8")
+            )
+            schema_five_payload["state"]["schema_version"] = 5
+            schema_five_payload["state"]["response_batches"] = [
+                {
+                    "message_id": item["message_id"],
+                    "decision_ids": [item["message_id"]],
+                }
+                for item in schema_five_payload["state"]["processed"]
+            ]
+            canonical = json.dumps(
+                schema_five_payload["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            schema_five_digest = hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()
+            schema_five_payload["digest"] = schema_five_digest
+            engine_path.write_text(
+                json.dumps(schema_five_payload), encoding="utf-8"
+            )
+            migrated_schema_five = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=schema_five_digest,
+            )
+            self.assertEqual(
+                migrated_schema_five.snapshot()["response_batches"], []
+            )
+            self.assertEqual(
+                migrated_schema_five.validate_and_apply(first_global), drained
+            )
+
             first_elias = next(
                 item for item in proposals if item.actor_id == "elias"
             )
@@ -1235,7 +1271,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=legacy_authority_digest,
             )
             self.assertEqual(decide(migrated_signature_authority, proposals[0]), decision)
-            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 5)
+            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 6)
 
             authority.save(engine_path)
             unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))
@@ -1273,7 +1309,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=previous_digest,
             )
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
-            self.assertEqual(migrated_authority.snapshot()["schema_version"], 5)
+            self.assertEqual(migrated_authority.snapshot()["schema_version"], 6)
 
             legacy_out_of_order = engine_authority()
             legacy_second = legacy_out_of_order._process_proposal(

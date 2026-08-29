@@ -17,7 +17,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 BRIDGE_SCHEMA_VERSION = 1
 BRIDGE_STATE_SCHEMA_VERSION = 10
-ENGINE_AUTHORITY_SCHEMA_VERSION = 5
+ENGINE_AUTHORITY_SCHEMA_VERSION = 6
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
 
@@ -1743,6 +1743,10 @@ class EngineAuthority:
                     set(state) == version_three_fields
                     and _is_exact_version(state.get("schema_version"), 4)
                 )
+                or (
+                    set(state) == expected_fields
+                    and _is_exact_version(state.get("schema_version"), 5)
+                )
             )
         )
         if (
@@ -1816,38 +1820,30 @@ class EngineAuthority:
                 persisted_proposals = [
                     item["proposal"] for item in state["processed"]
                 ] + list(state.get("buffered_proposals", []))
-                global_markers = [
-                    "global_order" in item["payload"]
-                    for item in persisted_proposals
-                ]
-                if any(global_markers) and not all(global_markers):
-                    raise BridgeValidationError(
-                        "persisted engine authority mixes proposal ordering modes"
-                    )
-                if persisted_proposals and not any(global_markers):
-                    raise BridgeValidationError(
-                        "persisted legacy engine authority history has ambiguous global order"
-                    )
-                proposal_order_mode = (
-                    "global" if persisted_proposals else None
-                )
-                if proposal_order_mode == "global":
-                    ordered_ids = [
-                        item["message_id"]
-                        for item in sorted(
-                            state["processed"],
-                            key=lambda item: item["proposal"]["payload"][
-                                "global_order"
-                            ],
+                if legacy_version == 5:
+                    proposal_order_mode = state["proposal_order_mode"]
+                    if proposal_order_mode not in {None, "legacy", "global"}:
+                        raise BridgeValidationError(
+                            "persisted engine proposal ordering mode is invalid"
                         )
+                else:
+                    global_markers = [
+                        "global_order" in item["payload"]
+                        for item in persisted_proposals
                     ]
-                    response_batches = [
-                        {
-                            "message_id": message_id,
-                            "decision_ids": ordered_ids[index:],
-                        }
-                        for index, message_id in enumerate(ordered_ids)
-                    ]
+                    if any(global_markers) and not all(global_markers):
+                        raise BridgeValidationError(
+                            "persisted engine authority mixes proposal ordering modes"
+                        )
+                    if persisted_proposals and not any(global_markers):
+                        raise BridgeValidationError(
+                            "persisted legacy engine authority history has ambiguous global order"
+                        )
+                    proposal_order_mode = (
+                        "global" if persisted_proposals else None
+                    )
+                if proposal_order_mode == "global":
+                    response_batches = []
             except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
                 raise BridgeValidationError(
                     f"persisted engine authority is malformed: {error}"
@@ -2029,7 +2025,10 @@ class EngineAuthority:
                 "persisted global engine proposal ordering is invalid"
             )
         authority._last_global_order = len(authority._processed)
-        if set(authority._response_batches) != set(authority._processed):
+        if (
+            authority._proposal_order_mode != "global"
+            and set(authority._response_batches) != set(authority._processed)
+        ):
             raise BridgeValidationError("persisted engine response batches do not cover processed proposals")
         def proposals_are_contiguous(previous: Envelope, current: Envelope) -> bool:
             previous_global = previous.payload.get("global_order")
@@ -2063,22 +2062,13 @@ class EngineAuthority:
                 for index in range(1, len(decisions))
             ):
                 raise BridgeValidationError("persisted engine response batch ordering is invalid")
-        if authority._proposal_order_mode == "global":
-            ordered_ids = [
-                proposal.message_id
-                for _digest, _decision, proposal in sorted(
-                    authority._processed.values(),
-                    key=lambda item: item[2].payload["global_order"],
-                )
-            ]
-            expected_batches = {
-                message_id: tuple(ordered_ids[index:])
-                for index, message_id in enumerate(ordered_ids)
-            }
-            if authority._response_batches != expected_batches:
-                raise BridgeValidationError(
-                    "persisted global response batches are not canonical"
-                )
+        if (
+            authority._proposal_order_mode == "global"
+            and authority._response_batches
+        ):
+            raise BridgeValidationError(
+                "persisted global response batches must use compact derivation"
+            )
         buffered_slots: set[tuple[str, int]] = set()
         buffered_global_orders: set[int] = set()
         for proposal in authority._buffered_proposals.values():
@@ -2284,17 +2274,19 @@ class EngineAuthority:
         return decisions
 
     def _canonicalize_global_response_batches(self) -> None:
-        ordered = sorted(
-            self._processed.values(),
-            key=lambda item: item[2].payload["global_order"],
-        )
-        ordered_ids = [item[2].message_id for item in ordered]
-        self._response_batches = {
-            message_id: tuple(ordered_ids[index:])
-            for index, message_id in enumerate(ordered_ids)
-        }
+        self._response_batches = {}
 
     def _response_batch(self, message_id: str) -> tuple[EngineDecision, ...]:
+        if self._proposal_order_mode == "global":
+            target_order = self._processed[message_id][2].payload["global_order"]
+            return tuple(
+                decision
+                for _digest, decision, proposal in sorted(
+                    self._processed.values(),
+                    key=lambda item: item[2].payload["global_order"],
+                )
+                if proposal.payload["global_order"] >= target_order
+            )
         return tuple(self._processed[decision_id][1] for decision_id in self._response_batches[message_id])
 
     def _drain_buffer(
