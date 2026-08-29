@@ -56,6 +56,9 @@ Then widen the capability surface:
 ./bin/setup-capabilities.sh
 ```
 
+This also installs the repository's Python runtime requirements (including the bridge's
+Ed25519 verification dependency) into the same `python3` environment used by the harness.
+
 ## 3. Launching, and two ways to get it wrong
 
 ```bash

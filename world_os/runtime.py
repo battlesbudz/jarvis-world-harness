@@ -172,6 +172,7 @@ class World:
         self.actors = MappingProxyType(actor_map)
         self.crisis_actor = crisis_actor
         self._events: list[Event] = []
+        self._extensions: dict[str, dict[str, Any]] = {}
         for actor in sorted(self.actors.values(), key=lambda item: item.id):
             if actor.category == "bio":
                 self._record(
@@ -828,14 +829,58 @@ class World:
             )
         )
 
-    def advance(self, ticks: int = 1) -> list[Event]:
+    def record_bridge_causal_anchor(
+        self, message_id: str, time_event_id: str
+    ) -> Event:
+        if not isinstance(message_id, str) or not message_id:
+            raise ValidationError("bridge causal anchor requires a message identity")
+        time_event = self._event(time_event_id)
+        if (
+            time_event.event_type != "time_advanced"
+            or time_event.root_input != f"tick:{time_event.tick}"
+            or time_event.payload.get("tick") != time_event.tick
+        ):
+            raise ValidationError(
+                "bridge causal anchor requires an exact legacy time event"
+            )
+        if any(
+            event.event_type == "bridge_causal_anchor"
+            and (
+                event.payload.get("message_id") == message_id
+                or event.payload.get("time_event_id") == time_event_id
+            )
+            for event in self.events
+        ):
+            raise ValidationError("bridge causal anchor identity is duplicated")
+        return self._record(
+            "bridge_causal_anchor",
+            self.crisis_actor,
+            (),
+            "albion",
+            (),
+            (time_event_id,),
+            f"bridge-legacy:{message_id}",
+            {
+                "message_id": message_id,
+                "time_event_id": time_event_id,
+            },
+        )
+
+    def advance(self, ticks: int = 1, *, root_input: str | None = None) -> list[Event]:
         if not isinstance(ticks, int) or isinstance(ticks, bool) or ticks < 0:
             raise ValidationError("logical tick count must be a non-negative integer")
         emitted = []
         for _ in range(ticks):
             self.tick += 1
             tick_event = self._record(
-                "time_advanced", self.crisis_actor, (), "albion", (), (), f"tick:{self.tick}", {"tick": self.tick}
+                "time_advanced",
+                self.crisis_actor,
+                (),
+                "albion",
+                (),
+                (),
+                root_input if root_input is not None else f"tick:{self.tick}",
+                {"tick": self.tick},
             )
             emitted.append(tick_event)
             for actor in sorted(self.actors.values(), key=lambda item: item.id):
@@ -897,7 +942,7 @@ class World:
         }
 
     def state(self) -> dict[str, Any]:
-        return {
+        state = {
             "schema_version": SCHEMA_VERSION,
             "seed": self.seed,
             "tick": self.tick,
@@ -905,6 +950,24 @@ class World:
             "actors": [self.actors[key].to_dict() for key in sorted(self.actors)],
             "events": [event.to_dict() for event in self.events],
         }
+        if self._extensions:
+            state["extensions"] = json.loads(_canonical(self._extensions))
+        return state
+
+    def extension_state(self, namespace: str) -> dict[str, Any] | None:
+        state = self._extensions.get(namespace)
+        return json.loads(_canonical(state)) if state is not None else None
+
+    def set_extension_state(self, namespace: str, state: Mapping[str, Any]) -> None:
+        if not isinstance(namespace, str) or not namespace:
+            raise ValidationError("extension namespace must be a non-empty string")
+        try:
+            copied = json.loads(_canonical(dict(state)))
+        except (TypeError, ValueError) as error:
+            raise ValidationError(f"extension state must be a JSON object: {error}") from error
+        if not isinstance(copied, dict):
+            raise ValidationError("extension state must be a JSON object")
+        self._extensions[namespace] = copied
 
     def state_digest(self) -> str:
         return _digest(self.state())
@@ -1000,7 +1063,11 @@ class World:
                         )
                     )
             elif event.event_type == "time_advanced":
-                world.advance()
+                world.advance(root_input=event.root_input)
+            elif event.event_type == "bridge_causal_anchor":
+                world.record_bridge_causal_anchor(
+                    event.payload["message_id"], event.payload["time_event_id"]
+                )
             elif event.event_type == "proposal_rejected":
                 proposal = event.payload.get("proposal")
                 if not isinstance(proposal, Mapping):
@@ -1014,6 +1081,14 @@ class World:
 
         if len(world.events) != len(saved_events) or world.tick != state["tick"]:
             raise ValidationError("persisted world does not replay to its claimed boundary")
+        extensions = state.get("extensions", {})
+        if not isinstance(extensions, dict) or any(
+            not isinstance(namespace, str) or not isinstance(value, dict)
+            for namespace, value in extensions.items()
+        ):
+            raise ValidationError("persisted world extensions are malformed")
+        for namespace, value in extensions.items():
+            world.set_extension_state(namespace, value)
         return world
 
     @classmethod
