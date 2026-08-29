@@ -669,6 +669,47 @@ class H2BridgeContractTest(unittest.TestCase):
             restored.receive_engine_decision(future_applied)
             self.assertEqual(restored.world.state_digest(), before_retry)
 
+    def test_retained_lineage_conflict_retry_is_idempotent(self):
+        bridge = h2_bridge()
+        proposals = bridge.ingest_engine_observation(
+            envelope(
+                "engine-observation:lineage-conflict",
+                1,
+                "bio",
+                "time_advance",
+                {"ticks": 1},
+            )
+        )
+        first, second, hidden_first = proposals[:3]
+
+        hidden_authority = engine_authority()
+        decide(hidden_authority, hidden_first)
+        future = decide(hidden_authority, second)
+        bridge.receive_engine_decision(future)
+
+        visible_authority = engine_authority()
+        visible_first = decide(visible_authority, first)
+        with self.assertRaisesRegex(
+            BridgeValidationError, "lineage conflicts"
+        ):
+            bridge.receive_engine_decision(visible_first)
+        retained_digest = bridge.world.state_digest()
+        bridge.receive_engine_decision(future)
+        self.assertEqual(bridge.world.state_digest(), retained_digest)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "retained-lineage-conflict.json"
+            bridge.world.save(path)
+            restored = WorldOSBridge(
+                World.load(path, expected_state_digest=retained_digest),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            restored.receive_engine_decision(future)
+            self.assertEqual(
+                restored.world.state_digest(), retained_digest
+            )
+
     def test_missing_persisted_causal_event_fails_as_bridge_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "missing-causal-event.json"

@@ -1669,7 +1669,6 @@ class WorldOSBridge:
             self._engine_versions[int(decision.engine_event.payload["state_version"])] = decision.engine_event.digest()
 
     def receive_engine_decision(self, decision: EngineDecision) -> None:
-        proposal = self._validate_engine_decision_envelope(decision)
         existing = self._decisions.get(decision.outcome.message_id)
         buffered_existing = self._buffered_decisions.get(decision.outcome.message_id)
         if existing is not None or buffered_existing is not None:
@@ -1677,6 +1676,7 @@ class WorldOSBridge:
             if recorded.digest() != decision.digest():
                 raise BridgeValidationError("engine outcome id was reused with different content")
             return
+        proposal = self._validate_engine_decision_envelope(decision)
 
         all_decisions = (*self._decisions.values(), *self._buffered_decisions.values())
         if any(item.outcome.sequence == decision.outcome.sequence for item in all_decisions):
