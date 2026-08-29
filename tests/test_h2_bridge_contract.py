@@ -1271,7 +1271,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=legacy_authority_digest,
             )
             self.assertEqual(decide(migrated_signature_authority, proposals[0]), decision)
-            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 7)
+            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 8)
 
             authority.save(engine_path)
             unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))
@@ -1309,7 +1309,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=previous_digest,
             )
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
-            self.assertEqual(migrated_authority.snapshot()["schema_version"], 7)
+            self.assertEqual(migrated_authority.snapshot()["schema_version"], 8)
 
             legacy_out_of_order = engine_authority()
             legacy_second = legacy_out_of_order._process_proposal(
@@ -1946,10 +1946,14 @@ class H2BridgeContractTest(unittest.TestCase):
             }
         )
         sequence_authority = engine_authority()
+        skipped_sequence = sequence_authority.validate_and_apply(
+            sequence_two
+        )[0]
         self.assertEqual(
-            sequence_authority.validate_and_apply(sequence_two)[0].status,
-            "applied",
+            (skipped_sequence.status, skipped_sequence.reason),
+            ("rejected", "out_of_order_sequence"),
         )
+        self.assertEqual(sequence_authority.state()["state_version"], 0)
         regressing_decision = sequence_authority.validate_and_apply(
             regressing_sequence
         )[0]
@@ -1971,6 +1975,16 @@ class H2BridgeContractTest(unittest.TestCase):
                 sequence_digest,
             )
 
+            strict_schema_six_authority = engine_authority()
+            strict_schema_six_authority._process_proposal(
+                sequence_two,
+                require_contiguous_global_actor_sequence=False,
+            )
+            strict_schema_six_authority._process_proposal(
+                regressing_sequence,
+                require_contiguous_global_actor_sequence=False,
+            )
+            strict_schema_six_authority.save(sequence_path)
             strict_schema_six_payload = json.loads(
                 sequence_path.read_text(encoding="utf-8")
             )
@@ -1994,7 +2008,34 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=strict_schema_six_digest,
             )
             self.assertEqual(
-                migrated_strict_schema_six.snapshot()["schema_version"], 7
+                migrated_strict_schema_six.snapshot()["schema_version"], 8
+            )
+
+            strict_schema_six_authority.save(sequence_path)
+            schema_seven_payload = json.loads(
+                sequence_path.read_text(encoding="utf-8")
+            )
+            schema_seven_payload["state"]["schema_version"] = 7
+            canonical = json.dumps(
+                schema_seven_payload["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            schema_seven_digest = hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()
+            schema_seven_payload["digest"] = schema_seven_digest
+            sequence_path.write_text(
+                json.dumps(schema_seven_payload), encoding="utf-8"
+            )
+            migrated_schema_seven = EngineAuthority.load(
+                sequence_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=schema_seven_digest,
+            )
+            self.assertEqual(
+                migrated_schema_seven.snapshot()["schema_version"], 8
             )
 
             schema_six_authority = EngineAuthority(
@@ -2039,7 +2080,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=schema_six_digest,
             )
             self.assertEqual(
-                migrated_schema_six.snapshot()["schema_version"], 7
+                migrated_schema_six.snapshot()["schema_version"], 8
             )
 
         impossible_authority = EngineAuthority(

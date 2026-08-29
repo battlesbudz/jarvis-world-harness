@@ -17,7 +17,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 BRIDGE_SCHEMA_VERSION = 1
 BRIDGE_STATE_SCHEMA_VERSION = 10
-ENGINE_AUTHORITY_SCHEMA_VERSION = 7
+ENGINE_AUTHORITY_SCHEMA_VERSION = 8
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
 
@@ -1751,6 +1751,10 @@ class EngineAuthority:
                     set(state) == expected_fields
                     and _is_exact_version(state.get("schema_version"), 6)
                 )
+                or (
+                    set(state) == expected_fields
+                    and _is_exact_version(state.get("schema_version"), 7)
+                )
             )
         )
         if (
@@ -1769,6 +1773,7 @@ class EngineAuthority:
             raise BridgeValidationError("persisted engine authority does not match the trusted snapshot boundary")
         replay_legacy_v1 = previous_shape and state["schema_version"] == BRIDGE_SCHEMA_VERSION
         replay_schema_six = previous_shape and state["schema_version"] == 6
+        replay_schema_seven = previous_shape and state["schema_version"] == 7
         if previous_shape:
             try:
                 legacy_version = state["schema_version"]
@@ -1825,7 +1830,7 @@ class EngineAuthority:
                 persisted_proposals = [
                     item["proposal"] for item in state["processed"]
                 ] + list(state.get("buffered_proposals", []))
-                if legacy_version in {5, 6}:
+                if legacy_version in {5, 6, 7}:
                     proposal_order_mode = state["proposal_order_mode"]
                     if proposal_order_mode not in {None, "legacy", "global"}:
                         raise BridgeValidationError(
@@ -1847,6 +1852,31 @@ class EngineAuthority:
                     proposal_order_mode = (
                         "global" if persisted_proposals else None
                     )
+                if (
+                    legacy_version == 7
+                    and proposal_order_mode == "global"
+                ):
+                    buffered_high_water = dict(state["last_sequence"])
+                    for item in sorted(
+                        state.get("buffered_proposals", []),
+                        key=lambda value: value["payload"]["global_order"],
+                    ):
+                        actor_id = item["actor_id"]
+                        sequence = item["sequence"]
+                        if (
+                            item["message_type"] == "world_action_proposed"
+                            and actor_id in state["positions"]
+                            and sequence
+                            > buffered_high_water.get(actor_id, 0) + 1
+                        ):
+                            raise BridgeValidationError(
+                                "persisted schema-7 buffered proposal policy is ambiguous"
+                            )
+                        if actor_id in state["positions"]:
+                            buffered_high_water[actor_id] = max(
+                                buffered_high_water.get(actor_id, 0),
+                                sequence,
+                            )
                 if (
                     legacy_version == 6
                     and proposal_order_mode == "global"
@@ -2172,6 +2202,14 @@ class EngineAuthority:
                         enforce_global_actor_sequence=(
                             decision.reason == "stale_sequence"
                         ),
+                        require_contiguous_global_actor_sequence=False,
+                    ),
+                )
+            elif replay_schema_seven:
+                replayed = (
+                    replay._process_proposal(
+                        proposal,
+                        require_contiguous_global_actor_sequence=False,
                     ),
                 )
             else:
@@ -2377,6 +2415,7 @@ class EngineAuthority:
         proposal: Envelope,
         *,
         enforce_global_actor_sequence: bool = True,
+        require_contiguous_global_actor_sequence: bool = True,
     ) -> EngineDecision:
         global_order = proposal.payload.get("global_order")
         incoming_order_mode = (
@@ -2391,6 +2430,9 @@ class EngineAuthority:
         reason = self._validate(
             proposal,
             enforce_global_actor_sequence=enforce_global_actor_sequence,
+            require_contiguous_global_actor_sequence=(
+                require_contiguous_global_actor_sequence
+            ),
         )
         if global_order is None:
             self._last_global_order += 1
@@ -2440,6 +2482,7 @@ class EngineAuthority:
         proposal: Envelope,
         *,
         enforce_global_actor_sequence: bool = True,
+        require_contiguous_global_actor_sequence: bool = True,
     ) -> str | None:
         if proposal.message_type != "world_action_proposed":
             return "unsupported_message_type"
@@ -2453,11 +2496,18 @@ class EngineAuthority:
                 or global_order <= self._last_global_order
             ):
                 return "stale_global_order"
-        if (
-            (global_order is None or enforce_global_actor_sequence)
-            and proposal.sequence
-            <= self._last_sequence.get(proposal.actor_id, 0)
-        ):
+        actor_last_sequence = self._last_sequence.get(
+            proposal.actor_id, 0
+        )
+        if global_order is not None and enforce_global_actor_sequence:
+            if (
+                require_contiguous_global_actor_sequence
+                and proposal.sequence > actor_last_sequence + 1
+            ):
+                return "out_of_order_sequence"
+            if proposal.sequence <= actor_last_sequence:
+                return "stale_sequence"
+        elif global_order is None and proposal.sequence <= actor_last_sequence:
             return "stale_sequence"
         action_type = proposal.payload.get("action_type")
         command = proposal.payload.get("command")
