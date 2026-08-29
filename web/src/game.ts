@@ -143,7 +143,8 @@ export class AlbionGame {
   private readonly frame = (): void => {
     if (this.disposed) return;
     try {
-      const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.05);
+      // Preserve world speed on lower-powered phones while limiting a resumed tab's leap.
+      const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.25);
       this.movePlayer(deltaSeconds);
       this.updateCamera();
       this.updateRoute();
