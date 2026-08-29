@@ -16,7 +16,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
 BRIDGE_SCHEMA_VERSION = 1
-BRIDGE_STATE_SCHEMA_VERSION = 10
+BRIDGE_STATE_SCHEMA_VERSION = 11
 ENGINE_AUTHORITY_SCHEMA_VERSION = 8
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
@@ -445,6 +445,9 @@ class WorldOSBridge:
 
     def _restore(self, state: Mapping[str, Any]) -> None:
         saved_state_schema = state.get("schema_version")
+        delivery_compaction_migration = not _is_exact_version(
+            saved_state_schema, BRIDGE_STATE_SCHEMA_VERSION
+        )
         causal_binding_migration = "legacy_time_observations" not in state
         if causal_binding_migration:
             direct_root_ids = {
@@ -682,6 +685,7 @@ class WorldOSBridge:
             or bridge_start_migration
             or bridge_start_proof_migration
             or proposal_global_order_migration
+            or delivery_compaction_migration
         )
         migrate_delivery_observations = migrated
         if set(state) == legacy_required or set(state) == current_legacy_required:
@@ -937,6 +941,26 @@ class WorldOSBridge:
             raise BridgeValidationError("persisted delivery groups do not cover applied observations exactly once")
         if sorted(delivered_proposal_ids) != sorted(self._pending):
             raise BridgeValidationError("persisted delivery results do not cover the canonical pending proposals exactly once")
+        if _is_exact_version(
+            saved_state_schema, BRIDGE_STATE_SCHEMA_VERSION
+        ):
+            expected_delivery_results = {
+                message_id: proposals
+                for message_id, (_observation, proposals) in self._observations.items()
+            }
+            expected_delivery_observations = {
+                message_id: (message_id,) for message_id in self._observations
+            }
+            if (
+                self._delivery_results != expected_delivery_results
+                or self._delivery_observations
+                != expected_delivery_observations
+            ):
+                raise BridgeValidationError(
+                    "persisted observation delivery groups are not canonical"
+                )
+        else:
+            self._canonicalize_observation_deliveries()
         decision_sequences = [decision.outcome.sequence for decision in self._decisions.values()]
         if len(set(decision_sequences)) != len(decision_sequences):
             raise BridgeValidationError("persisted engine outcome ordering slot is duplicated")
@@ -1389,7 +1413,7 @@ class WorldOSBridge:
         if existing:
             if existing[0].digest() != observation.digest():
                 raise BridgeValidationError("engine message id was reused with different content")
-            return self._delivery_results.get(observation.message_id, existing[1])
+            return self._delivery_result(observation.message_id)
         buffered = self._buffered_observations.get(observation.message_id)
         if buffered:
             if buffered.digest() != observation.digest():
@@ -1433,10 +1457,31 @@ class WorldOSBridge:
             self._buffered_observations.pop(item.message_id, None)
             delivered.extend(proposals)
         result = tuple(delivered)
-        self._delivery_results[observation.message_id] = result
-        self._delivery_observations[observation.message_id] = tuple(item.message_id for item in ordered)
+        self._canonicalize_observation_deliveries()
         self._persist()
         return result
+
+    def _canonicalize_observation_deliveries(self) -> None:
+        self._delivery_results = {
+            message_id: proposals
+            for message_id, (_observation, proposals) in self._observations.items()
+        }
+        self._delivery_observations = {
+            message_id: (message_id,) for message_id in self._observations
+        }
+
+    def _delivery_result(self, message_id: str) -> tuple[Envelope, ...]:
+        trigger = self._observations[message_id][0]
+        return tuple(
+            proposal
+            for observation, proposals in sorted(
+                self._observations.values(),
+                key=lambda item: item[0].sequence,
+            )
+            if observation.actor_id == trigger.actor_id
+            and observation.sequence >= trigger.sequence
+            for proposal in proposals
+        )
 
     def _validate_engine_decision_envelope(self, decision: EngineDecision) -> Envelope:
         if not _has_valid_authority_proof(
