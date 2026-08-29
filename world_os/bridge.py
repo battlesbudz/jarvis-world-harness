@@ -1850,15 +1850,32 @@ class EngineAuthority:
                 if (
                     legacy_version == 6
                     and proposal_order_mode == "global"
-                    and any(
-                        item["sequence"]
-                        <= state["last_sequence"].get(item["actor_id"], 0)
-                        for item in state.get("buffered_proposals", [])
-                    )
                 ):
-                    raise BridgeValidationError(
-                        "persisted schema-6 buffered proposal policy is ambiguous"
+                    strict_schema_six = any(
+                        item["decision"]["outcome"]["payload"]["reason"]
+                        == "stale_sequence"
+                        for item in state["processed"]
                     )
+                    if not strict_schema_six:
+                        buffered_high_water = dict(state["last_sequence"])
+                        for item in sorted(
+                            state.get("buffered_proposals", []),
+                            key=lambda value: value["payload"][
+                                "global_order"
+                            ],
+                        ):
+                            actor_id = item["actor_id"]
+                            sequence = item["sequence"]
+                            if (
+                                actor_id in state["positions"]
+                                and sequence
+                                <= buffered_high_water.get(actor_id, 0)
+                            ):
+                                raise BridgeValidationError(
+                                    "persisted schema-6 buffered proposal policy is ambiguous"
+                                )
+                            if actor_id in state["positions"]:
+                                buffered_high_water[actor_id] = sequence
                 if proposal_order_mode == "global":
                     response_batches = []
             except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
