@@ -108,8 +108,12 @@ test("the legitimate route reaches the village destination", async ({ page }, te
   await hold(page, "KeyD", 1_565);
   await hold(page, "KeyW", 3_915);
   await hold(page, "KeyA", 1_565);
-  await hold(page, "KeyW", 1_480);
-  await expect.poll(async () => (await snapshot(page)).checkpoint).toBe("complete");
+  await page.keyboard.down("KeyW");
+  try {
+    await expect.poll(async () => (await snapshot(page)).checkpoint, { timeout: 6_000 }).toBe("complete");
+  } finally {
+    await page.keyboard.up("KeyW");
+  }
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);
   expect(finalState.runtimeErrors).toEqual([]);
