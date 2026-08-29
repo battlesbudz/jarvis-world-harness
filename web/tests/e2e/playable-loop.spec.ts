@@ -24,6 +24,15 @@ async function hold(page: Page, key: string, milliseconds: number): Promise<void
   await page.keyboard.up(key);
 }
 
+async function holdUntil(page: Page, key: string, condition: (state: GameSnapshot) => boolean): Promise<void> {
+  await page.keyboard.down(key);
+  try {
+    await expect.poll(async () => condition(await snapshot(page)), { timeout: 10_000, intervals: [50] }).toBe(true);
+  } finally {
+    await page.keyboard.up(key);
+  }
+}
+
 function projectRevision(): string {
   const revision = process.env.H2_REVISION
     ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: resolve(process.cwd(), ".."), encoding: "utf8" }).trim();
@@ -105,15 +114,10 @@ test("touch joystick moves the Bio", async ({ page }) => {
 
 test("the legitimate route reaches the village destination", async ({ page }, testInfo) => {
   await openGame(page);
-  await hold(page, "KeyD", 1_565);
-  await hold(page, "KeyW", 3_915);
-  await hold(page, "KeyA", 1_565);
-  await page.keyboard.down("KeyW");
-  try {
-    await expect.poll(async () => (await snapshot(page)).checkpoint, { timeout: 6_000 }).toBe("complete");
-  } finally {
-    await page.keyboard.up("KeyW");
-  }
+  await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
+  await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
+  await holdUntil(page, "KeyA", (state) => state.position.x <= 0.5);
+  await holdUntil(page, "KeyW", (state) => state.checkpoint === "complete");
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);
   expect(finalState.runtimeErrors).toEqual([]);
