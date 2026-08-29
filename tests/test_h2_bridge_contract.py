@@ -936,6 +936,39 @@ class H2BridgeContractTest(unittest.TestCase):
                 PROPOSAL_ORIGIN_KEY,
             )
 
+    def test_cross_bio_time_advances_restore_in_world_tick_order(self):
+        world = World(
+            2204,
+            [
+                Actor("bio-a", "Bio A", "bio", "wanderer", ("freedom",)),
+                Actor("bio-b", "Bio B", "bio", "wanderer", ("freedom",)),
+                Actor("mara", "Mara", "thinker", "captain", ("protect_community",)),
+            ],
+            crisis_actor="mara",
+        )
+        bridge = WorldOSBridge(world, {}, PROPOSAL_ORIGIN_KEY)
+        bridge.ingest_engine_observation(
+            envelope(
+                "engine-observation:z-first-arrival",
+                1,
+                "bio-a",
+                "time_advance",
+                {"ticks": 1},
+            )
+        )
+        bridge.ingest_engine_observation(
+            envelope(
+                "engine-observation:a-second-arrival",
+                1,
+                "bio-b",
+                "time_advance",
+                {"ticks": 1},
+            )
+        )
+
+        restored = WorldOSBridge(bridge.world, {}, PROPOSAL_ORIGIN_KEY)
+        self.assertEqual(restored.world.tick, 2)
+
     def test_orphaned_request_root_fails_restore(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "orphaned-request-root.json"

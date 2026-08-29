@@ -1046,13 +1046,36 @@ class WorldOSBridge:
                 raise BridgeValidationError(
                     "persisted proposal causal event reference is invalid"
                 ) from error
+        def persisted_time_order(observation: Envelope) -> tuple[int, str]:
+            if observation.message_id in self._legacy_time_observations:
+                event_id = self._legacy_time_anchors[observation.message_id]
+                time_event = next(
+                    (event for event in self.world.events if event.id == event_id),
+                    None,
+                )
+            else:
+                expected_root = f"bridge:{observation.message_id}"
+                time_event = next(
+                    (
+                        event
+                        for event in self.world.events
+                        if event.event_type == "time_advanced"
+                        and event.root_input == expected_root
+                    ),
+                    None,
+                )
+            return (
+                time_event.tick if time_event is not None else self.world.tick + 1,
+                observation.message_id,
+            )
+
         time_observations = sorted(
             (
                 observation
                 for observation, _proposals in self._observations.values()
                 if observation.message_type == "time_advance"
             ),
-            key=lambda item: item.sequence,
+            key=persisted_time_order,
         )
         time_actors = {item.actor_id for item in time_observations}
         time_observation_ids = {item.message_id for item in time_observations}
