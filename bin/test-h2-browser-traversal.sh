@@ -16,23 +16,35 @@ for project in desktop-chromium android-folded android-unfolded-landscape; do
   esac
   test -s "$evidence/establishing-$project.png"
   test -s "$evidence/blocked-shortcut-$project.png"
+  test -s "$evidence/collision-$project.json"
   test -s "$evidence/route-complete-$project.png"
   test -s "$evidence/traversal-$project.json"
   node -e '
     const fs = require("node:fs");
-    const [file, expected, project, width, height] = process.argv.slice(1);
-    const evidence = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (!/^[0-9a-f]{40}$/i.test(evidence.revision) || evidence.revision !== expected) {
-      throw new Error(`${file} revision ${evidence.revision} does not match ${expected}`);
+    const [traversalFile, collisionFile, expected, project, width, height] = process.argv.slice(1);
+    const traversal = JSON.parse(fs.readFileSync(traversalFile, "utf8"));
+    const collision = JSON.parse(fs.readFileSync(collisionFile, "utf8"));
+    for (const [file, record] of [[traversalFile, traversal], [collisionFile, collision]]) {
+      if (!/^[0-9a-f]{40}$/i.test(record.revision) || record.revision !== expected) {
+        throw new Error(`${file} revision ${record.revision} does not match ${expected}`);
+      }
+      if (record.environment?.project !== project
+        || !record.environment?.browser?.name
+        || !record.environment?.browser?.version
+        || record.environment?.viewport?.width !== Number(width)
+        || record.environment?.viewport?.height !== Number(height)) {
+        throw new Error(`${file} does not identify the expected browser environment`);
+      }
     }
-    if (evidence.environment?.project !== project
-      || !evidence.environment?.browser?.name
-      || !evidence.environment?.browser?.version
-      || evidence.environment?.viewport?.width !== Number(width)
-      || evidence.environment?.viewport?.height !== Number(height)) {
-      throw new Error(`${file} does not identify the expected browser environment`);
+    if (collision.scenario !== "h2-babylon-blocked-shortcut-v1"
+      || collision.screenshot !== `blocked-shortcut-${project}.png`
+      || collision.state?.resetId !== 1
+      || !(collision.state?.collisionCount >= 1)
+      || typeof collision.state?.position?.z !== "number"
+      || collision.state?.runtimeErrors?.length !== 0) {
+      throw new Error(`${collisionFile} does not prove the linked collision scenario`);
     }
-  ' "$evidence/traversal-$project.json" "$expected_revision" "$project" "$expected_width" "$expected_height"
+  ' "$evidence/traversal-$project.json" "$evidence/collision-$project.json" "$expected_revision" "$project" "$expected_width" "$expected_height"
 done
 
 echo "H2 browser traversal checks passed"

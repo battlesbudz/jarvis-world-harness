@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -51,6 +51,19 @@ function projectRevision(): string {
   return revision;
 }
 
+async function evidenceEnvironment(page: Page, testInfo: TestInfo) {
+  const browser = page.context().browser();
+  return {
+    project: testInfo.project.name,
+    browser: {
+      name: browser?.browserType().name() ?? "unknown",
+      version: browser?.version() ?? "unknown",
+    },
+    viewport: page.viewportSize(),
+    deviceScaleFactor: await page.evaluate(() => window.devicePixelRatio),
+  };
+}
+
 test("loads a deterministic rendered village without runtime errors", async ({ page }, testInfo) => {
   await openGame(page);
   const state = await snapshot(page);
@@ -76,7 +89,18 @@ test("keyboard movement is physical and the shortcut wall blocks passage", async
   expect(blocked.position.z).toBeGreaterThan(-12);
   expect(blocked.position.z).toBeLessThan(-2.7);
   expect(blocked.collisionCount).toBeGreaterThan(0);
-  await page.screenshot({ path: resolve(evidenceDirectory, `blocked-shortcut-${testInfo.project.name}.png`) });
+  const screenshot = `blocked-shortcut-${testInfo.project.name}.png`;
+  await page.screenshot({ path: resolve(evidenceDirectory, screenshot) });
+  await writeFile(
+    resolve(evidenceDirectory, `collision-${testInfo.project.name}.json`),
+    `${JSON.stringify({
+      revision: projectRevision(),
+      scenario: H2_COLLISION_SCENARIO,
+      screenshot,
+      environment: await evidenceEnvironment(page, testInfo),
+      state: blocked,
+    }, null, 2)}\n`,
+  );
 });
 
 test("camera drag changes facing and reset restores the exact spawn", async ({ page }) => {
@@ -149,16 +173,7 @@ test("the legitimate route reaches the village destination", async ({ page }, te
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);
   expect(finalState.runtimeErrors).toEqual([]);
-  const browser = page.context().browser();
-  const environment = {
-    project: testInfo.project.name,
-    browser: {
-      name: browser?.browserType().name() ?? "unknown",
-      version: browser?.version() ?? "unknown",
-    },
-    viewport: page.viewportSize(),
-    deviceScaleFactor: await page.evaluate(() => window.devicePixelRatio),
-  };
+  const environment = await evidenceEnvironment(page, testInfo);
   await mkdir(evidenceDirectory, { recursive: true });
   await page.screenshot({ path: resolve(evidenceDirectory, `route-complete-${testInfo.project.name}.png`) });
   await writeFile(
@@ -168,3 +183,4 @@ test("the legitimate route reaches the village destination", async ({ page }, te
 });
 
 const H2_SCENARIO = "h2-babylon-greybox-traversal-v1";
+const H2_COLLISION_SCENARIO = "h2-babylon-blocked-shortcut-v1";
