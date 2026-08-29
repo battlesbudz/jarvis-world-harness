@@ -1399,6 +1399,71 @@ class H2BridgeContractTest(unittest.TestCase):
                     PROPOSAL_ORIGIN_KEY,
                 )
 
+            schema_ten_bridge = h2_bridge()
+            schema_ten_bridge.ingest_engine_observation(
+                envelope(
+                    "engine-observation:schema-ten",
+                    1,
+                    "bio",
+                    "time_advance",
+                    {"ticks": 1},
+                )
+            )
+            schema_ten_state = schema_ten_bridge.world.extension_state("h2_bridge")
+            schema_ten_state["schema_version"] = 10
+            schema_ten_bridge.world.set_extension_state("h2_bridge", schema_ten_state)
+            schema_ten_digest = schema_ten_bridge.world.state_digest()
+            schema_ten_bridge.world.save(path)
+            migrated_schema_ten = WorldOSBridge(
+                type(schema_ten_bridge.world).load(
+                    path, expected_state_digest=schema_ten_digest
+                ),
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+            self.assertEqual(
+                migrated_schema_ten.world.extension_state("h2_bridge")[
+                    "schema_version"
+                ],
+                11,
+            )
+
+            corrupt_legacy_delivery_bridge = h2_bridge()
+            corrupt_legacy_delivery_bridge.ingest_engine_observation(
+                envelope(
+                    "engine-observation:corrupt-legacy-delivery",
+                    1,
+                    "bio",
+                    "time_advance",
+                    {"ticks": 1},
+                )
+            )
+            corrupt_legacy_delivery_state = (
+                corrupt_legacy_delivery_bridge.world.extension_state("h2_bridge")
+            )
+            corrupt_legacy_delivery_state["schema_version"] = 9
+            corrupt_legacy_delivery_state["delivery_observations"][
+                "engine-observation:corrupt-legacy-delivery"
+            ].append("does-not-exist")
+            corrupt_legacy_delivery_bridge.world.set_extension_state(
+                "h2_bridge", corrupt_legacy_delivery_state
+            )
+            corrupt_legacy_delivery_digest = (
+                corrupt_legacy_delivery_bridge.world.state_digest()
+            )
+            corrupt_legacy_delivery_bridge.world.save(path)
+            corrupt_legacy_delivery_world = type(
+                corrupt_legacy_delivery_bridge.world
+            ).load(path, expected_state_digest=corrupt_legacy_delivery_digest)
+            with self.assertRaisesRegex(
+                BridgeValidationError, "unknown observation"
+            ):
+                WorldOSBridge(
+                    corrupt_legacy_delivery_world,
+                    {"ferryman": "ferry-dock", "baker": "bakery"},
+                    PROPOSAL_ORIGIN_KEY,
+                )
+
             incomplete_previous_bridge = h2_bridge()
             incomplete_previous_bridge.ingest_engine_observation(
                 envelope("engine-observation:missing-delivery", 1, "bio", "time_advance", {"ticks": 1})

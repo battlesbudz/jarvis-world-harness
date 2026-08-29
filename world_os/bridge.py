@@ -687,7 +687,11 @@ class WorldOSBridge:
             or proposal_global_order_migration
             or delivery_compaction_migration
         )
-        migrate_delivery_observations = migrated
+        # Only synthesize delivery-observation groups for snapshot shapes that
+        # predate the field. Complete legacy snapshots must retain their
+        # original groups until the integrity checks below have validated them;
+        # otherwise canonicalization could silently repair corrupted state.
+        migrate_delivery_observations = legacy_migration or previous_migration
         if set(state) == legacy_required or set(state) == current_legacy_required:
             state = {**dict(state), "buffered_observations": [], "delivery_results": {}}
         if set(state) == previous_required or set(state) == current_previous_required:
@@ -705,6 +709,7 @@ class WorldOSBridge:
             or _is_exact_version(state.get("schema_version"), 7)
             or _is_exact_version(state.get("schema_version"), 8)
             or _is_exact_version(state.get("schema_version"), 9)
+            or _is_exact_version(state.get("schema_version"), 10)
             or _is_exact_version(state.get("schema_version"), BRIDGE_STATE_SCHEMA_VERSION)
         ):
             raise BridgeValidationError("persisted bridge state is incompatible")
@@ -727,7 +732,7 @@ class WorldOSBridge:
                 )
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
-        elif state["schema_version"] in {2, 3, 4, 5, 6, 7, 8, 9}:
+        elif state["schema_version"] in {2, 3, 4, 5, 6, 7, 8, 9, 10}:
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
         if state.get("role_stations") != self.role_stations:
