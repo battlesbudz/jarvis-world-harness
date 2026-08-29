@@ -463,7 +463,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["engine_events"],
                     migrated_state["engine_versions"],
                 ),
-                (5, 0, 1, {}, {}),
+                (6, 0, 1, {}, {}),
             )
 
             bridge.world.save(path)
@@ -761,6 +761,7 @@ class H2BridgeContractTest(unittest.TestCase):
             extension = saved["state"]["extensions"]["h2_bridge"]
             extension["schema_version"] = 3
             extension.pop("legacy_time_observations")
+            extension.pop("legacy_time_anchors")
             canonical = json.dumps(
                 saved["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
             )
@@ -779,7 +780,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["schema_version"],
                     migrated_state["legacy_time_observations"],
                 ),
-                (5, ["engine-observation:legacy-causal"]),
+                (6, ["engine-observation:legacy-causal"]),
             )
             migrated.ingest_engine_observation(
                 envelope(
@@ -822,6 +823,47 @@ class H2BridgeContractTest(unittest.TestCase):
                     "legacy_time_observations"
                 ],
                 [],
+            )
+
+    def test_orphaned_legacy_time_root_fails_restore(self):
+        bridge = h2_bridge()
+        observation = envelope(
+            "engine-observation:orphaned-legacy",
+            1,
+            "bio",
+            "time_advance",
+            {"ticks": 1},
+        )
+        bridge.ingest_engine_observation(observation)
+        for event in bridge.world._events:
+            if event.event_type == "time_advanced":
+                object.__setattr__(event, "root_input", f"tick:{event.tick}")
+        legacy_state = bridge.world.extension_state("h2_bridge")
+        legacy_state["schema_version"] = 5
+        legacy_state.pop("legacy_time_anchors")
+        legacy_state["legacy_time_observations"] = [observation.message_id]
+        bridge.world.set_extension_state("h2_bridge", legacy_state)
+
+        migrated = WorldOSBridge(
+            bridge.world,
+            {"ferryman": "ferry-dock", "baker": "bakery"},
+            PROPOSAL_ORIGIN_KEY,
+        )
+        orphaned_state = migrated.world.extension_state("h2_bridge")
+        orphaned_state["observations"] = []
+        orphaned_state["pending"] = []
+        orphaned_state["delivery_results"] = {}
+        orphaned_state["delivery_observations"] = {}
+        orphaned_state["last_engine_sequence"] = {}
+        orphaned_state["proposal_sequence"] = {}
+        orphaned_state["legacy_time_observations"] = []
+        migrated.world.set_extension_state("h2_bridge", orphaned_state)
+
+        with self.assertRaisesRegex(BridgeValidationError, "legacy causal anchors"):
+            WorldOSBridge(
+                migrated.world,
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
             )
 
     def test_orphaned_request_root_fails_restore(self):
@@ -891,7 +933,7 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             self.assertEqual(
                 migrated_bridge.world.extension_state("h2_bridge")["schema_version"],
-                5,
+                6,
             )
 
             legacy_signature_state = bridge.world.extension_state("h2_bridge")
