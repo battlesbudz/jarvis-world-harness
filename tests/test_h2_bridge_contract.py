@@ -284,7 +284,10 @@ class H2BridgeContractTest(unittest.TestCase):
         conflicting_authority = engine_authority()
         decide(conflicting_authority, nella)
         reused_event_decision = decide(conflicting_authority, elias)
-        with self.assertRaisesRegex(BridgeValidationError, "event id was reused"):
+        with self.assertRaisesRegex(
+            BridgeValidationError,
+            "engine outcome id was reused with different content",
+        ):
             bridge.receive_engine_decision(reused_event_decision)
 
         restarted_authority = engine_authority()
@@ -680,7 +683,16 @@ class H2BridgeContractTest(unittest.TestCase):
                 {"ticks": 1},
             )
         )
-        first, second, hidden_first = proposals[:3]
+        first, second = proposals
+        hidden_first = h2_bridge().ingest_engine_observation(
+            envelope(
+                "engine-observation:hidden-lineage",
+                1,
+                "bio",
+                "npc_request",
+                {"target_id": "mara", "action": "wait"},
+            )
+        )[0]
 
         hidden_authority = engine_authority()
         decide(hidden_authority, hidden_first)
