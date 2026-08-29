@@ -860,9 +860,19 @@ class H2BridgeContractTest(unittest.TestCase):
         orphaned_state["legacy_time_anchors"] = {}
         migrated.world.set_extension_state("h2_bridge", orphaned_state)
 
-        with self.assertRaisesRegex(BridgeValidationError, "causal anchor events"):
+        with self.assertRaisesRegex(BridgeValidationError, "legacy tick events"):
             WorldOSBridge(
                 migrated.world,
+                {"ferryman": "ferry-dock", "baker": "bakery"},
+                PROPOSAL_ORIGIN_KEY,
+            )
+
+    def test_bridge_requires_a_pristine_logical_clock(self):
+        world = albion_world(2202)
+        world.advance()
+        with self.assertRaisesRegex(BridgeValidationError, "pristine logical clock"):
+            WorldOSBridge(
+                world,
                 {"ferryman": "ferry-dock", "baker": "bakery"},
                 PROPOSAL_ORIGIN_KEY,
             )

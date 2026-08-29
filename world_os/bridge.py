@@ -349,6 +349,12 @@ class WorldOSBridge:
         if saved is not None:
             self._restore(saved)
         else:
+            if self.world.tick != 0 or any(
+                event.event_type == "time_advanced" for event in self.world.events
+            ):
+                raise BridgeValidationError(
+                    "bridge initialization requires a pristine logical clock"
+                )
             self._persist()
 
     def _state(self) -> dict[str, Any]:
@@ -393,7 +399,6 @@ class WorldOSBridge:
         self.world.set_extension_state(_BRIDGE_EXTENSION, self._state())
 
     def _restore(self, state: Mapping[str, Any]) -> None:
-        saved_state_schema = state.get("schema_version")
         causal_binding_migration = "legacy_time_observations" not in state
         if causal_binding_migration:
             direct_root_ids = {
@@ -962,52 +967,16 @@ class WorldOSBridge:
             raise BridgeValidationError(
                 "persisted legacy causal anchors do not match legacy observations"
             )
-        world_events_by_id = {event.id: event for event in self.world.events}
-        event_anchors: dict[str, str] = {}
-        anchored_time_events: set[str] = set()
-        for event in self.world.events:
-            if event.event_type != "bridge_causal_anchor":
-                continue
-            message_id = event.payload.get("message_id")
-            time_event_id = event.payload.get("time_event_id")
-            time_event = (
-                world_events_by_id.get(time_event_id)
-                if isinstance(time_event_id, str)
-                else None
-            )
-            if (
-                set(event.payload) != {"message_id", "time_event_id"}
-                or not isinstance(message_id, str)
-                or not isinstance(time_event_id, str)
-                or message_id in event_anchors
-                or time_event_id in anchored_time_events
-                or event.actor != self.world.crisis_actor
-                or event.targets
-                or event.location != "albion"
-                or event.witnesses
-                or event.parents != (time_event_id,)
-                or event.root_input != f"bridge-legacy:{message_id}"
-                or time_event is None
-                or time_event.event_type != "time_advanced"
-                or time_event.root_input != f"tick:{time_event.tick}"
-                or time_event.payload.get("tick") != time_event.tick
-            ):
-                raise BridgeValidationError(
-                    "persisted bridge causal anchor event is malformed"
-                )
-            event_anchors[message_id] = time_event_id
-            anchored_time_events.add(time_event_id)
-        migrate_anchor_events = (
-            not event_anchors
-            and bool(self._legacy_time_anchors)
-            and any(
-                _is_exact_version(saved_state_schema, version)
-                for version in range(1, BRIDGE_STATE_SCHEMA_VERSION)
-            )
-        )
-        if not migrate_anchor_events and event_anchors != self._legacy_time_anchors:
+        legacy_tick_event_ids = {
+            event.id
+            for event in self.world.events
+            if event.event_type == "time_advanced"
+            and event.root_input == f"tick:{event.tick}"
+            and event.payload.get("tick") == event.tick
+        }
+        if set(self._legacy_time_anchors.values()) != legacy_tick_event_ids:
             raise BridgeValidationError(
-                "persisted bridge causal anchor events do not match the ledger"
+                "persisted legacy tick events do not match the bridge ledger"
             )
         if self._legacy_time_observations and len(time_actors) > 1:
             raise BridgeValidationError(
@@ -1065,12 +1034,6 @@ class WorldOSBridge:
             raise BridgeValidationError(
                 "persisted bridge-rooted events do not match the observation ledger"
             )
-        if migrate_anchor_events:
-            for message_id, time_event_id in sorted(
-                self._legacy_time_anchors.items()
-            ):
-                self.world.record_bridge_causal_anchor(message_id, time_event_id)
-            migrated = True
         if migrated:
             self._persist()
 
