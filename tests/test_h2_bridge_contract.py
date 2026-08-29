@@ -463,7 +463,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["engine_events"],
                     migrated_state["engine_versions"],
                 ),
-                (6, 0, 1, {}, {}),
+                (7, 0, 1, {}, {}),
             )
 
             bridge.world.save(path)
@@ -762,7 +762,6 @@ class H2BridgeContractTest(unittest.TestCase):
             extension["schema_version"] = 3
             extension.pop("legacy_time_observations")
             extension.pop("legacy_time_anchors")
-            saved["state"]["extensions"].pop("h2_bridge_causal_anchors")
             canonical = json.dumps(
                 saved["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
             )
@@ -781,7 +780,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["schema_version"],
                     migrated_state["legacy_time_observations"],
                 ),
-                (6, ["engine-observation:legacy-causal"]),
+                (7, ["engine-observation:legacy-causal"]),
             )
             migrated.ingest_engine_observation(
                 envelope(
@@ -844,7 +843,6 @@ class H2BridgeContractTest(unittest.TestCase):
         legacy_state.pop("legacy_time_anchors")
         legacy_state["legacy_time_observations"] = [observation.message_id]
         bridge.world.set_extension_state("h2_bridge", legacy_state)
-        bridge.world._extensions.pop("h2_bridge_causal_anchors")
 
         migrated = WorldOSBridge(
             bridge.world,
@@ -862,7 +860,7 @@ class H2BridgeContractTest(unittest.TestCase):
         orphaned_state["legacy_time_anchors"] = {}
         migrated.world.set_extension_state("h2_bridge", orphaned_state)
 
-        with self.assertRaisesRegex(BridgeValidationError, "durable causal anchors"):
+        with self.assertRaisesRegex(BridgeValidationError, "causal anchor events"):
             WorldOSBridge(
                 migrated.world,
                 {"ferryman": "ferry-dock", "baker": "bakery"},
@@ -936,7 +934,7 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             self.assertEqual(
                 migrated_bridge.world.extension_state("h2_bridge")["schema_version"],
-                6,
+                7,
             )
 
             legacy_signature_state = bridge.world.extension_state("h2_bridge")
