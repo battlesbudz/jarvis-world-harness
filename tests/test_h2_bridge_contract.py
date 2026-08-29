@@ -401,11 +401,22 @@ class H2BridgeContractTest(unittest.TestCase):
         )
         hidden_mutation_bridge.receive_engine_decision(decide(rejecting_fork, hidden_first))
         applying_fork = engine_authority()
-        self.assertEqual(decide(applying_fork, hidden_first).outcome.payload["state_version"], 1)
+        hidden_first_applied = decide(applying_fork, hidden_first)
+        self.assertEqual(hidden_first_applied.outcome.payload["state_version"], 1)
         hidden_second_applied = decide(applying_fork, hidden_second)
         self.assertEqual(
             (hidden_second_applied.outcome.sequence, hidden_second_applied.outcome.payload["state_version"]),
             (2, 2),
+        )
+        self.assertNotIn(
+            "prior_event_digests", hidden_first_applied.engine_event.payload
+        )
+        self.assertIsNone(
+            hidden_first_applied.engine_event.payload["prior_event_digest"]
+        )
+        self.assertEqual(
+            hidden_second_applied.engine_event.payload["prior_event_digest"],
+            hidden_first_applied.engine_event.digest(),
         )
         before_hidden = hidden_mutation_bridge.world.state_digest()
         with self.assertRaisesRegex(BridgeValidationError, "state version conflicts"):
@@ -487,12 +498,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 second.engine_event.message_id: event_digest
             }
             schema_two_state["engine_versions"] = {
-                **{
-                    str(version): digest
-                    for version, digest in enumerate(
-                        second.engine_event.payload["prior_event_digests"], start=1
-                    )
-                },
+                "1": first.engine_event.digest(),
                 str(second.engine_event.payload["state_version"]): event_digest,
             }
             schema_two_world.set_extension_state("h2_bridge", schema_two_state)
@@ -1271,7 +1277,42 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=legacy_authority_digest,
             )
             self.assertEqual(decide(migrated_signature_authority, proposals[0]), decision)
-            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 8)
+            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 9)
+
+            schema_eight_authority = engine_authority()
+            schema_eight_decision = schema_eight_authority._process_proposal(
+                proposals[0], legacy_full_lineage=True
+            )
+            schema_eight_authority.save(engine_path)
+            schema_eight_payload = json.loads(
+                engine_path.read_text(encoding="utf-8")
+            )
+            schema_eight_payload["state"]["schema_version"] = 8
+            canonical = json.dumps(
+                schema_eight_payload["state"],
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            schema_eight_digest = hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()
+            schema_eight_payload["digest"] = schema_eight_digest
+            engine_path.write_text(
+                json.dumps(schema_eight_payload), encoding="utf-8"
+            )
+            migrated_schema_eight = EngineAuthority.load(
+                engine_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=schema_eight_digest,
+            )
+            self.assertEqual(
+                decide(migrated_schema_eight, proposals[0]),
+                schema_eight_decision,
+            )
+            self.assertEqual(
+                migrated_schema_eight.snapshot()["schema_version"], 9
+            )
 
             authority.save(engine_path)
             unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))
@@ -1309,7 +1350,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=previous_digest,
             )
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
-            self.assertEqual(migrated_authority.snapshot()["schema_version"], 8)
+            self.assertEqual(migrated_authority.snapshot()["schema_version"], 9)
 
             legacy_out_of_order = engine_authority()
             legacy_second = legacy_out_of_order._process_proposal(
@@ -2073,7 +2114,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=strict_schema_six_digest,
             )
             self.assertEqual(
-                migrated_strict_schema_six.snapshot()["schema_version"], 8
+                migrated_strict_schema_six.snapshot()["schema_version"], 9
             )
 
             strict_schema_six_authority.save(sequence_path)
@@ -2100,7 +2141,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=schema_seven_digest,
             )
             self.assertEqual(
-                migrated_schema_seven.snapshot()["schema_version"], 8
+                migrated_schema_seven.snapshot()["schema_version"], 9
             )
 
             schema_six_authority = EngineAuthority(
@@ -2145,7 +2186,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=schema_six_digest,
             )
             self.assertEqual(
-                migrated_schema_six.snapshot()["schema_version"], 8
+                migrated_schema_six.snapshot()["schema_version"], 9
             )
 
         impossible_authority = EngineAuthority(

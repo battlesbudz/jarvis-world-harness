@@ -17,7 +17,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 BRIDGE_SCHEMA_VERSION = 1
 BRIDGE_STATE_SCHEMA_VERSION = 11
-ENGINE_AUTHORITY_SCHEMA_VERSION = 8
+ENGINE_AUTHORITY_SCHEMA_VERSION = 9
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
 
@@ -185,9 +185,19 @@ class EngineDecision:
             )
             if engine_state_version != state_version:
                 raise BridgeValidationError("engine event and outcome state versions do not match")
-            if set(self.engine_event.payload) != {
-                "action_type", "command", "destination", "prior_event_digests", "state_version"
-            }:
+            legacy_lineage = "prior_event_digests" in self.engine_event.payload
+            expected_event_fields = {
+                "action_type",
+                "command",
+                "destination",
+                (
+                    "prior_event_digests"
+                    if legacy_lineage
+                    else "prior_event_digest"
+                ),
+                "state_version",
+            }
+            if set(self.engine_event.payload) != expected_event_fields:
                 raise BridgeValidationError("authoritative engine event payload fields do not match the schema")
             if not all(
                 isinstance(self.engine_event.payload.get(key), str) and self.engine_event.payload[key]
@@ -197,13 +207,31 @@ class EngineDecision:
             destination = self.engine_event.payload.get("destination")
             if destination is not None and not isinstance(destination, str):
                 raise BridgeValidationError("authoritative engine event destination is malformed")
-            lineage = self.engine_event.payload.get("prior_event_digests")
-            if (
-                not isinstance(lineage, tuple)
-                or len(lineage) != state_version - 1
-                or any(not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest) for digest in lineage)
-            ):
-                raise BridgeValidationError("authoritative engine event lineage is malformed")
+            if legacy_lineage:
+                lineage = self.engine_event.payload.get("prior_event_digests")
+                if (
+                    not isinstance(lineage, tuple)
+                    or len(lineage) != state_version - 1
+                    or any(
+                        not isinstance(digest, str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", digest)
+                        for digest in lineage
+                    )
+                ):
+                    raise BridgeValidationError("authoritative engine event lineage is malformed")
+            else:
+                prior_digest = self.engine_event.payload.get("prior_event_digest")
+                if (
+                    (state_version == 1 and prior_digest is not None)
+                    or (
+                        state_version > 1
+                        and (
+                            not isinstance(prior_digest, str)
+                            or not re.fullmatch(r"[0-9a-f]{64}", prior_digest)
+                        )
+                    )
+                ):
+                    raise BridgeValidationError("authoritative engine event lineage is malformed")
         elif self.engine_event is not None or self.outcome.payload.get("engine_event_id") is not None:
             raise BridgeValidationError("rejected decision cannot reference an engine event")
 
@@ -231,6 +259,17 @@ class EngineDecision:
             Envelope.from_dict(data["outcome"]),
             Envelope.from_dict(engine_event) if engine_event is not None else None,
         )
+
+
+def _engine_event_lineage(event: Envelope) -> tuple[tuple[int, str], ...]:
+    """Return the persisted lineage links in version/digest form."""
+    state_version = int(event.payload["state_version"])
+    if "prior_event_digests" in event.payload:
+        return tuple(
+            enumerate(event.payload["prior_event_digests"], start=1)
+        )
+    prior_digest = event.payload["prior_event_digest"]
+    return () if state_version == 1 else ((state_version - 1, prior_digest),)
 
 
 def _state_advance_is_possible(
@@ -836,8 +875,8 @@ class WorldOSBridge:
                 for item in decisions:
                     if item.engine_event is None:
                         continue
-                    for version, digest in enumerate(
-                        item.engine_event.payload["prior_event_digests"], start=1
+                    for version, digest in _engine_event_lineage(
+                        item.engine_event
                     ):
                         rebuilt_versions[version] = digest
                     rebuilt_versions[
@@ -1025,8 +1064,8 @@ class WorldOSBridge:
             if existing_event is not None and existing_event != event_digest:
                 raise BridgeValidationError("persisted authoritative engine event identity is duplicated")
             expected_engine_events[event_id] = event_digest
-            for prior_version, prior_digest in enumerate(
-                decision.engine_event.payload["prior_event_digests"], start=1
+            for prior_version, prior_digest in _engine_event_lineage(
+                decision.engine_event
             ):
                 existing_version = expected_engine_versions.get(prior_version)
                 if existing_version is not None and existing_version != prior_digest:
@@ -1515,9 +1554,7 @@ class WorldOSBridge:
             if existing_event_digest is not None and existing_event_digest != engine_event.digest():
                 raise BridgeValidationError("authoritative engine event id was reused with different content")
             state_version = int(engine_event.payload["state_version"])
-            for prior_version, prior_digest in enumerate(
-                engine_event.payload["prior_event_digests"], start=1
-            ):
+            for prior_version, prior_digest in _engine_event_lineage(engine_event):
                 existing_prior_digest = self._engine_versions.get(prior_version)
                 if existing_prior_digest is not None and existing_prior_digest != prior_digest:
                     raise BridgeValidationError(
@@ -1559,7 +1596,7 @@ class WorldOSBridge:
             if existing_event_digest is not None and existing_event_digest != engine_event.digest():
                 raise BridgeValidationError("authoritative engine event id was reused with different content")
             state_version = int(engine_event.payload["state_version"])
-            for prior_version, prior_digest in enumerate(engine_event.payload["prior_event_digests"], start=1):
+            for prior_version, prior_digest in _engine_event_lineage(engine_event):
                 existing_prior_digest = self._engine_versions.get(prior_version)
                 if existing_prior_digest is not None and existing_prior_digest != prior_digest:
                     raise BridgeValidationError("authoritative engine event lineage conflicts with recorded history")
@@ -1568,9 +1605,8 @@ class WorldOSBridge:
                 raise BridgeValidationError("authoritative engine state version was reused by a different event")
         self._decisions[decision.outcome.message_id] = decision
         if decision.engine_event is not None:
-            for prior_version, prior_digest in enumerate(
-                decision.engine_event.payload["prior_event_digests"],
-                start=1,
+            for prior_version, prior_digest in _engine_event_lineage(
+                decision.engine_event
             ):
                 self._engine_versions[prior_version] = prior_digest
             self._engine_events[decision.engine_event.message_id] = decision.engine_event.digest()
@@ -1805,6 +1841,10 @@ class EngineAuthority:
                     set(state) == expected_fields
                     and _is_exact_version(state.get("schema_version"), 7)
                 )
+                or (
+                    set(state) == expected_fields
+                    and _is_exact_version(state.get("schema_version"), 8)
+                )
             )
         )
         if (
@@ -1880,7 +1920,7 @@ class EngineAuthority:
                 persisted_proposals = [
                     item["proposal"] for item in state["processed"]
                 ] + list(state.get("buffered_proposals", []))
-                if legacy_version in {5, 6, 7}:
+                if legacy_version in {5, 6, 7, 8}:
                     proposal_order_mode = state["proposal_order_mode"]
                     if proposal_order_mode not in {None, "legacy", "global"}:
                         raise BridgeValidationError(
@@ -2243,8 +2283,16 @@ class EngineAuthority:
             authority._processed.values(),
             key=lambda item: item[1].outcome.sequence,
         ):
+            legacy_full_lineage = (
+                decision.engine_event is not None
+                and "prior_event_digests" in decision.engine_event.payload
+            )
             if replay_legacy_v1:
-                replayed = (replay._process_proposal(proposal),)
+                replayed = (
+                    replay._process_proposal(
+                        proposal, legacy_full_lineage=legacy_full_lineage
+                    ),
+                )
             elif replay_schema_six:
                 replayed = (
                     replay._process_proposal(
@@ -2253,6 +2301,7 @@ class EngineAuthority:
                             decision.reason == "stale_sequence"
                         ),
                         require_contiguous_global_actor_sequence=False,
+                        legacy_full_lineage=legacy_full_lineage,
                     ),
                 )
             elif replay_schema_seven:
@@ -2260,6 +2309,13 @@ class EngineAuthority:
                     replay._process_proposal(
                         proposal,
                         require_contiguous_global_actor_sequence=False,
+                        legacy_full_lineage=legacy_full_lineage,
+                    ),
+                )
+            elif previous_shape:
+                replayed = (
+                    replay._process_proposal(
+                        proposal, legacy_full_lineage=legacy_full_lineage
                     ),
                 )
             else:
@@ -2466,6 +2522,7 @@ class EngineAuthority:
         *,
         enforce_global_actor_sequence: bool = True,
         require_contiguous_global_actor_sequence: bool = True,
+        legacy_full_lineage: bool = False,
     ) -> EngineDecision:
         global_order = proposal.payload.get("global_order")
         incoming_order_mode = (
@@ -2505,6 +2562,15 @@ class EngineAuthority:
             self._positions[proposal.actor_id] = destination
         self._last_action[proposal.actor_id] = {"action_type": action_type, "command": command}
         self._last_sequence[proposal.actor_id] = proposal.sequence
+        lineage = (
+            {"prior_event_digests": list(self._event_history)}
+            if legacy_full_lineage
+            else {
+                "prior_event_digest": (
+                    self._event_history[-1] if self._event_history else None
+                )
+            }
+        )
         engine_event = Envelope(
             BRIDGE_SCHEMA_VERSION,
             f"engine-event:{proposal.message_id}",
@@ -2516,7 +2582,7 @@ class EngineAuthority:
                 "action_type": action_type,
                 "command": command,
                 "destination": destination,
-                "prior_event_digests": list(self._event_history),
+                **lineage,
                 "state_version": self._state_version,
             },
         )
