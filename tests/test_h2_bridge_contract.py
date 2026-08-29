@@ -1215,6 +1215,7 @@ class H2BridgeContractTest(unittest.TestCase):
             ambiguous_legacy.save(engine_path)
             ambiguous_payload = json.loads(engine_path.read_text(encoding="utf-8"))
             ambiguous_payload["state"].pop("proposal_order_mode")
+            ambiguous_payload["state"].pop("actor_sequence_policies")
             ambiguous_payload["state"]["schema_version"] = 4
             canonical = json.dumps(
                 ambiguous_payload["state"],
@@ -1268,6 +1269,7 @@ class H2BridgeContractTest(unittest.TestCase):
             schema_five_payload = json.loads(
                 engine_path.read_text(encoding="utf-8")
             )
+            schema_five_payload["state"].pop("actor_sequence_policies")
             schema_five_payload["state"]["schema_version"] = 5
             schema_five_payload["state"]["response_batches"] = [
                 {
@@ -1314,6 +1316,7 @@ class H2BridgeContractTest(unittest.TestCase):
             version_two_payload = json.loads(engine_path.read_text(encoding="utf-8"))
             version_two_payload["state"].pop("response_batches")
             version_two_payload["state"].pop("proposal_order_mode")
+            version_two_payload["state"].pop("actor_sequence_policies")
             version_two_payload["state"]["schema_version"] = 2
             canonical = json.dumps(
                 version_two_payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -1331,6 +1334,7 @@ class H2BridgeContractTest(unittest.TestCase):
             authority.save(engine_path)
             legacy_authority_payload = json.loads(engine_path.read_text(encoding="utf-8"))
             legacy_authority_payload["state"].pop("proposal_order_mode")
+            legacy_authority_payload["state"].pop("actor_sequence_policies")
             legacy_authority_payload["state"]["schema_version"] = 3
             legacy_proof = hmac.new(
                 PROPOSAL_ORIGIN_KEY,
@@ -1355,7 +1359,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=legacy_authority_digest,
             )
             self.assertEqual(decide(migrated_signature_authority, proposals[0]), decision)
-            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 9)
+            self.assertEqual(migrated_signature_authority.snapshot()["schema_version"], 10)
 
             schema_eight_authority = engine_authority()
             schema_eight_decision = schema_eight_authority._process_proposal(
@@ -1365,6 +1369,7 @@ class H2BridgeContractTest(unittest.TestCase):
             schema_eight_payload = json.loads(
                 engine_path.read_text(encoding="utf-8")
             )
+            schema_eight_payload["state"].pop("actor_sequence_policies")
             schema_eight_payload["state"]["schema_version"] = 8
             canonical = json.dumps(
                 schema_eight_payload["state"],
@@ -1389,7 +1394,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 schema_eight_decision,
             )
             self.assertEqual(
-                migrated_schema_eight.snapshot()["schema_version"], 9
+                migrated_schema_eight.snapshot()["schema_version"], 10
             )
             migrated_schema_eight.save(engine_path)
             migrated_schema_eight_digest = (
@@ -1409,6 +1414,7 @@ class H2BridgeContractTest(unittest.TestCase):
             unambiguous_v2 = json.loads(engine_path.read_text(encoding="utf-8"))
             unambiguous_v2["state"].pop("response_batches")
             unambiguous_v2["state"].pop("proposal_order_mode")
+            unambiguous_v2["state"].pop("actor_sequence_policies")
             unambiguous_v2["state"]["schema_version"] = 2
             canonical = json.dumps(
                 unambiguous_v2["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -1428,6 +1434,7 @@ class H2BridgeContractTest(unittest.TestCase):
             previous_payload["state"].pop("buffered_proposals")
             previous_payload["state"].pop("response_batches")
             previous_payload["state"].pop("proposal_order_mode")
+            previous_payload["state"].pop("actor_sequence_policies")
             previous_payload["state"]["schema_version"] = 1
             canonical = json.dumps(
                 previous_payload["state"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -1441,7 +1448,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=previous_digest,
             )
             self.assertEqual(decide(migrated_authority, proposals[0]), decision)
-            self.assertEqual(migrated_authority.snapshot()["schema_version"], 9)
+            self.assertEqual(migrated_authority.snapshot()["schema_version"], 10)
 
             legacy_out_of_order = engine_authority()
             legacy_second = legacy_out_of_order._process_proposal(
@@ -1455,6 +1462,7 @@ class H2BridgeContractTest(unittest.TestCase):
             legacy_state.pop("buffered_proposals")
             legacy_state.pop("response_batches")
             legacy_state.pop("proposal_order_mode")
+            legacy_state.pop("actor_sequence_policies")
             legacy_state["schema_version"] = 1
             canonical = json.dumps(
                 legacy_state, sort_keys=True, separators=(",", ":"), ensure_ascii=True
@@ -1769,6 +1777,13 @@ class H2BridgeContractTest(unittest.TestCase):
             duplicate_decision_sequence["state"]["processed"].extend(
                 rejected_payloads[1]["state"]["processed"]
             )
+            duplicate_decision_sequence["state"][
+                "actor_sequence_policies"
+            ].update(
+                rejected_payloads[1]["state"][
+                    "actor_sequence_policies"
+                ]
+            )
             duplicate_decision_sequence["state"]["last_sequence"].update(
                 rejected_payloads[1]["state"]["last_sequence"]
             )
@@ -1829,6 +1844,13 @@ class H2BridgeContractTest(unittest.TestCase):
             duplicate_state_version = applied_payloads[0]
             duplicate_state_version["state"]["processed"].extend(
                 applied_payloads[1]["state"]["processed"]
+            )
+            duplicate_state_version["state"][
+                "actor_sequence_policies"
+            ].update(
+                applied_payloads[1]["state"][
+                    "actor_sequence_policies"
+                ]
             )
             duplicate_state_version["state"]["last_sequence"].update(
                 applied_payloads[1]["state"]["last_sequence"]
@@ -2185,6 +2207,9 @@ class H2BridgeContractTest(unittest.TestCase):
             strict_schema_six_payload = json.loads(
                 sequence_path.read_text(encoding="utf-8")
             )
+            strict_schema_six_payload["state"].pop(
+                "actor_sequence_policies"
+            )
             strict_schema_six_payload["state"]["schema_version"] = 6
             canonical = json.dumps(
                 strict_schema_six_payload["state"],
@@ -2205,12 +2230,15 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=strict_schema_six_digest,
             )
             self.assertEqual(
-                migrated_strict_schema_six.snapshot()["schema_version"], 9
+                migrated_strict_schema_six.snapshot()["schema_version"], 10
             )
 
             strict_schema_six_authority.save(sequence_path)
             schema_seven_payload = json.loads(
                 sequence_path.read_text(encoding="utf-8")
+            )
+            schema_seven_payload["state"].pop(
+                "actor_sequence_policies"
             )
             schema_seven_payload["state"]["schema_version"] = 7
             canonical = json.dumps(
@@ -2232,7 +2260,20 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=schema_seven_digest,
             )
             self.assertEqual(
-                migrated_schema_seven.snapshot()["schema_version"], 9
+                migrated_schema_seven.snapshot()["schema_version"], 10
+            )
+            migrated_schema_seven.save(sequence_path)
+            migrated_schema_seven_digest = (
+                migrated_schema_seven.snapshot_digest()
+            )
+            reloaded_schema_seven = EngineAuthority.load(
+                sequence_path,
+                PROPOSAL_ORIGIN_KEY,
+                expected_snapshot_digest=migrated_schema_seven_digest,
+            )
+            self.assertEqual(
+                reloaded_schema_seven.snapshot_digest(),
+                migrated_schema_seven_digest,
             )
 
             schema_six_authority = EngineAuthority(
@@ -2257,6 +2298,7 @@ class H2BridgeContractTest(unittest.TestCase):
             schema_six_payload = json.loads(
                 sequence_path.read_text(encoding="utf-8")
             )
+            schema_six_payload["state"].pop("actor_sequence_policies")
             schema_six_payload["state"]["schema_version"] = 6
             canonical = json.dumps(
                 schema_six_payload["state"],
@@ -2277,7 +2319,7 @@ class H2BridgeContractTest(unittest.TestCase):
                 expected_snapshot_digest=schema_six_digest,
             )
             self.assertEqual(
-                migrated_schema_six.snapshot()["schema_version"], 9
+                migrated_schema_six.snapshot()["schema_version"], 10
             )
 
             gap_payload = {
@@ -2313,6 +2355,7 @@ class H2BridgeContractTest(unittest.TestCase):
             gap_payload_state = json.loads(
                 sequence_path.read_text(encoding="utf-8")
             )
+            gap_payload_state["state"].pop("actor_sequence_policies")
             gap_payload_state["state"]["schema_version"] = 6
             canonical = json.dumps(
                 gap_payload_state["state"],

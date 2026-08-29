@@ -17,7 +17,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 BRIDGE_SCHEMA_VERSION = 1
 BRIDGE_STATE_SCHEMA_VERSION = 11
-ENGINE_AUTHORITY_SCHEMA_VERSION = 9
+ENGINE_AUTHORITY_SCHEMA_VERSION = 10
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
 
@@ -1746,6 +1746,7 @@ class EngineAuthority:
         self._last_global_order = 0
         self._proposal_order_mode: str | None = None
         self._processed: dict[str, tuple[str, EngineDecision, Envelope]] = {}
+        self._actor_sequence_policies: dict[str, str] = {}
         self._buffered_proposals: dict[str, Envelope] = {}
         self._response_batches: dict[str, tuple[str, ...]] = {}
         self._message_conflicts: list[dict[str, str]] = []
@@ -1780,6 +1781,9 @@ class EngineAuthority:
                 }
                 for message_id, (proposal_digest, decision, proposal) in sorted(self._processed.items())
             ],
+            "actor_sequence_policies": dict(
+                sorted(self._actor_sequence_policies.items())
+            ),
             "buffered_proposals": [
                 proposal.to_dict()
                 for proposal in sorted(self._buffered_proposals.values(), key=lambda item: item.message_id)
@@ -1825,15 +1829,19 @@ class EngineAuthority:
             "schema_version", "initial_positions", "positions", "permissions", "destinations", "blocked_paths",
             "last_action", "last_sequence", "proposal_order_mode", "processed", "message_conflicts",
             "event_history", "decision_sequence", "state_version", "buffered_proposals", "response_batches",
+            "actor_sequence_policies",
         }
         digest = hashlib.sha256(_canonical(state).encode("utf-8")).hexdigest()
-        version_one_fields = expected_fields - {
+        legacy_expected_fields = expected_fields - {
+            "actor_sequence_policies"
+        }
+        version_one_fields = legacy_expected_fields - {
             "buffered_proposals", "response_batches", "proposal_order_mode"
         }
-        version_two_fields = expected_fields - {
+        version_two_fields = legacy_expected_fields - {
             "response_batches", "proposal_order_mode"
         }
-        version_three_fields = expected_fields - {"proposal_order_mode"}
+        version_three_fields = legacy_expected_fields - {"proposal_order_mode"}
         previous_shape = (
             isinstance(state, dict)
             and (
@@ -1851,20 +1859,24 @@ class EngineAuthority:
                     and _is_exact_version(state.get("schema_version"), 4)
                 )
                 or (
-                    set(state) == expected_fields
+                    set(state) == legacy_expected_fields
                     and _is_exact_version(state.get("schema_version"), 5)
                 )
                 or (
-                    set(state) == expected_fields
+                    set(state) == legacy_expected_fields
                     and _is_exact_version(state.get("schema_version"), 6)
                 )
                 or (
-                    set(state) == expected_fields
+                    set(state) == legacy_expected_fields
                     and _is_exact_version(state.get("schema_version"), 7)
                 )
                 or (
-                    set(state) == expected_fields
+                    set(state) == legacy_expected_fields
                     and _is_exact_version(state.get("schema_version"), 8)
+                )
+                or (
+                    set(state) == legacy_expected_fields
+                    and _is_exact_version(state.get("schema_version"), 9)
                 )
             )
         )
@@ -1882,9 +1894,6 @@ class EngineAuthority:
             raise BridgeValidationError("incompatible persisted engine authority")
         if not expected_snapshot_digest or digest != expected_snapshot_digest or envelope.get("digest") != digest:
             raise BridgeValidationError("persisted engine authority does not match the trusted snapshot boundary")
-        replay_legacy_v1 = previous_shape and state["schema_version"] == BRIDGE_SCHEMA_VERSION
-        replay_schema_six = previous_shape and state["schema_version"] == 6
-        replay_schema_seven = previous_shape and state["schema_version"] == 7
         if previous_shape:
             try:
                 legacy_version = state["schema_version"]
@@ -2025,6 +2034,28 @@ class EngineAuthority:
                             )
                 if proposal_order_mode == "global":
                     response_batches = []
+                if legacy_version == 6:
+                    actor_sequence_policies = {
+                        item["message_id"]: (
+                            "noncontiguous"
+                            if item["decision"]["outcome"]["payload"][
+                                "reason"
+                            ]
+                            == "stale_sequence"
+                            else "lenient"
+                        )
+                        for item in state["processed"]
+                    }
+                elif legacy_version == 7:
+                    actor_sequence_policies = {
+                        item["message_id"]: "noncontiguous"
+                        for item in state["processed"]
+                    }
+                else:
+                    actor_sequence_policies = {
+                        item["message_id"]: "contiguous"
+                        for item in state["processed"]
+                    }
             except (BridgeValidationError, KeyError, TypeError, ValueError, AttributeError) as error:
                 raise BridgeValidationError(
                     f"persisted engine authority is malformed: {error}"
@@ -2035,6 +2066,7 @@ class EngineAuthority:
                 "buffered_proposals": state.get("buffered_proposals", []),
                 "response_batches": response_batches,
                 "proposal_order_mode": proposal_order_mode,
+                "actor_sequence_policies": actor_sequence_policies,
             }
         try:
             authority = cls(
@@ -2084,6 +2116,23 @@ class EngineAuthority:
                     decision,
                     proposal,
                 )
+            policies = state["actor_sequence_policies"]
+            if (
+                not isinstance(policies, Mapping)
+                or set(policies) != set(authority._processed)
+                or any(
+                    policy
+                    not in {"lenient", "noncontiguous", "contiguous"}
+                    for policy in policies.values()
+                )
+            ):
+                raise BridgeValidationError(
+                    "persisted actor sequence policies do not match processed proposals"
+                )
+            authority._actor_sequence_policies = {
+                str(message_id): str(policy)
+                for message_id, policy in policies.items()
+            }
             authority._buffered_proposals = {}
             for item in state["buffered_proposals"]:
                 proposal = Envelope.from_dict(item)
@@ -2309,41 +2358,19 @@ class EngineAuthority:
                 decision.engine_event is not None
                 and "prior_event_digests" in decision.engine_event.payload
             )
-            if replay_legacy_v1:
-                replayed = (
-                    replay._process_proposal(
-                        proposal, legacy_full_lineage=legacy_full_lineage
+            policy = authority._actor_sequence_policies[
+                proposal.message_id
+            ]
+            replayed = (
+                replay._process_proposal(
+                    proposal,
+                    enforce_global_actor_sequence=policy != "lenient",
+                    require_contiguous_global_actor_sequence=(
+                        policy == "contiguous"
                     ),
-                )
-            elif replay_schema_six:
-                replayed = (
-                    replay._process_proposal(
-                        proposal,
-                        enforce_global_actor_sequence=(
-                            decision.reason == "stale_sequence"
-                        ),
-                        require_contiguous_global_actor_sequence=False,
-                        legacy_full_lineage=legacy_full_lineage,
-                    ),
-                )
-            elif replay_schema_seven:
-                replayed = (
-                    replay._process_proposal(
-                        proposal,
-                        require_contiguous_global_actor_sequence=False,
-                        legacy_full_lineage=legacy_full_lineage,
-                    ),
-                )
-            else:
-                # Signed legacy decisions can remain in a schema-9 snapshot
-                # after migration. Replay each event in its authenticated
-                # lineage form so repeated reloads and mixed histories remain
-                # byte-for-byte deterministic.
-                replayed = (
-                    replay._process_proposal(
-                        proposal, legacy_full_lineage=legacy_full_lineage
-                    ),
-                )
+                    legacy_full_lineage=legacy_full_lineage,
+                ),
+            )
             if replayed != (decision,):
                 raise BridgeValidationError("persisted engine decisions do not match replayed policy")
         if (
@@ -2351,6 +2378,8 @@ class EngineAuthority:
             or replay._last_action != authority._last_action
             or replay._last_sequence != authority._last_sequence
             or replay._event_history != authority._event_history
+            or replay._actor_sequence_policies
+            != authority._actor_sequence_policies
             or replay._decision_sequence != authority._decision_sequence
             or replay._state_version != authority._state_version
         ):
@@ -2558,6 +2587,15 @@ class EngineAuthority:
             raise BridgeValidationError(
                 "proposal ordering mode cannot change within authority history"
             )
+        actor_sequence_policy = (
+            "contiguous"
+            if require_contiguous_global_actor_sequence
+            else (
+                "noncontiguous"
+                if enforce_global_actor_sequence
+                else "lenient"
+            )
+        )
         reason = self._validate(
             proposal,
             enforce_global_actor_sequence=enforce_global_actor_sequence,
@@ -2576,6 +2614,9 @@ class EngineAuthority:
             self._processed[proposal.message_id] = (
                 proposal.digest(), decision, proposal
             )
+            self._actor_sequence_policies[
+                proposal.message_id
+            ] = actor_sequence_policy
             return decision
 
         action_type = str(proposal.payload["action_type"])
@@ -2615,6 +2656,9 @@ class EngineAuthority:
         self._processed[proposal.message_id] = (
             proposal.digest(), decision, proposal
         )
+        self._actor_sequence_policies[
+            proposal.message_id
+        ] = actor_sequence_policy
         return decision
 
     def _validate(
