@@ -16,7 +16,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
 BRIDGE_SCHEMA_VERSION = 1
-BRIDGE_STATE_SCHEMA_VERSION = 8
+BRIDGE_STATE_SCHEMA_VERSION = 9
 ENGINE_AUTHORITY_SCHEMA_VERSION = 4
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
@@ -403,7 +403,24 @@ class WorldOSBridge:
             "legacy_time_observations": sorted(self._legacy_time_observations),
             "legacy_time_anchors": dict(sorted(self._legacy_time_anchors.items())),
             "bridge_start_tick": self._bridge_start_tick,
+            "bridge_start_proof": self._bridge_start_proof(
+                self._bridge_start_tick
+            ),
         }
+
+    def _bridge_start_proof(self, tick: int) -> str:
+        boundary = {
+            "schema_version": 1,
+            "seed": self.world.seed,
+            "crisis_actor": self.world.crisis_actor,
+            "actor_ids": sorted(self.world.actors),
+            "bridge_start_tick": tick,
+        }
+        return hmac.new(
+            self._proposal_origin_key,
+            _canonical(boundary).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
 
     def _persist(self) -> None:
         self.world.set_extension_state(_BRIDGE_EXTENSION, self._state())
@@ -498,6 +515,22 @@ class WorldOSBridge:
                     f"persisted bridge-start migration is malformed: {error}"
                 ) from error
             state = {**dict(state), "bridge_start_tick": bridge_start_tick}
+        bridge_start_proof_migration = "bridge_start_proof" not in state
+        if bridge_start_proof_migration:
+            try:
+                bridge_start_tick = _counter(
+                    state["bridge_start_tick"], "bridge_start_tick"
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                if isinstance(error, BridgeValidationError):
+                    raise
+                raise BridgeValidationError(
+                    f"persisted bridge-start proof migration is malformed: {error}"
+                ) from error
+            state = {
+                **dict(state),
+                "bridge_start_proof": self._bridge_start_proof(bridge_start_tick),
+            }
         migrate_noncontiguous_decisions = (
             _is_exact_version(state.get("schema_version"), 1)
             or _is_exact_version(state.get("schema_version"), 2)
@@ -507,7 +540,7 @@ class WorldOSBridge:
             "proposal_sequence", "pending", "decisions", "engine_events",
             "engine_versions", "buffered_observations", "delivery_results",
             "delivery_observations", "buffered_decisions", "legacy_time_observations",
-            "legacy_time_anchors", "bridge_start_tick",
+            "legacy_time_anchors", "bridge_start_tick", "bridge_start_proof",
         }
         pre_decision_buffer_required = required - {"buffered_decisions"}
         legacy_required = pre_decision_buffer_required - {
@@ -531,6 +564,7 @@ class WorldOSBridge:
             or causal_binding_migration
             or legacy_anchor_migration
             or bridge_start_migration
+            or bridge_start_proof_migration
         )
         migrate_delivery_observations = migrated
         if set(state) == legacy_required or set(state) == current_legacy_required:
@@ -548,6 +582,7 @@ class WorldOSBridge:
             or _is_exact_version(state.get("schema_version"), 5)
             or _is_exact_version(state.get("schema_version"), 6)
             or _is_exact_version(state.get("schema_version"), 7)
+            or _is_exact_version(state.get("schema_version"), 8)
             or _is_exact_version(state.get("schema_version"), BRIDGE_STATE_SCHEMA_VERSION)
         ):
             raise BridgeValidationError("persisted bridge state is incompatible")
@@ -570,7 +605,7 @@ class WorldOSBridge:
                 )
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
-        elif state["schema_version"] in {2, 3, 4, 5, 6, 7}:
+        elif state["schema_version"] in {2, 3, 4, 5, 6, 7, 8}:
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
         if state.get("role_stations") != self.role_stations:
@@ -602,6 +637,17 @@ class WorldOSBridge:
             self._bridge_start_tick = _counter(
                 state["bridge_start_tick"], "bridge_start_tick"
             )
+            bridge_start_proof = state["bridge_start_proof"]
+            if (
+                not isinstance(bridge_start_proof, str)
+                or not hmac.compare_digest(
+                    bridge_start_proof,
+                    self._bridge_start_proof(self._bridge_start_tick),
+                )
+            ):
+                raise BridgeValidationError(
+                    "persisted bridge start proof is invalid"
+                )
             pending = [Envelope.from_dict(item) for item in state["pending"]]
             decisions = [EngineDecision.from_dict(item) for item in state["decisions"]]
             buffered_decisions = [
@@ -1069,21 +1115,6 @@ class WorldOSBridge:
                     raise BridgeValidationError(
                         "persisted direct time root does not prove the bridge boundary"
                     )
-        if (
-            self._bridge_start_tick > 0
-            and any(
-                event.event_type == "time_advanced"
-                and event.tick <= self._bridge_start_tick
-                for event in self.world.events
-            )
-            and not any(
-                observation.message_id not in self._legacy_time_observations
-                for observation in time_observations
-            )
-        ):
-            raise BridgeValidationError(
-                "persisted nonzero bridge boundary lacks a direct time root"
-            )
         bridge_roots = [
             event.root_input.removeprefix("bridge:")
             for event in self.world.events
