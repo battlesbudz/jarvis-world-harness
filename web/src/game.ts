@@ -173,7 +173,7 @@ export class AlbionGame {
       this.collisionActive = false;
       return;
     }
-    const speed = new URLSearchParams(window.location.search).has("test") ? 8 : 4.6;
+    const speed = 4.6;
     const forward = new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     const right = new Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     const displacement = forward

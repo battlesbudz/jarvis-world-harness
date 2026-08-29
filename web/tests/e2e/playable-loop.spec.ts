@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { GameSnapshot } from "../../src/gameState";
@@ -21,6 +22,15 @@ async function hold(page: Page, key: string, milliseconds: number): Promise<void
   await page.keyboard.down(key);
   await page.waitForTimeout(milliseconds);
   await page.keyboard.up(key);
+}
+
+function projectRevision(): string {
+  const revision = process.env.H2_REVISION
+    ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: resolve(process.cwd(), ".."), encoding: "utf8" }).trim();
+  if (!/^[0-9a-f]{40}$/i.test(revision)) {
+    throw new Error(`H2 evidence revision is not a full Git SHA: ${revision}`);
+  }
+  return revision;
 }
 
 test("loads a deterministic rendered village without runtime errors", async ({ page }, testInfo) => {
@@ -77,19 +87,28 @@ test("touch joystick moves the Bio", async ({ page }) => {
   if (!bounds) throw new Error("movement joystick has no bounds");
   const centerX = bounds.x + bounds.width / 2;
   const centerY = bounds.y + bounds.height / 2;
-  await joystick.dispatchEvent("pointerdown", { pointerId: 7, pointerType: "touch", clientX: centerX, clientY: centerY });
-  await joystick.dispatchEvent("pointermove", { pointerId: 7, pointerType: "touch", clientX: centerX, clientY: bounds.y + 4 });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [{ x: centerX, y: centerY }],
+  });
+  await cdp.send("Input.dispatchTouchEvent", {
+    type: "touchMove",
+    touchPoints: [{ x: centerX, y: bounds.y + 4 }],
+  });
   await page.waitForTimeout(550);
-  await joystick.dispatchEvent("pointerup", { pointerId: 7, pointerType: "touch", clientX: centerX, clientY: bounds.y + 4 });
-  expect((await snapshot(page)).position.z).toBeGreaterThan(-10.5);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  const state = await snapshot(page);
+  expect(state.position.z).toBeGreaterThan(-10.5);
+  expect(state.runtimeErrors).toEqual([]);
 });
 
 test("the legitimate route reaches the village destination", async ({ page }, testInfo) => {
   await openGame(page);
-  await hold(page, "KeyD", 900);
-  await hold(page, "KeyW", 2_250);
-  await hold(page, "KeyA", 900);
-  await hold(page, "KeyW", 850);
+  await hold(page, "KeyD", 1_565);
+  await hold(page, "KeyW", 3_915);
+  await hold(page, "KeyA", 1_565);
+  await hold(page, "KeyW", 1_480);
   await expect.poll(async () => (await snapshot(page)).checkpoint).toBe("complete");
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);
@@ -98,7 +117,7 @@ test("the legitimate route reaches the village destination", async ({ page }, te
   await page.screenshot({ path: resolve(evidenceDirectory, `route-complete-${testInfo.project.name}.png`) });
   await writeFile(
     resolve(evidenceDirectory, `traversal-${testInfo.project.name}.json`),
-    `${JSON.stringify({ revision: process.env.GITHUB_SHA ?? "local", scenario: H2_SCENARIO, finalState }, null, 2)}\n`,
+    `${JSON.stringify({ revision: projectRevision(), scenario: H2_SCENARIO, finalState }, null, 2)}\n`,
   );
 });
 
