@@ -463,7 +463,7 @@ class H2BridgeContractTest(unittest.TestCase):
                     migrated_state["engine_events"],
                     migrated_state["engine_versions"],
                 ),
-                (3, 0, 1, {}, {}),
+                (4, 0, 1, {}, {}),
             )
 
             bridge.world.save(path)
@@ -705,7 +705,7 @@ class H2BridgeContractTest(unittest.TestCase):
             bridge.world.set_extension_state("h2_bridge", omitted_state)
             trusted = bridge.world.state_digest()
             bridge.world.save(path)
-            with self.assertRaisesRegex(BridgeValidationError, "exact observation"):
+            with self.assertRaisesRegex(BridgeValidationError, "observation"):
                 WorldOSBridge(
                     World.load(path, expected_state_digest=trusted),
                     {"ferryman": "ferry-dock", "baker": "bakery"},
@@ -750,7 +750,7 @@ class H2BridgeContractTest(unittest.TestCase):
             )
             self.assertEqual(
                 migrated_bridge.world.extension_state("h2_bridge")["schema_version"],
-                3,
+                4,
             )
 
             legacy_signature_state = bridge.world.extension_state("h2_bridge")

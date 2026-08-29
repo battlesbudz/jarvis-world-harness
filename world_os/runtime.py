@@ -829,14 +829,21 @@ class World:
             )
         )
 
-    def advance(self, ticks: int = 1) -> list[Event]:
+    def advance(self, ticks: int = 1, *, root_input: str | None = None) -> list[Event]:
         if not isinstance(ticks, int) or isinstance(ticks, bool) or ticks < 0:
             raise ValidationError("logical tick count must be a non-negative integer")
         emitted = []
         for _ in range(ticks):
             self.tick += 1
             tick_event = self._record(
-                "time_advanced", self.crisis_actor, (), "albion", (), (), f"tick:{self.tick}", {"tick": self.tick}
+                "time_advanced",
+                self.crisis_actor,
+                (),
+                "albion",
+                (),
+                (),
+                root_input if root_input is not None else f"tick:{self.tick}",
+                {"tick": self.tick},
             )
             emitted.append(tick_event)
             for actor in sorted(self.actors.values(), key=lambda item: item.id):
@@ -1019,7 +1026,7 @@ class World:
                         )
                     )
             elif event.event_type == "time_advanced":
-                world.advance()
+                world.advance(root_input=event.root_input)
             elif event.event_type == "proposal_rejected":
                 proposal = event.payload.get("proposal")
                 if not isinstance(proposal, Mapping):

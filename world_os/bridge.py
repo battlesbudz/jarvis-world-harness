@@ -16,7 +16,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
 BRIDGE_SCHEMA_VERSION = 1
-BRIDGE_STATE_SCHEMA_VERSION = 3
+BRIDGE_STATE_SCHEMA_VERSION = 4
 ENGINE_AUTHORITY_SCHEMA_VERSION = 4
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
@@ -389,6 +389,9 @@ class WorldOSBridge:
         self.world.set_extension_state(_BRIDGE_EXTENSION, self._state())
 
     def _restore(self, state: Mapping[str, Any]) -> None:
+        legacy_causal_binding = not _is_exact_version(
+            state.get("schema_version"), BRIDGE_STATE_SCHEMA_VERSION
+        )
         migrate_noncontiguous_decisions = (
             _is_exact_version(state.get("schema_version"), 1)
             or _is_exact_version(state.get("schema_version"), 2)
@@ -427,6 +430,7 @@ class WorldOSBridge:
         if set(state) != required or not (
             _is_exact_version(state.get("schema_version"), 1)
             or _is_exact_version(state.get("schema_version"), 2)
+            or _is_exact_version(state.get("schema_version"), 3)
             or _is_exact_version(state.get("schema_version"), BRIDGE_STATE_SCHEMA_VERSION)
         ):
             raise BridgeValidationError("persisted bridge state is incompatible")
@@ -449,7 +453,7 @@ class WorldOSBridge:
                 )
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
-        elif state["schema_version"] == 2:
+        elif state["schema_version"] in {2, 3}:
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
         if state.get("role_stations") != self.role_stations:
@@ -780,6 +784,13 @@ class WorldOSBridge:
                         "persisted proposal does not match a recorded observation"
                     )
                 observation = observation_record[0]
+                expected_root = f"bridge:{observation.message_id}"
+
+                def has_expected_root(trace: Mapping[str, Any]) -> bool:
+                    return trace["event"].get("root_input") == expected_root or any(
+                        has_expected_root(cause) for cause in trace.get("causes", ())
+                    )
+
                 expected_message_id = (
                     f"world-proposal:{proposal.correlation_id}:{causal_event['id']}"
                 )
@@ -809,17 +820,14 @@ class WorldOSBridge:
                         "persisted proposal action does not match its causal event"
                     )
                 if observation.message_type == "time_advance":
+                    if not legacy_causal_binding and not has_expected_root(causal_trace):
+                        raise BridgeValidationError(
+                            "persisted proposal causal event does not originate from its observation"
+                        )
                     time_observation_ticks.setdefault(observation.message_id, set()).add(
                         int(causal_event["tick"])
                     )
                 else:
-                    expected_root = f"bridge:{observation.message_id}"
-
-                    def has_expected_root(trace: Mapping[str, Any]) -> bool:
-                        return trace["event"].get("root_input") == expected_root or any(
-                            has_expected_root(cause) for cause in trace.get("causes", ())
-                        )
-
                     if not has_expected_root(causal_trace):
                         raise BridgeValidationError(
                             "persisted proposal causal event does not originate from its observation"
@@ -839,17 +847,19 @@ class WorldOSBridge:
             key=lambda item: item.sequence,
         )
         time_actors = {item.actor_id for item in time_observations}
-        if len(time_actors) > 1:
+        if legacy_causal_binding and len(time_actors) > 1:
             raise BridgeValidationError(
                 "persisted time observations have an ambiguous cross-actor order"
             )
         initial_tick = self.world.tick - len(time_observations)
-        if initial_tick < 0:
+        if legacy_causal_binding and initial_tick < 0:
             raise BridgeValidationError("persisted time observation count exceeds world tick")
         for offset, observation in enumerate(time_observations, start=1):
             ticks = time_observation_ticks.get(observation.message_id, set())
             expected_tick = initial_tick + offset
-            if len(ticks) > 1 or (ticks and ticks != {expected_tick}):
+            if len(ticks) > 1 or (
+                legacy_causal_binding and ticks and ticks != {expected_tick}
+            ):
                 raise BridgeValidationError(
                     "persisted proposal causal tick does not match its exact observation"
                 )
@@ -898,7 +908,9 @@ class WorldOSBridge:
     def _apply_observation(self, observation: Envelope) -> tuple[Envelope, ...]:
         proposals: list[Envelope] = []
         if observation.message_type == "time_advance":
-            events = self.world.advance(1)
+            events = self.world.advance(
+                1, root_input=f"bridge:{observation.message_id}"
+            )
             for event in events:
                 if event.event_type == "routine_action":
                     proposals.append(
