@@ -121,6 +121,24 @@ def engine_authority():
 
 
 def decide(authority, proposal):
+    if "global_order" in proposal.payload:
+        payload = dict(proposal.payload)
+        payload.pop("global_order")
+        payload.pop("origin_proof")
+        unsigned = Envelope.from_dict(
+            {**proposal.to_dict(), "payload": payload}
+        )
+        proposal = Envelope.from_dict(
+            {
+                **unsigned.to_dict(),
+                "payload": {
+                    **payload,
+                    "origin_proof": _origin_proof(
+                        unsigned, PROPOSAL_ORIGIN_KEY
+                    ),
+                },
+            }
+        )
     decisions = authority.validate_and_apply(proposal)
     if len(decisions) != 1:
         raise AssertionError(f"expected exactly one engine decision, received {len(decisions)}")
@@ -292,6 +310,32 @@ class H2BridgeContractTest(unittest.TestCase):
         with self.assertRaisesRegex(BridgeValidationError, "sequence was reused"):
             lineage_bridge.receive_engine_decision(forked_first)
         lineage_bridge.receive_engine_decision(lineage_first)
+
+    def test_engine_applies_cross_actor_proposals_in_global_order(self):
+        proposals = h2_bridge().ingest_engine_observation(
+            envelope(
+                "engine-observation:global-proposal-order",
+                1,
+                "bio",
+                "time_advance",
+                {"ticks": 1},
+            )
+        )
+        self.assertGreater(len(proposals), 1)
+
+        forward = engine_authority()
+        forward_decisions = []
+        for proposal in proposals:
+            forward_decisions.extend(forward.validate_and_apply(proposal))
+
+        reverse = engine_authority()
+        reverse_decisions = []
+        for proposal in reversed(proposals):
+            reverse_decisions.extend(reverse.validate_and_apply(proposal))
+
+        self.assertEqual(len(forward_decisions), len(proposals))
+        self.assertEqual(len(reverse_decisions), len(proposals))
+        self.assertEqual(reverse.snapshot_digest(), forward.snapshot_digest())
 
     def test_state_version_changes_are_bounded_by_outcome_ordering(self):
         bridge = h2_bridge()

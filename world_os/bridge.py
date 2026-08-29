@@ -16,7 +16,7 @@ from .runtime import FEASIBLE_REQUEST_ACTIONS, Event, World
 
 
 BRIDGE_SCHEMA_VERSION = 1
-BRIDGE_STATE_SCHEMA_VERSION = 9
+BRIDGE_STATE_SCHEMA_VERSION = 10
 ENGINE_AUTHORITY_SCHEMA_VERSION = 4
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 _BRIDGE_EXTENSION = "h2_bridge"
@@ -351,6 +351,7 @@ class WorldOSBridge:
         self._observations: dict[str, tuple[Envelope, tuple[Envelope, ...]]] = {}
         self._last_engine_sequence: dict[str, int] = {}
         self._proposal_sequence: dict[str, int] = {}
+        self._proposal_global_order = 0
         self._pending: dict[str, Envelope] = {}
         self._decisions: dict[str, EngineDecision] = {}
         self._buffered_decisions: dict[str, EngineDecision] = {}
@@ -395,6 +396,7 @@ class WorldOSBridge:
             ],
             "last_engine_sequence": dict(sorted(self._last_engine_sequence.items())),
             "proposal_sequence": dict(sorted(self._proposal_sequence.items())),
+            "proposal_global_order": self._proposal_global_order,
             "pending": [proposal.to_dict() for proposal in sorted(self._pending.values(), key=lambda item: item.message_id)],
             "decisions": [decision.to_dict() for decision in sorted(self._decisions.values(), key=lambda item: item.outcome.message_id)],
             "buffered_decisions": [
@@ -563,13 +565,25 @@ class WorldOSBridge:
                 "bridge_start_tick": 0,
                 "bridge_start_proof": self._bridge_start_proof(0),
             }
+        proposal_global_order_migration = "proposal_global_order" not in state
+        if proposal_global_order_migration:
+            try:
+                proposal_global_order = len(state["pending"])
+            except (KeyError, TypeError) as error:
+                raise BridgeValidationError(
+                    f"persisted proposal-order migration is malformed: {error}"
+                ) from error
+            state = {
+                **dict(state),
+                "proposal_global_order": proposal_global_order,
+            }
         migrate_noncontiguous_decisions = (
             _is_exact_version(state.get("schema_version"), 1)
             or _is_exact_version(state.get("schema_version"), 2)
         )
         required = {
             "schema_version", "role_stations", "observations", "last_engine_sequence",
-            "proposal_sequence", "pending", "decisions", "engine_events",
+            "proposal_sequence", "proposal_global_order", "pending", "decisions", "engine_events",
             "engine_versions", "buffered_observations", "delivery_results",
             "delivery_observations", "buffered_decisions", "legacy_time_observations",
             "legacy_time_anchors", "bridge_start_tick", "bridge_start_proof",
@@ -597,6 +611,7 @@ class WorldOSBridge:
             or legacy_anchor_migration
             or bridge_start_migration
             or bridge_start_proof_migration
+            or proposal_global_order_migration
         )
         migrate_delivery_observations = migrated
         if set(state) == legacy_required or set(state) == current_legacy_required:
@@ -615,6 +630,7 @@ class WorldOSBridge:
             or _is_exact_version(state.get("schema_version"), 6)
             or _is_exact_version(state.get("schema_version"), 7)
             or _is_exact_version(state.get("schema_version"), 8)
+            or _is_exact_version(state.get("schema_version"), 9)
             or _is_exact_version(state.get("schema_version"), BRIDGE_STATE_SCHEMA_VERSION)
         ):
             raise BridgeValidationError("persisted bridge state is incompatible")
@@ -637,7 +653,7 @@ class WorldOSBridge:
                 )
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
-        elif state["schema_version"] in {2, 3, 4, 5, 6, 7, 8}:
+        elif state["schema_version"] in {2, 3, 4, 5, 6, 7, 8, 9}:
             state = {**dict(state), "schema_version": BRIDGE_STATE_SCHEMA_VERSION}
             migrated = True
         if state.get("role_stations") != self.role_stations:
@@ -718,6 +734,9 @@ class WorldOSBridge:
                 observations[observation.message_id] = (observation, proposals)
             self._last_engine_sequence = _counter_map(state["last_engine_sequence"], "last_engine_sequence")
             self._proposal_sequence = _counter_map(state["proposal_sequence"], "proposal_sequence")
+            self._proposal_global_order = _counter(
+                state["proposal_global_order"], "proposal_global_order"
+            )
             self._pending = {item.message_id: item for item in pending}
             self._decisions = {item.outcome.message_id: item for item in decisions}
             self._buffered_decisions = {
@@ -982,6 +1001,24 @@ class WorldOSBridge:
             raise BridgeValidationError("persisted proposal ordering is not unique and contiguous")
         if self._proposal_sequence != expected_proposal_sequence:
             raise BridgeValidationError("persisted proposal counters do not match the ledger")
+        global_orders = [
+            proposal.payload.get("global_order")
+            for proposal in self._pending.values()
+            if "global_order" in proposal.payload
+        ]
+        legacy_proposal_count = len(self._pending) - len(global_orders)
+        if (
+            any(
+                not isinstance(order, int) or isinstance(order, bool)
+                for order in global_orders
+            )
+            or sorted(global_orders)
+            != list(range(legacy_proposal_count + 1, len(self._pending) + 1))
+            or self._proposal_global_order != len(self._pending)
+        ):
+            raise BridgeValidationError(
+                "persisted global proposal ordering does not match the ledger"
+            )
         buffered_slots: set[tuple[str, int]] = set()
         for observation in self._buffered_observations.values():
             self._validate_observation(observation)
@@ -1194,6 +1231,7 @@ class WorldOSBridge:
     def _proposal(self, event: Event, correlation_id: str, payload: Mapping[str, Any]) -> Envelope:
         sequence = self._proposal_sequence.get(event.actor, 0) + 1
         self._proposal_sequence[event.actor] = sequence
+        self._proposal_global_order += 1
         unsigned = Envelope(
             BRIDGE_SCHEMA_VERSION,
             f"world-proposal:{correlation_id}:{event.id}",
@@ -1201,7 +1239,11 @@ class WorldOSBridge:
             sequence,
             event.actor,
             "world_action_proposed",
-            {**dict(payload), "causal_event_id": event.id},
+            {
+                **dict(payload),
+                "causal_event_id": event.id,
+                "global_order": self._proposal_global_order,
+            },
         )
         proposal = Envelope.from_dict(
             {**unsigned.to_dict(), "payload": {**unsigned.to_dict()["payload"], "origin_proof": _origin_proof(unsigned, self._proposal_origin_key)}}
@@ -1524,6 +1566,7 @@ class EngineAuthority:
         self._authority_verification_key = self._authority_signing_key.public_key()
         self._last_action: dict[str, dict[str, Any]] = {}
         self._last_sequence: dict[str, int] = {}
+        self._last_global_order = 0
         self._processed: dict[str, tuple[str, EngineDecision, Envelope]] = {}
         self._buffered_proposals: dict[str, Envelope] = {}
         self._response_batches: dict[str, tuple[str, ...]] = {}
@@ -1811,8 +1854,47 @@ class EngineAuthority:
         }
         if authority._last_sequence != expected_last_sequence:
             raise BridgeValidationError("persisted engine proposal high-water marks do not match processed decisions")
+        global_orders = [
+            proposal.payload.get("global_order")
+            for _digest, _decision, proposal in authority._processed.values()
+            if "global_order" in proposal.payload
+        ]
+        legacy_processed_count = len(authority._processed) - len(global_orders)
+        if (
+            any(
+                not isinstance(order, int) or isinstance(order, bool)
+                for order in global_orders
+            )
+            or sorted(global_orders)
+            != list(
+                range(
+                    legacy_processed_count + 1,
+                    len(authority._processed) + 1,
+                )
+            )
+        ):
+            raise BridgeValidationError(
+                "persisted global engine proposal ordering is invalid"
+            )
+        authority._last_global_order = len(authority._processed)
         if set(authority._response_batches) != set(authority._processed):
             raise BridgeValidationError("persisted engine response batches do not cover processed proposals")
+        def proposals_are_contiguous(previous: Envelope, current: Envelope) -> bool:
+            previous_global = previous.payload.get("global_order")
+            current_global = current.payload.get("global_order")
+            if previous_global is not None or current_global is not None:
+                return (
+                    isinstance(previous_global, int)
+                    and not isinstance(previous_global, bool)
+                    and isinstance(current_global, int)
+                    and not isinstance(current_global, bool)
+                    and current_global == previous_global + 1
+                )
+            return (
+                current.actor_id == previous.actor_id
+                and current.sequence == previous.sequence + 1
+            )
+
         for message_id, decision_ids in authority._response_batches.items():
             if not decision_ids or decision_ids[0] != message_id or any(
                 decision_id not in authority._processed for decision_id in decision_ids
@@ -1821,16 +1903,32 @@ class EngineAuthority:
             decisions = [authority._processed[decision_id][1] for decision_id in decision_ids]
             proposals = [authority._processed[decision_id][2] for decision_id in decision_ids]
             if any(
-                decisions[index].outcome.sequence != decisions[index - 1].outcome.sequence + 1
-                or proposals[index].actor_id != proposals[index - 1].actor_id
-                or proposals[index].sequence != proposals[index - 1].sequence + 1
+                decisions[index].outcome.sequence
+                != decisions[index - 1].outcome.sequence + 1
+                or not proposals_are_contiguous(
+                    proposals[index - 1], proposals[index]
+                )
                 for index in range(1, len(decisions))
             ):
                 raise BridgeValidationError("persisted engine response batch ordering is invalid")
         buffered_slots: set[tuple[str, int]] = set()
+        buffered_global_orders: set[int] = set()
         for proposal in authority._buffered_proposals.values():
             if proposal.actor_id not in authority._positions:
                 raise BridgeValidationError("persisted buffered engine proposal has an unknown actor")
+            global_order = proposal.payload.get("global_order")
+            if global_order is not None:
+                if (
+                    not isinstance(global_order, int)
+                    or isinstance(global_order, bool)
+                    or global_order <= authority._last_global_order + 1
+                    or global_order in buffered_global_orders
+                ):
+                    raise BridgeValidationError(
+                        "persisted buffered global proposal ordering is invalid"
+                    )
+                buffered_global_orders.add(global_order)
+                continue
             if proposal.sequence <= authority._last_sequence.get(proposal.actor_id, 0) + 1:
                 raise BridgeValidationError("persisted buffered engine proposal does not follow a real gap")
             slot = (proposal.actor_id, proposal.sequence)
@@ -1956,11 +2054,26 @@ class EngineAuthority:
                 return ()
             raise BridgeValidationError("buffered engine proposal id was reused with different content")
 
-        if proposal.actor_id in self._positions:
+        global_order = proposal.payload.get("global_order")
+        if global_order is not None:
+            if not isinstance(global_order, int) or isinstance(global_order, bool):
+                raise BridgeValidationError("proposal global order is malformed")
+            expected_order = self._last_global_order + 1
+            if global_order > expected_order:
+                if any(
+                    item.payload.get("global_order") == global_order
+                    for item in self._buffered_proposals.values()
+                ):
+                    raise BridgeValidationError("buffered global proposal order was reused")
+                self._buffered_proposals[proposal.message_id] = proposal
+                return ()
+        elif proposal.actor_id in self._positions:
             expected_sequence = self._last_sequence.get(proposal.actor_id, 0) + 1
             if proposal.sequence > expected_sequence:
                 if any(
-                    item.actor_id == proposal.actor_id and item.sequence == proposal.sequence
+                    item.payload.get("global_order") is None
+                    and item.actor_id == proposal.actor_id
+                    and item.sequence == proposal.sequence
                     for item in self._buffered_proposals.values()
                 ):
                     raise BridgeValidationError("buffered engine proposal sequence was reused")
@@ -1969,34 +2082,58 @@ class EngineAuthority:
 
         decision = self._process_proposal(proposal)
         drained: tuple[EngineDecision, ...] = ()
-        if proposal.actor_id in self._positions:
+        if global_order is not None:
+            drained = self._drain_buffer()
+        elif proposal.actor_id in self._positions:
             drained = self._drain_buffer(proposal.actor_id)
         decisions = (decision, *drained)
-        self._response_batches[proposal.message_id] = tuple(
-            item.outcome.correlation_id for item in decisions
-        )
-        for item in drained:
-            self._response_batches.setdefault(
-                item.outcome.correlation_id,
-                (item.outcome.correlation_id,),
+        if global_order is not None:
+            for item in decisions:
+                self._response_batches.setdefault(
+                    item.outcome.correlation_id,
+                    (item.outcome.correlation_id,),
+                )
+        else:
+            self._response_batches[proposal.message_id] = tuple(
+                item.outcome.correlation_id for item in decisions
             )
+            for item in drained:
+                self._response_batches.setdefault(
+                    item.outcome.correlation_id,
+                    (item.outcome.correlation_id,),
+                )
         return decisions
 
     def _response_batch(self, message_id: str) -> tuple[EngineDecision, ...]:
         return tuple(self._processed[decision_id][1] for decision_id in self._response_batches[message_id])
 
-    def _drain_buffer(self, actor_id: str) -> tuple[EngineDecision, ...]:
+    def _drain_buffer(
+        self, actor_id: str | None = None
+    ) -> tuple[EngineDecision, ...]:
         decisions: list[EngineDecision] = []
         while True:
-            expected_sequence = self._last_sequence.get(actor_id, 0) + 1
-            pending = next(
-                (
-                    item
-                    for item in self._buffered_proposals.values()
-                    if item.actor_id == actor_id and item.sequence == expected_sequence
-                ),
-                None,
-            )
+            if actor_id is None:
+                expected_order = self._last_global_order + 1
+                pending = next(
+                    (
+                        item
+                        for item in self._buffered_proposals.values()
+                        if item.payload.get("global_order") == expected_order
+                    ),
+                    None,
+                )
+            else:
+                expected_sequence = self._last_sequence.get(actor_id, 0) + 1
+                pending = next(
+                    (
+                        item
+                        for item in self._buffered_proposals.values()
+                        if item.payload.get("global_order") is None
+                        and item.actor_id == actor_id
+                        and item.sequence == expected_sequence
+                    ),
+                    None,
+                )
             if pending is None:
                 return tuple(decisions)
             del self._buffered_proposals[pending.message_id]
@@ -2004,6 +2141,11 @@ class EngineAuthority:
 
     def _process_proposal(self, proposal: Envelope) -> EngineDecision:
         reason = self._validate(proposal)
+        global_order = proposal.payload.get("global_order")
+        if global_order is None:
+            self._last_global_order += 1
+        elif global_order > self._last_global_order:
+            self._last_global_order = global_order
         if reason:
             if proposal.actor_id in self._positions and proposal.sequence > self._last_sequence.get(proposal.actor_id, 0):
                 self._last_sequence[proposal.actor_id] = proposal.sequence
@@ -2048,7 +2190,15 @@ class EngineAuthority:
             return "unsupported_message_type"
         if proposal.actor_id not in self._positions:
             return "unknown_identity"
-        if proposal.sequence <= self._last_sequence.get(proposal.actor_id, 0):
+        global_order = proposal.payload.get("global_order")
+        if global_order is not None:
+            if (
+                not isinstance(global_order, int)
+                or isinstance(global_order, bool)
+                or global_order <= self._last_global_order
+            ):
+                return "stale_global_order"
+        elif proposal.sequence <= self._last_sequence.get(proposal.actor_id, 0):
             return "stale_sequence"
         action_type = proposal.payload.get("action_type")
         command = proposal.payload.get("command")
