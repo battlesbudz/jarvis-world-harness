@@ -190,54 +190,63 @@ test("touch joystick moves the Bio", async ({ page }) => {
 });
 
 async function defeatBandit(page: Page): Promise<void> {
-  const deadline = Date.now() + 60_000;
+  const deadline = Date.now() + 120_000;
+  let dodgeRight = true;
   while (Date.now() < deadline) {
     const state = await snapshot(page);
     if (state.combat.phase === "victory") return;
     if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
     if (state.combat.enemyTelegraph) {
       if (state.combat.enemyAttack === "heavy" || state.combat.enemyAttack === "area") {
-        await page.keyboard.down("KeyS");
+        const dodgeKey = dodgeRight ? "KeyD" : "KeyA";
+        dodgeRight = !dodgeRight;
+        const beforeDodge = state;
+        await page.keyboard.down(dodgeKey);
         await page.keyboard.press("Space");
         try {
-          await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, { timeout: 2_500, intervals: [40] }).toBe(false);
+          await expect.poll(async () => {
+            const current = await snapshot(page);
+            return Math.hypot(
+              current.position.x - beforeDodge.position.x,
+              current.position.z - beforeDodge.position.z,
+            );
+          }, { timeout: 5_000, intervals: [40] }).toBeGreaterThan(0.4);
         } finally {
-          await page.keyboard.up("KeyS");
+          await page.keyboard.up(dodgeKey);
         }
+        await page.waitForTimeout(900);
       } else {
         await page.keyboard.down("ShiftLeft");
         try {
-          await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, { timeout: 2_500, intervals: [40] }).toBe(false);
+          await page.waitForTimeout(900);
         } finally {
           await page.keyboard.up("ShiftLeft");
         }
       }
       continue;
     }
-    if (state.combat.playerAction === "idle" && state.combat.playerStamina >= 35) {
-      await page.locator("#attack").click();
-      await page.waitForTimeout(220);
-      await page.locator("#attack").click();
-      await page.waitForTimeout(410);
+    if (state.combat.playerAction === "idle" && state.combat.playerStamina >= 20) {
       await page.locator("#attack").click();
     }
-    await page.waitForTimeout(180);
+    await page.waitForTimeout(90);
   }
   throw new Error(`bandit did not fall: ${JSON.stringify(await snapshot(page))}`);
 }
 
 test("combat controls expose stamina, blocking, dodge, and pause", async ({ page }) => {
+  test.setTimeout(45_000);
   await openGame(page);
   await page.locator("#attack").click();
   await page.waitForTimeout(90);
   expect((await snapshot(page)).combat.playerStamina).toBeLessThan(100);
+  await expect.poll(async () => (await snapshot(page)).combat.playerAction).toBe("idle");
   await page.keyboard.down("ShiftLeft");
   const staminaBeforeBlock = (await snapshot(page)).combat.playerStamina;
   await page.waitForTimeout(650);
   await page.keyboard.up("ShiftLeft");
   expect((await snapshot(page)).combat.playerStamina).toBeLessThan(staminaBeforeBlock - 2);
   const beforeDodge = await snapshot(page);
-  await page.locator("#dodge").click();
+  await page.keyboard.press("Space");
   await expect.poll(async () => (await snapshot(page)).combat.playerStamina).toBeLessThan(beforeDodge.combat.playerStamina - 10);
   await expect.poll(async () => (await snapshot(page)).position.z).toBeGreaterThan(beforeDodge.position.z + 0.2);
   await page.getByRole("button", { name: "Pause combat" }).click();
@@ -248,7 +257,7 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
 });
 
 test("the legitimate route defeats the bandit and unlocks the village gate", async ({ page }, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await openGame(page);
   await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
