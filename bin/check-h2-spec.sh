@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate the finalized H2 contract without implementing or executing H2.
+# Validate the finalized phone-first H2 contract without executing gameplay.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -16,8 +16,8 @@ for path in (acceptance_path, spec_path, gate_path):
         raise SystemExit(f"missing finalized H2 contract file: {path}")
 
 acceptance = acceptance_path.read_text(encoding="utf-8")
-heading = "## H2 — Engine Prototype"
-if heading not in acceptance or "H2 — Engine Prototype (draft" in acceptance:
+heading = "## H2 — Mobile-Web Engine Prototype"
+if heading not in acceptance or "H2 — Mobile-Web Engine Prototype (draft" in acceptance:
     raise SystemExit("H2 acceptance criteria are not finalized")
 h2_acceptance = acceptance.split(heading, 1)[1]
 h2_acceptance = re.split(r"^## ", h2_acceptance, maxsplit=1, flags=re.MULTILINE)[0]
@@ -27,7 +27,7 @@ if len(criteria) < 14:
 
 spec = spec_path.read_text(encoding="utf-8")
 required_headings = (
-    "# H2 Engine Prototype Specification",
+    "# H2 Mobile-Web Engine Prototype Specification",
     "## Authorization and boundaries",
     "## Playable slice",
     "## Bridge contract",
@@ -53,9 +53,11 @@ required_contract_terms = (
     "Non-Thinker",
     "World OS selects both actors' cognition-driven behavior and emits proposals",
     "physically possible, current proposal from a known identity that lacks permission",
-    "World OS then emits at least one deterministic proposal that Unreal validates and successfully applies",
+    "World OS then emits at least one deterministic proposal that the client validates and successfully applies",
     "Awakening is not exercised in H2",
-    "captured from PIE",
+    "captured from the running browser game",
+    "mobile touch controls and keyboard/pointer controls",
+    "operator check on the deployed URL",
     "Do not begin H3 Awakening Prototype work during H2",
 )
 for required in required_contract_terms:
@@ -73,8 +75,9 @@ expected = {
     "h2-spec": ["bash", "bin/check-h2-spec.sh"],
     "h1-regression": ["env", "MILESTONE_ID=H1", "python3", "bin/milestone-gate.py", "--json", "--no-record"],
     "h2-bridge-contract": ["bash", "bin/test-h2-bridge-contract.sh"],
-    "h2-project-structure": ["bash", "bin/test-h2-project-structure.sh"],
-    "h2-pie-playable-loop": ["bash", "bin/test-h2-pie-playable-loop.sh"],
+    "h2-web-foundation": ["bash", "bin/test-h2-web-foundation.sh"],
+    "h2-browser-traversal": ["bash", "bin/test-h2-browser-traversal.sh"],
+    "h2-browser-combat-ui": ["bash", "bin/test-h2-browser-combat-ui.sh"],
     "h2-cognition-bridge": ["bash", "bin/test-h2-cognition-bridge.sh"],
     "h2-visual-evidence": ["bash", "bin/test-h2-visual-evidence.sh"],
 }

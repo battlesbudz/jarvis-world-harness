@@ -2,6 +2,8 @@
 
 Record human diagnoses, manual code interventions, changed acceptance criteria, model/runtime changes, and major environment changes during an autonomous milestone.
 
+- 2026-08-29: At operator direction, H2 changed from an Unreal-specific desktop prototype to a phone-first Babylon.js mobile-web prototype because no dedicated Unreal development host is available and direct phone testing through a temporary URL is the priority. The validated engine/World OS authority boundary and all protected product laws remain unchanged; Unreal is retained as a deferred client option.
+
 - 2026-08-13: PR #1 Codex review identified that a timed-out gate leader could exit before SIGKILL escalation while a stubborn descendant retained inherited pipes. The harness implementation and regression were manually updated in response; product laws and acceptance criteria were unchanged.
 - 2026-08-13: A follow-up PR #1 Codex review showed that a stubborn descendant could instead close/redirect inherited pipes, causing timeout cleanup to return before process-group escalation. The grace/escalation logic and deterministic regression were manually updated; product laws and acceptance criteria were unchanged.
 - 2026-08-13: The next PR #1 Codex review found two wrapper/restart lifecycle gaps: redirected descendants could survive when the wrapper returned before its escalation deadline, and a hard-killed runner shell could leave its lock-inheriting Python wrapper unreachable. Wrapper escalation, safe stop control, restart recovery, and deterministic regressions were manually updated; product laws and acceptance criteria were unchanged.

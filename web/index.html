@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="theme-color" content="#122721" />
+    <meta name="description" content="Jarvis World OS mobile Albion prototype" />
+    <title>Jarvis World — Albion Field Test</title>
+  </head>
+  <body>
+    <main id="game-shell">
+      <canvas id="game-canvas" aria-label="Playable Albion village"></canvas>
+      <section id="status-panel" aria-live="polite">
+        <span class="eyebrow">H2 FIELD TEST</span>
+        <strong id="status">Loading Albion…</strong>
+        <span id="objective">Preparing the Bio spawn</span>
+      </section>
+      <button id="reset" type="button" aria-label="Reset to Bio spawn">Reset</button>
+      <div id="joystick" role="group" aria-label="Movement joystick">
+        <div id="joystick-knob"></div>
+      </div>
+      <div id="look-hint">Drag to look</div>
+      <output id="completion" hidden>Route complete — Albion is reachable.</output>
+      <output id="diagnostics" hidden></output>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

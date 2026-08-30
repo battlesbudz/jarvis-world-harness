@@ -23,7 +23,7 @@ Prefer a standalone, deterministic/testable core for:
 
 LLM-assisted behavior may be added later, but world legality and durable state must not depend on unvalidated free-form text.
 
-### Unreal Engine
+### Active Babylon.js client
 
 Owns:
 
@@ -51,7 +51,7 @@ World OS emits **proposals**, e.g.:
 
 `npc_goal_changed`, `npc_refuses`, `npc_joins`, `routine_changed`, `rumor_shared`, `faction_action_proposed`, `town_pressure_changed`, `awakening_transition`, `quest_pressure_proposed`.
 
-A validator checks identity, permissions, state preconditions, cooldowns, physical possibility, story-anchor rules, and safety/playability before Unreal applies a mutation.
+A validator checks identity, permissions, state preconditions, cooldowns, physical possibility, story-anchor rules, and safety/playability before the game client applies a mutation.
 
 ## Development lanes
 
@@ -59,9 +59,9 @@ A validator checks identity, permissions, state preconditions, cooldowns, physic
 
 Fast deterministic tests; thousands of seeded histories; no renderer cost.
 
-### Lane B — Unreal integration
+### Lane B — browser engine integration
 
-AAABench MCP/VibeUE control, PIE, viewport capture, Blueprint/asset authoring, performance and visual QA.
+Babylon.js scene/gameplay authoring, mobile input, browser capture, performance, and visual QA. The retained AAABench MCP/VibeUE material remains available for a future Unreal client but is not required by H2.
 
 ### Lane C — evaluation
 

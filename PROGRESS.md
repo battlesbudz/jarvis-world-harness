@@ -1,5 +1,7 @@
 # Progress
 
+- H2 phone-first client foundation on 2026-08-29: at operator direction, the active graphical client moved from an unavailable dedicated Unreal host to Babylon.js mobile web while preserving the validated engine/World OS boundary and deferred Unreal option. The first focused slice adds a deterministic Albion greybox, Bio movement, keyboard/pointer and touch input, blocking collision, reset/route feedback, production static build, unit checks, and Playwright evidence across desktop, folded-phone, and unfolded-landscape viewports.
+
 - PR #4 pre-versioned Ed25519 compatibility on 2026-08-28: schema-v1 bridge snapshots now distinguish genuine legacy 64-hex HMAC proofs from the immediately preceding 128-hex Ed25519 format. Legacy shared-key outcomes still fail explicitly, while already-valid Ed25519 decisions verify under the configured engine public key and migrate to bridge persistence schema v2.
 
 - PR #4 sixteenth review hardening on 2026-08-28: engine snapshots now persist immutable initial actor positions; restore replays every applied destination from that genesis baseline and compares the complete physical position map, including actors that never moved.

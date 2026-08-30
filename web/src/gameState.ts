@@ -1,0 +1,60 @@
+export type RouteCheckpoint = "spawn" | "bend" | "square" | "complete";
+
+export interface Position3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface GameSnapshot {
+  ready: boolean;
+  seed: string;
+  resetId: number;
+  position: Position3;
+  yaw: number;
+  checkpoint: RouteCheckpoint;
+  collisionCount: number;
+  runtimeErrors: string[];
+}
+
+export interface MovementInput {
+  forward: number;
+  right: number;
+}
+
+export const SPAWN = Object.freeze({ x: 0, y: 0.9, z: -12 });
+export const DESTINATION = Object.freeze({ x: 0, z: 10 });
+export const H2_SEED = "h2-babylon-foundation-v1";
+
+export function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+export function normalizeMovement(input: MovementInput): MovementInput {
+  const length = Math.hypot(input.forward, input.right);
+  if (length <= 1) {
+    return input;
+  }
+  return { forward: input.forward / length, right: input.right / length };
+}
+
+export function nextCheckpoint(position: Position3, current: RouteCheckpoint): RouteCheckpoint {
+  if (current === "square" && Math.hypot(position.x - DESTINATION.x, position.z - DESTINATION.z) <= 2) {
+    return "complete";
+  }
+  if ((current === "bend" || current === "square") && position.z >= 2) {
+    return "square";
+  }
+  if (current === "spawn" && Math.abs(position.x) >= 5.5 && position.z >= -6) {
+    return "bend";
+  }
+  return current;
+}
+
+export function roundedPosition(position: Position3): Position3 {
+  return {
+    x: Number(position.x.toFixed(3)),
+    y: Number(position.y.toFixed(3)),
+    z: Number(position.z.toFixed(3)),
+  };
+}
