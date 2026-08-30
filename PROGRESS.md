@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 ninth-review hardening on 2026-08-30: bandit chase and dodge displacement now use collision-aware movement with an enabled enemy collider, enemy damage additionally requires an unobstructed collision-geometry ray, and disengagement clears both stagger and dodge reaction state while completed staggers return the actor to guard idle.
+
 - PR #11 eighth-review hardening on 2026-08-30: the bandit's alternating third-hit dodge is now an explicit short state that cancels and advances any active telegraph before playing Roll without same-frame locomotion replacement, and identical consecutive non-looping attack clips restart so buffered combo boundaries remain visually synchronized.
 
 - PR #11 seventh-review hardening on 2026-08-30: the Bio's collision center is bounded inside the 42-meter ground footprint with capsule clearance, preventing traversal around the outer endpoints of the combat-gate flanks, and every enemy telegraph ring now derives its visible outer radius from the exact basic/heavy or area hit-validation range.

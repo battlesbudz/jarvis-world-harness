@@ -1,6 +1,7 @@
 import type { AnimationGroup } from "@babylonjs/core/Animations/animationGroup.js";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera.js";
 import "@babylonjs/core/Collisions/collisionCoordinator.js";
+import { Ray } from "@babylonjs/core/Culling/ray.core.js";
 import { Engine } from "@babylonjs/core/Engines/engine.js";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight.js";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight.js";
@@ -421,6 +422,7 @@ export class AlbionGame {
     this.enemyAttack = null;
     this.enemyAttackCooldown = 0.7;
     this.enemyAttackIndex = 0;
+    this.enemyStaggerElapsed = 0;
     this.enemyDodgeElapsed = 0;
     this.telegraphRing.isVisible = false;
     this.completedCombos = 0;
@@ -478,7 +480,7 @@ export class AlbionGame {
     }
     if (attack.step === 3 && banditDodgesThirdHit(this.completedCombos)) {
       const side = new Vector3(toward.z, 0, -toward.x).normalize();
-      this.enemy.position.addInPlace(side.scale(1.35));
+      this.enemy.moveWithCollisions(side.scale(1.35));
       if (this.enemyAttack) this.enemyAttackIndex += 1;
       this.enemyAttack = null;
       this.enemyAttackCooldown = 0.58;
@@ -537,6 +539,7 @@ export class AlbionGame {
   private updateEnemy(delta: number): void {
     if (this.enemyStaggerElapsed > 0) {
       this.enemyStaggerElapsed = Math.max(0, this.enemyStaggerElapsed - delta);
+      if (this.enemyStaggerElapsed === 0) this.playActor(this.enemyActor, "Idle_Attacking", true);
       return;
     }
     if (this.enemyDodgeElapsed > 0) {
@@ -549,7 +552,7 @@ export class AlbionGame {
     this.enemy.rotation.y = Math.atan2(toward.x, toward.z);
     if (distance > ENEMY_RANGE && !this.enemyAttack) {
       this.telegraphRing.isVisible = false;
-      this.enemy.position.addInPlace(toward.normalize().scale(Math.min(2.35 * delta, distance - BODY_DISTANCE)));
+      this.enemy.moveWithCollisions(toward.normalize().scale(Math.min(2.35 * delta, distance - BODY_DISTANCE)));
       this.playActor(this.enemyActor, "Run", true);
       return;
     }
@@ -585,6 +588,10 @@ export class AlbionGame {
     const range = kind === "area" ? AREA_ATTACK_RANGE : ENEMY_RANGE;
     if (Vector3.Distance(this.player.position, this.enemy.position) > range) {
       this.showFeedback("EVADED", "success");
+      return;
+    }
+    if (!this.combatLineClear()) {
+      this.showFeedback("BLOCKED BY COVER", "success");
       return;
     }
     const result = resolveEnemyHit(kind, this.playerAction === "block", this.playerStamina);
@@ -840,12 +847,24 @@ export class AlbionGame {
     actor.current = name;
   }
 
+  private combatLineClear(): boolean {
+    const origin = this.enemy.position.add(new Vector3(0, 0.4, 0));
+    const offset = this.player.position.add(new Vector3(0, 0.4, 0)).subtract(origin);
+    const distance = offset.length();
+    const hit = this.scene.pickWithRay(
+      new Ray(origin, offset.normalize(), distance),
+      (mesh) => mesh.checkCollisions && mesh !== this.player && mesh !== this.enemy,
+      true,
+    );
+    return !hit?.hit;
+  }
+
   private createCollider(name: string, x: number, z: number, material: StandardMaterial): Mesh {
     const collider = CreateCapsule(name, { height: 1.8, radius: 0.42 }, this.scene);
     collider.position.copyFromFloats(x, 0.9, z);
     collider.material = material;
     collider.ellipsoid.copyFromFloats(0.42, 0.9, 0.42);
-    collider.checkCollisions = name === "bio";
+    collider.checkCollisions = true;
     return collider;
   }
 
