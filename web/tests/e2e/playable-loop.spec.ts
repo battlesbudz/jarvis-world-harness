@@ -53,6 +53,30 @@ async function centerOnVillageRoad(page: Page): Promise<void> {
   throw new Error(`could not center on village road: ${JSON.stringify(await snapshot(page))}`);
 }
 
+function evasiveKey(state: GameSnapshot): string {
+  const stride = state.combat.enemyAttack === "area" ? 3.2 : 2.6;
+  const candidates = [
+    { key: "KeyA", x: state.position.x - stride, z: state.position.z },
+    { key: "KeyD", x: state.position.x + stride, z: state.position.z },
+    { key: "KeyS", x: state.position.x, z: state.position.z - stride },
+    { key: "KeyW", x: state.position.x, z: state.position.z + stride },
+  ];
+  const safeCandidates = candidates.filter(({ x, z }) => Math.hypot(x, z - 6.2) <= 5);
+  const ranked = safeCandidates.length > 0 ? safeCandidates : candidates;
+  ranked.sort((left, right) => {
+    const leftSeparation = Math.hypot(
+      left.x - state.combat.enemyPosition.x,
+      left.z - state.combat.enemyPosition.z,
+    );
+    const rightSeparation = Math.hypot(
+      right.x - state.combat.enemyPosition.x,
+      right.z - state.combat.enemyPosition.z,
+    );
+    return rightSeparation - leftSeparation;
+  });
+  return ranked[0].key;
+}
+
 function projectRevision(): string {
   const revision = process.env.H2_REVISION
     ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: resolve(process.cwd(), ".."), encoding: "utf8" }).trim();
@@ -196,46 +220,32 @@ async function defeatBandit(page: Page): Promise<void> {
     if (state.combat.phase === "victory") return;
     if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
     if (state.combat.enemyTelegraph) {
-      if (state.combat.enemyAttack === "heavy" || state.combat.enemyAttack === "area") {
-        const dodgeKey =
-          Math.abs(state.position.x) > 0.65
-            ? state.position.x > 0
-              ? "KeyA"
-              : "KeyD"
-            : state.combat.enemyPosition.x >= state.position.x
-              ? "KeyA"
-              : "KeyD";
-        await page.keyboard.down(dodgeKey);
-        await page.keyboard.press("Space");
-        try {
-          await expect
-            .poll(async () => (await snapshot(page)).combat.playerAction, {
-              timeout: 10_000,
-              intervals: [30],
-            })
-            .toBe("dodge");
-        } finally {
-          await page.keyboard.up(dodgeKey);
-        }
+      const movementKey = evasiveKey(state);
+      const safeDistance = state.combat.enemyAttack === "area" ? 3.1 : 2.5;
+      await page.keyboard.down(movementKey);
+      try {
         await expect
-          .poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+          .poll(async () => {
+            const current = await snapshot(page);
+            if (!current.combat.enemyTelegraph) return true;
+            return Math.hypot(
+              current.position.x - current.combat.enemyPosition.x,
+              current.position.z - current.combat.enemyPosition.z,
+            ) >= safeDistance;
+          }, {
             timeout: 10_000,
-            intervals: [80],
+            intervals: [30],
           })
-          .toBe(false);
-      } else {
-        await page.keyboard.down("ShiftLeft");
-        try {
-          await expect
-            .poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
-              timeout: 10_000,
-              intervals: [80],
-            })
-            .toBe(false);
-        } finally {
-          await page.keyboard.up("ShiftLeft");
-        }
+          .toBe(true);
+      } finally {
+        await page.keyboard.up(movementKey);
       }
+      await expect
+        .poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+          timeout: 10_000,
+          intervals: [80],
+        })
+        .toBe(false);
       continue;
     }
     if (state.combat.playerAction === "idle" && state.combat.playerStamina >= 20) {

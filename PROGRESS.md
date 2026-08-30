@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 hosted route physical-evasion strategy on 2026-08-30: after all 21 non-route browser scenarios passed, the victory driver replaced stamina-dependent queued dodges with ordinary collision-aware movement selected from safe arena-interior candidates. Each defense stops moving as soon as authoritative player/enemy separation exceeds the exact melee or area range, then waits for telegraph resolution; the dedicated controls scenario continues to prove block and dodge behavior independently.
+
 - PR #11 fifteenth-review dodge-state proof on 2026-08-30: queued-dodge direction is now released only after the authoritative 360 ms `dodge` action is observed, removing ordinary held-key locomotion as a false-positive start signal.
 
 - PR #11 fourteenth-review queued-dodge evidence on 2026-08-30: the hosted route keeps its selected lateral key held pending authoritative dodge-start evidence, ensuring a dodge buffered behind an attack still samples the intended safe direction on capped slow frames.
