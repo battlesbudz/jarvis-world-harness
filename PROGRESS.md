@@ -2,6 +2,8 @@
 
 - H2 Codex-operator lane started on 2026-08-30: the operator clarified that scripted Playwright traversal is necessary regression evidence but does not fulfill the harness's autonomous visual-control goal. The active slice adds a persistent Chromium session, screenshot-to-Codex decision turns, bounded input execution, tool-use rejection, evaluator-private state, and complete per-step evidence without exposing route coordinates or source to the operator.
 
+- PR #10 first review hardening on 2026-08-30: the Codex operator now loads the ordinary player URL instead of the diagnostic `?test=1` view, preventing screenshots from exposing exact X/Z coordinates and checkpoint names. A static regression protects the vision-first boundary while the independent evaluator retains its nonvisual state hook.
+
 - H2 mobile-route time-budget correction on 2026-08-30: the complete route scenario now has a 75-second outer ceiling while retaining its 10-second per-movement bounds. Production evidence showed the unfolded mobile retry reach `complete` with no runtime errors before the prior 45-second test ceiling interrupted key release.
 
 - H2 mobile-route evidence stability on 2026-08-30: the bounded road-centering helper now allows slower mobile emulation enough time to cover the same measured lateral distance as desktop. The production gate exposed the prior three-second ceiling when folded and unfolded profiles stopped just outside the route tolerance without runtime or collision errors.

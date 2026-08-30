@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { URL } from "node:url";
 import {
   forbiddenToolEvents,
   publicActionSummary,
@@ -50,3 +51,8 @@ test("extracts the persisted Codex thread and rejects hidden tool use", () => {
   assert.deepEqual(forbiddenToolEvents(events), ["command_execution"]);
 });
 
+test("operator runner never enables the visible test diagnostics query", async () => {
+  const runner = await import("node:fs/promises").then(({ readFile }) => readFile(new URL("./run.mjs", import.meta.url), "utf8"));
+  assert.doesNotMatch(runner, /page\.goto\(`\$\{baseUrl\}\?test=1`/);
+  assert.match(runner, /page\.goto\(baseUrl/);
+});

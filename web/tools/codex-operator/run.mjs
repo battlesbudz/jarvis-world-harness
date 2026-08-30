@@ -198,7 +198,9 @@ async function main() {
       if (message.type() === "error") runtimeErrors.push(`console: ${message.text()}`);
     });
     await context.tracing.start({ screenshots: true, snapshots: true });
-    await page.goto(`${baseUrl}?test=1`, { waitUntil: "load" });
+    // Load the ordinary player URL. The `test` query parameter intentionally exposes
+    // coordinates/checkpoint diagnostics and would invalidate vision-first evidence.
+    await page.goto(baseUrl, { waitUntil: "load" });
     await page.waitForFunction(() => globalThis.__JARVIS_H2__?.snapshot().ready === true);
 
     for (let step = 0; step < maxSteps; step += 1) {
