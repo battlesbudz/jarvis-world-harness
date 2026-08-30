@@ -8,7 +8,6 @@ This H2 prototype bundles optimized `Monk.glb` and `Warrior.glb` models from the
 - License: CC0 1.0 Universal; see `LICENSE.txt`
 - Use here: temporary Bio and sword-bandit prototype characters
 
-The pack's glTF exports were converted to meshopt-compressed GLB files with
-`@gltf-transform/cli`; their geometry, animations, textures, and CC0 status are
-otherwise unchanged. These are placeholder production assets, not final Jarvis
-World character art.
+The pack's glTF exports were optimized and converted to self-contained GLB files
+with `@gltf-transform/cli`; their animations and CC0 status are unchanged. These
+are placeholder production assets, not final Jarvis World character art.
