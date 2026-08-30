@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 seventh-review hardening on 2026-08-30: the Bio's collision center is bounded inside the 42-meter ground footprint with capsule clearance, preventing traversal around the outer endpoints of the combat-gate flanks, and every enemy telegraph ring now derives its visible outer radius from the exact basic/heavy or area hit-validation range.
+
 - PR #11 sixth-review hardening on 2026-08-30: collision-enabled stone flanks now span the world boundary around the closed combat gate so the village cannot be entered around its sides, damaging hit reactions clear active dodge time and velocity, and narrow portrait layouts stack the Pause/Reset actions above the HUD without obscuring the status panel.
 
 - PR #11 fifth-review hardening on 2026-08-30: pause requests are consumed but ignored during the defeat delay so its automatic reset cannot be hidden behind an inaccessible overlay, and damaging hits now hold an explicit short reaction state that cancels an interrupted attack and keeps the Bio's hit animation visible before locomotion resumes.

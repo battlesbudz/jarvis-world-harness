@@ -106,6 +106,7 @@ const ENEMY_RANGE = 2.15;
 const AREA_ATTACK_RANGE = 2.75;
 const TELEGRAPH_OUTER_RADIUS = 3.4 / 2 + 0.12 / 2;
 const BODY_DISTANCE = 0.92;
+const WORLD_PLAYER_LIMIT = 20.5;
 
 export class AlbionGame {
   private readonly engine: Engine;
@@ -545,7 +546,8 @@ export class AlbionGame {
       this.enemyAttack = { kind, elapsed: 0, resolved: false };
       this.telegraphRing.material = this.scene.getMaterialByName(`telegraph-${kind}`);
       this.telegraphRing.isVisible = true;
-      this.telegraphRing.scaling.setAll(kind === "area" ? AREA_ATTACK_RANGE / TELEGRAPH_OUTER_RADIUS : 0.8);
+      const attackRange = kind === "area" ? AREA_ATTACK_RANGE : ENEMY_RANGE;
+      this.telegraphRing.scaling.setAll(attackRange / TELEGRAPH_OUTER_RADIUS);
       this.playActor(this.enemyActor, kind === "heavy" ? "Sword_Attack2" : "Sword_Attack", false);
       this.showFeedback(kind === "area" ? "AREA ATTACK" : kind === "heavy" ? "HEAVY ATTACK" : "SWORD ATTACK", kind);
       this.playTone(kind === "basic" ? 240 : kind === "heavy" ? 155 : 110, 0.16, "sawtooth");
@@ -662,6 +664,8 @@ export class AlbionGame {
   private movePlayerCollider(displacement: Vector3): void {
     const before = this.player.position.clone();
     this.player.moveWithCollisions(displacement);
+    this.player.position.x = clamp(this.player.position.x, -WORLD_PLAYER_LIMIT, WORLD_PLAYER_LIMIT);
+    this.player.position.z = clamp(this.player.position.z, -WORLD_PLAYER_LIMIT, WORLD_PLAYER_LIMIT);
     if (this.phase === "engaged") {
       const separation = this.player.position.subtract(this.enemy.position);
       if (separation.length() < BODY_DISTANCE) {
