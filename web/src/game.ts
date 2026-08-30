@@ -1,7 +1,7 @@
 import type { AnimationGroup } from "@babylonjs/core/Animations/animationGroup.js";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera.js";
 import "@babylonjs/core/Collisions/collisionCoordinator.js";
-import { Ray } from "@babylonjs/core/Culling/ray.core.js";
+import { Ray } from "@babylonjs/core/Culling/ray.js";
 import { Engine } from "@babylonjs/core/Engines/engine.js";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight.js";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight.js";
