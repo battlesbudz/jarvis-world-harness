@@ -1,5 +1,7 @@
 # Progress
 
+- H2 mobile-route time-budget correction on 2026-08-30: the complete route scenario now has a 75-second outer ceiling while retaining its 10-second per-movement bounds. Production evidence showed the unfolded mobile retry reach `complete` with no runtime errors before the prior 45-second test ceiling interrupted key release.
+
 - H2 mobile-route evidence stability on 2026-08-30: the bounded road-centering helper now allows slower mobile emulation enough time to cover the same measured lateral distance as desktop. The production gate exposed the prior three-second ceiling when folded and unfolded profiles stopped just outside the route tolerance without runtime or collision errors.
 
 - H2 production-control verification on 2026-08-30: the Pages workflow now stamps the tested commit into its deployment artifact and, after publishing, reruns the complete deterministic gameplay suite against the real public URL in WebGL-capable desktop, folded-phone, and unfolded-phone Chromium profiles. Production evidence must match the deployed revision and covers rendering, movement, camera control, collision, reset, lifecycle recovery, touch input, and complete route traversal.
