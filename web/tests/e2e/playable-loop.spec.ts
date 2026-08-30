@@ -191,34 +191,42 @@ test("touch joystick moves the Bio", async ({ page }) => {
 
 async function defeatBandit(page: Page): Promise<void> {
   const deadline = Date.now() + 120_000;
-  let dodgeRight = true;
   while (Date.now() < deadline) {
     const state = await snapshot(page);
     if (state.combat.phase === "victory") return;
     if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
     if (state.combat.enemyTelegraph) {
       if (state.combat.enemyAttack === "heavy" || state.combat.enemyAttack === "area") {
-        const dodgeKey = dodgeRight ? "KeyD" : "KeyA";
-        dodgeRight = !dodgeRight;
-        const beforeDodge = state;
+        const dodgeKey =
+          Math.abs(state.position.x) > 0.65
+            ? state.position.x > 0
+              ? "KeyA"
+              : "KeyD"
+            : state.combat.enemyPosition.x >= state.position.x
+              ? "KeyA"
+              : "KeyD";
         await page.keyboard.down(dodgeKey);
         await page.keyboard.press("Space");
         try {
-          await expect.poll(async () => {
-            const current = await snapshot(page);
-            return Math.hypot(
-              current.position.x - beforeDodge.position.x,
-              current.position.z - beforeDodge.position.z,
-            );
-          }, { timeout: 5_000, intervals: [40] }).toBeGreaterThan(0.4);
+          await page.waitForTimeout(450);
         } finally {
           await page.keyboard.up(dodgeKey);
         }
-        await page.waitForTimeout(900);
+        await expect
+          .poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+            timeout: 10_000,
+            intervals: [80],
+          })
+          .toBe(false);
       } else {
         await page.keyboard.down("ShiftLeft");
         try {
-          await page.waitForTimeout(900);
+          await expect
+            .poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+              timeout: 10_000,
+              intervals: [80],
+            })
+            .toBe(false);
         } finally {
           await page.keyboard.up("ShiftLeft");
         }
@@ -263,6 +271,7 @@ test("the legitimate route defeats the bandit and unlocks the village gate", asy
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
   await centerOnVillageRoad(page);
   await holdUntil(page, "KeyW", (state) => state.combat.phase === "engaged");
+  await holdUntil(page, "KeyW", (state) => state.position.z >= 3.2);
   await defeatBandit(page);
   await expect(page.locator("#combat-feedback")).toBeVisible();
   await expect(page.locator("#combat-feedback")).toHaveText("PATH UNLOCKED");

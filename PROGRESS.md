@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 hosted combat-route stabilization on 2026-08-30: the deterministic route now advances from the aggro edge into the arena interior before fighting, selects lateral dodges toward the center or away from the bandit, and holds dodge/block defense until the authoritative telegraph resolves instead of assuming wall-clock timing. Current hosted evidence passes 21 of 27 scenarios, with only the prior boundary-crossing route driver failing across the three profiles.
+
 - PR #11 thirteenth-review clock synchronization on 2026-08-30: Babylon animation groups now use a per-frame scene time scale derived from the exact capped combat delta and freeze while paused, so slow mobile frames cannot advance visible attacks, dodges, reactions, or defeat motion ahead of authoritative gameplay. A focused regression covers normal, capped, paused, and zero-delta clocks.
 
 - PR #11 twelfth-review animation timing on 2026-08-30: every state-bounded one-shot actor clip now derives its playback ratio from the authored clip length and the same authoritative attack, dodge, hit, stagger, recovery, guard-break, or defeat duration that advances gameplay, keeping visible motion and hit resolution synchronized.
