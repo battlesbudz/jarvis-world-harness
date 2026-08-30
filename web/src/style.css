@@ -378,6 +378,17 @@ body {
     width: 46vw;
   }
 
+  #top-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  #reset,
+  #pause {
+    min-height: 42px;
+    padding-inline: 10px;
+  }
+
   #combat-controls {
     right: max(12px, env(safe-area-inset-right));
     transform: scale(0.84);

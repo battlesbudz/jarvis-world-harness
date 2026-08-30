@@ -592,6 +592,8 @@ export class AlbionGame {
       this.attack = null;
       this.attackBuffered = false;
       this.dodgeBuffered = false;
+      this.dodgeElapsed = 0;
+      this.dodgeVelocity = Vector3.Zero();
       this.hitReactionElapsed = 0.28;
       this.playerAction = "hit";
       this.showFeedback(result.blocked ? "HEAVY BLOCK · CHIP DAMAGE" : `-${Math.round(result.damage)} HEALTH`, result.blocked ? "warning" : "danger");
@@ -898,6 +900,13 @@ export class AlbionGame {
     const gateTop = CreateBox("destination-gate-top", { width: 3.25, height: 0.4, depth: 0.45 }, this.scene);
     gateTop.position.copyFromFloats(0, 3.05, 11.4);
     gateTop.material = palette.marker;
+    const flankWidth = (42 - 2.35) / 2;
+    for (const side of [-1, 1]) {
+      const flank = CreateBox(`combat-gate-flank-${side < 0 ? "left" : "right"}`, { width: flankWidth, height: 2.8, depth: 0.55 }, this.scene);
+      flank.position.copyFromFloats(side * (2.35 / 2 + flankWidth / 2), 1.4, 10.8);
+      flank.material = palette.stone;
+      flank.checkCollisions = true;
+    }
     const gate = CreateBox("combat-gate", { width: 2.35, height: 2.7, depth: 0.32 }, this.scene);
     gate.position.copyFromFloats(0, 1.35, 10.8);
     gate.material = palette.timber;
