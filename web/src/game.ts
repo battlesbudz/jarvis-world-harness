@@ -478,6 +478,10 @@ export class AlbionGame {
       this.showFeedback("MISS", "muted");
       return;
     }
+    if (!this.combatLineClear()) {
+      this.showFeedback("BLOCKED BY COVER", "muted");
+      return;
+    }
     if (attack.step === 3 && banditDodgesThirdHit(this.completedCombos)) {
       const side = new Vector3(toward.z, 0, -toward.x).normalize();
       this.enemy.moveWithCollisions(side.scale(1.35));
