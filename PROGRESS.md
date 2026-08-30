@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 third-review hardening on 2026-08-30: player attacks retain their real pre-spend stamina so exhausted damage is scaled exactly once, active enemy telegraphs persist through impact even when the Bio crosses the normal melee boundary, and stopped movement returns the visible Bio to the appropriate idle animation.
+
 - PR #11 hosted-browser hardening on 2026-08-30: the first intact-asset Chromium run loaded both character models and passed 16 scenarios, exposing only automation timing/strategy failures. Collision evidence now waits for actual wall contact across emulation speeds, dodge evidence uses durable stamina and displacement outcomes instead of sampling a transient action frame, and the legitimate combat driver reserves a full-strength combo budget while dodging heavy/area attacks instead of exhausting itself into defeat.
 
 - PR #11 second-review hardening on 2026-08-30: the route-completion destination now lies beyond the physical combat gate, with a regression proving the approach side cannot complete the scenario, and the bandit's guard-break stagger uses the Warrior asset's existing `RecieveHit` clip.

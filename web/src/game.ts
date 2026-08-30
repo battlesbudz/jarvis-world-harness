@@ -83,7 +83,7 @@ interface AttackState {
   step: 1 | 2 | 3;
   elapsed: number;
   hitApplied: boolean;
-  strength: number;
+  staminaBefore: number;
 }
 
 interface EnemyAttackState {
@@ -418,9 +418,9 @@ export class AlbionGame {
 
   private startAttack(): void {
     const step = (this.comboStep >= 1 && this.comboStep < 3 && this.comboWindow > 0 ? this.comboStep + 1 : 1) as 1 | 2 | 3;
-    const strength = staminaStrength(this.playerStamina, COMBAT.attackStaminaCost);
+    const staminaBefore = this.playerStamina;
     this.playerStamina = spendStamina(this.playerStamina, COMBAT.attackStaminaCost);
-    this.attack = { step, elapsed: 0, hitApplied: false, strength };
+    this.attack = { step, elapsed: 0, hitApplied: false, staminaBefore };
     this.playerAction = `attack-${step}`;
     this.playActor(this.playerActor, step === 2 ? "Attack2" : "Attack", false);
     this.playTone(220 + step * 35, 0.08, "triangle");
@@ -472,7 +472,7 @@ export class AlbionGame {
       return;
     }
     const guarded = attack.step < 3;
-    const damage = playerAttackDamage(attack.step, attack.strength * COMBAT.attackStaminaCost, guarded);
+    const damage = playerAttackDamage(attack.step, attack.staminaBefore, guarded);
     this.enemyHealth = Math.max(0, this.enemyHealth - damage);
     this.flashImpact(this.enemy.position.add(new Vector3(0, 1.1, 0)));
     this.damageNumber(Math.round(damage), false);
@@ -524,8 +524,7 @@ export class AlbionGame {
     const toward = this.player.position.subtract(this.enemy.position);
     const distance = toward.length();
     this.enemy.rotation.y = Math.atan2(toward.x, toward.z);
-    if (distance > ENEMY_RANGE) {
-      this.enemyAttack = null;
+    if (distance > ENEMY_RANGE && !this.enemyAttack) {
       this.telegraphRing.isVisible = false;
       this.enemy.position.addInPlace(toward.normalize().scale(Math.min(2.35 * delta, distance - BODY_DISTANCE)));
       this.playActor(this.enemyActor, "Run", true);
@@ -626,6 +625,9 @@ export class AlbionGame {
     const movement = this.input.movement();
     if (movement.forward === 0 && movement.right === 0) {
       this.collisionActive = false;
+      if (!this.attack && this.playerAction === "idle") {
+        this.playActor(this.playerActor, this.targetLocked ? "Idle_Attacking" : "Idle", true);
+      }
       return;
     }
     const forward = new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
