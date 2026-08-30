@@ -1,5 +1,7 @@
 # Progress
 
+- H2 production-control verification on 2026-08-30: the Pages workflow now stamps the tested commit into its deployment artifact and, after publishing, reruns the complete deterministic gameplay suite against the real public URL in WebGL-capable desktop, folded-phone, and unfolded-phone Chromium profiles. Production evidence must match the deployed revision and covers rendering, movement, camera control, collision, reset, lifecycle recovery, touch input, and complete route traversal.
+
 - H2 GitHub Pages deployment slice on 2026-08-30: the existing H2 workflow now packages `web/dist` only after the complete web-foundation job succeeds on `main`, then deploys that immutable artifact through the protected `github-pages` environment. Pull requests continue to build and test without publishing, while a manual `main` dispatch can safely republish the same tested path.
 
 - H2 phone-first client foundation on 2026-08-29: at operator direction, the active graphical client moved from an unavailable dedicated Unreal host to Babylon.js mobile web while preserving the validated engine/World OS boundary and deferred Unreal option. The first focused slice adds a deterministic Albion greybox, Bio movement, keyboard/pointer and touch input, blocking collision, reset/route feedback, production static build, unit checks, and Playwright evidence across desktop, folded-phone, and unfolded-landscape viewports.
