@@ -11,7 +11,11 @@ async function openGame(page: Page): Promise<void> {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto("./?test=1", { waitUntil: "load" });
   await expect.poll(() => page.evaluate(() => window.__JARVIS_H2__?.snapshot().ready)).toBe(true);
-  await expect.poll(() => page.evaluate(() => window.__JARVIS_H2__?.snapshot().assetsReady), { timeout: 15_000 }).toBe(true);
+  await expect.poll(() => page.evaluate(() => {
+    const state = window.__JARVIS_H2__?.snapshot();
+    if (state?.runtimeErrors.length) throw new Error(state.runtimeErrors.join("\n"));
+    return state?.assetsReady;
+  }), { timeout: 15_000 }).toBe(true);
   expect(pageErrors).toEqual([]);
 }
 
@@ -225,8 +229,10 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   await page.waitForTimeout(90);
   expect((await snapshot(page)).combat.playerStamina).toBeLessThan(100);
   await page.keyboard.down("ShiftLeft");
-  await page.waitForTimeout(300);
+  const staminaBeforeBlock = (await snapshot(page)).combat.playerStamina;
+  await page.waitForTimeout(650);
   await page.keyboard.up("ShiftLeft");
+  expect((await snapshot(page)).combat.playerStamina).toBeLessThan(staminaBeforeBlock - 2);
   await page.locator("#dodge").click();
   await page.waitForTimeout(120);
   expect((await snapshot(page)).combat.playerAction).toBe("dodge");
@@ -246,6 +252,7 @@ test("the legitimate route defeats the bandit and unlocks the village gate", asy
   await holdUntil(page, "KeyW", (state) => state.combat.phase === "engaged");
   await defeatBandit(page);
   await expect(page.locator("#combat-feedback")).toContainText("PATH UNLOCKED");
+  await expect.poll(async () => (await snapshot(page)).combat.gateOpen).toBe(true);
   const combatState = await snapshot(page);
   expect(combatState.combat.enemyHealth).toBe(0);
   expect(combatState.combat.gateOpen).toBe(true);

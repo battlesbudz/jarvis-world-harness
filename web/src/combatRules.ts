@@ -41,7 +41,8 @@ export function spendStamina(stamina: number, cost: number): number {
   return Math.max(0, stamina - cost);
 }
 
-export function regenerateStamina(stamina: number, deltaSeconds: number): number {
+export function regenerateStamina(stamina: number, deltaSeconds: number, blocking = false): number {
+  if (blocking) return stamina;
   return Math.min(COMBAT.playerMaxStamina, stamina + COMBAT.staminaRegenPerSecond * deltaSeconds);
 }
 

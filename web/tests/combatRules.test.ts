@@ -21,6 +21,10 @@ describe("combat rules", () => {
     expect(regenerateStamina(95, 8)).toBe(100);
   });
 
+  it("does not regenerate stamina while block is held", () => {
+    expect(regenerateStamina(40, 2, true)).toBe(40);
+  });
+
   it("keeps exhausted actions responsive but severely weaker", () => {
     expect(playerAttackDamage(1, 0, false)).toBe(2.5);
     expect(spendStamina(5, COMBAT.attackStaminaCost)).toBe(0);

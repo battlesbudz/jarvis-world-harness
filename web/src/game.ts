@@ -223,7 +223,7 @@ export class AlbionGame {
         enemyPosition: roundedPosition(this.enemy.position),
         enemyAttack: this.enemyAttack?.kind ?? null,
         enemyTelegraph: Boolean(this.enemyAttack && !this.enemyAttack.resolved),
-        gateOpen: this.phase === "victory",
+        gateOpen: this.gateRise >= 2.7 && !this.gate.checkCollisions,
       },
       runtimeErrors: [...this.runtimeErrors],
     };
@@ -336,7 +336,8 @@ export class AlbionGame {
   };
 
   private updateCombat(delta: number): void {
-    this.playerStamina = regenerateStamina(this.playerStamina, delta);
+    const blocking = this.input.blocking();
+    this.playerStamina = regenerateStamina(this.playerStamina, delta, blocking);
     this.dodgeCooldown = Math.max(0, this.dodgeCooldown - delta);
     this.comboWindow = Math.max(0, this.comboWindow - delta);
     if (this.comboWindow === 0 && !this.attack) this.comboStep = 0;
@@ -353,7 +354,7 @@ export class AlbionGame {
     }
     if (this.input.consumeAttack()) {
       this.unlockAudio();
-      if (!this.input.blocking()) {
+      if (!blocking) {
         if (this.attack) this.attackBuffered = true;
         else if (this.playerAction === "idle") this.startAttack();
       }
@@ -371,7 +372,7 @@ export class AlbionGame {
       this.updateDodge(delta);
     } else if (this.attack) {
       this.updatePlayerAttack(delta);
-    } else if (this.input.blocking()) {
+    } else if (blocking) {
       this.playerAction = "block";
       this.playerStamina = Math.max(0, this.playerStamina - COMBAT.blockDrainPerSecond * delta);
       this.playActor(this.playerActor, "Idle_Attacking", true);
@@ -537,7 +538,7 @@ export class AlbionGame {
       this.telegraphRing.material = this.scene.getMaterialByName(`telegraph-${kind}`);
       this.telegraphRing.isVisible = true;
       this.telegraphRing.scaling.setAll(kind === "area" ? 1.35 : 0.8);
-      this.playActor(this.enemyActor, kind === "heavy" ? "Attack2" : "Attack", false);
+      this.playActor(this.enemyActor, kind === "heavy" ? "Sword_Attack2" : "Sword_Attack", false);
       this.showFeedback(kind === "area" ? "AREA ATTACK" : kind === "heavy" ? "HEAVY ATTACK" : "SWORD ATTACK", kind);
       this.playTone(kind === "basic" ? 240 : kind === "heavy" ? 155 : 110, 0.16, "sawtooth");
     }
