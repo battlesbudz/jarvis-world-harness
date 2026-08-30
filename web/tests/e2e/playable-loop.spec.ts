@@ -40,7 +40,7 @@ async function holdUntil(page: Page, key: string, condition: (state: GameSnapsho
 }
 
 async function centerOnVillageRoad(page: Page): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
     const state = await snapshot(page);
     if (Math.abs(state.position.x) <= 1.5) return;
     await hold(page, state.position.x > 0 ? "KeyA" : "KeyD", 150);
