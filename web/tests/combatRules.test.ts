@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   COMBAT,
   banditDodgesThirdHit,
+  cappedAnimationTimeScale,
   nextEnemyAttack,
   playerAttackDamage,
   regenerateStamina,
@@ -56,5 +57,12 @@ describe("combat rules", () => {
 
   it("uses the agreed readable attack cycle", () => {
     expect([0, 1, 2, 3, 4].map(nextEnemyAttack)).toEqual(["basic", "basic", "heavy", "area", "basic"]);
+  });
+
+  it("advances actor animation on the same capped clock as combat", () => {
+    expect(cappedAnimationTimeScale(0.05, false)).toBe(1);
+    expect(cappedAnimationTimeScale(0.2, false)).toBe(0.5);
+    expect(cappedAnimationTimeScale(0.2, true)).toBe(0);
+    expect(cappedAnimationTimeScale(0, false)).toBe(0);
   });
 });

@@ -31,9 +31,15 @@ export const COMBAT = Object.freeze({
   enemyStaggerSeconds: 0.7,
   enemyRecoverySeconds: 0.38,
   defeatResetSeconds: 1.35,
+  frameCapSeconds: 0.1,
   enemyAttackCycle: Object.freeze(["basic", "basic", "heavy", "area"] as const),
   enemyTelegraphSeconds: Object.freeze({ basic: 0.58, heavy: 0.92, area: 1.12 }),
 });
+
+export function cappedAnimationTimeScale(rawDeltaSeconds: number, paused: boolean): number {
+  if (paused || rawDeltaSeconds <= 0) return 0;
+  return Math.min(rawDeltaSeconds, COMBAT.frameCapSeconds) / rawDeltaSeconds;
+}
 
 export function staminaStrength(stamina: number, cost: number): number {
   if (stamina >= cost) return 1;

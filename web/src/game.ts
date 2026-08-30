@@ -22,6 +22,7 @@ import "@babylonjs/loaders/glTF/2.0/glTFLoader.js";
 import {
   COMBAT,
   banditDodgesThirdHit,
+  cappedAnimationTimeScale,
   nextEnemyAttack,
   playerAttackDamage,
   regenerateStamina,
@@ -319,7 +320,8 @@ export class AlbionGame {
   private readonly frame = (): void => {
     if (this.disposed) return;
     try {
-      const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.1);
+      const rawDeltaSeconds = Math.max(0, this.engine.getDeltaTime() / 1000);
+      const deltaSeconds = Math.min(rawDeltaSeconds, COMBAT.frameCapSeconds);
       const pauseRequested = this.input.consumePause();
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
@@ -330,6 +332,7 @@ export class AlbionGame {
         this.updateEffects(deltaSeconds);
       }
       this.updateHud();
+      this.scene.animationTimeScale = cappedAnimationTimeScale(rawDeltaSeconds, this.paused);
       this.scene.render();
       if (!this.ready) {
         this.ready = true;

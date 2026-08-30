@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 thirteenth-review clock synchronization on 2026-08-30: Babylon animation groups now use a per-frame scene time scale derived from the exact capped combat delta and freeze while paused, so slow mobile frames cannot advance visible attacks, dodges, reactions, or defeat motion ahead of authoritative gameplay. A focused regression covers normal, capped, paused, and zero-delta clocks.
+
 - PR #11 twelfth-review animation timing on 2026-08-30: every state-bounded one-shot actor clip now derives its playback ratio from the authored clip length and the same authoritative attack, dodge, hit, stagger, recovery, guard-break, or defeat duration that advances gameplay, keeping visible motion and hit resolution synchronized.
 
 - PR #11 current-head CI scheduling on 2026-08-30: pull-request workflow runs now cancel obsolete in-progress executions so a known-bad predecessor cannot block authoritative current-head browser evidence; main-branch Pages builds remain serialized.
