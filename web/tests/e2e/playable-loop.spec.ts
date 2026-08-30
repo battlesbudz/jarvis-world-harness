@@ -95,7 +95,7 @@ test("loads a deterministic rendered village without runtime errors", async ({ p
 
 test("keyboard movement is physical and the shortcut wall blocks passage", async ({ page }, testInfo) => {
   await openGame(page);
-  await hold(page, "KeyW", 2_200);
+  await holdUntil(page, "KeyW", (state) => state.collisionCount > 0);
   const blocked = await snapshot(page);
   expect(blocked.position.z).toBeGreaterThan(-12);
   expect(blocked.position.z).toBeLessThan(-2.7);
@@ -196,11 +196,14 @@ async function defeatBandit(page: Page): Promise<void> {
     if (state.combat.phase === "victory") return;
     if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
     if (state.combat.enemyTelegraph) {
-      if (state.combat.enemyAttack === "area") {
+      if (state.combat.enemyAttack === "heavy" || state.combat.enemyAttack === "area") {
         await page.keyboard.down("KeyS");
         await page.keyboard.press("Space");
-        await page.waitForTimeout(430);
-        await page.keyboard.up("KeyS");
+        try {
+          await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, { timeout: 2_500, intervals: [40] }).toBe(false);
+        } finally {
+          await page.keyboard.up("KeyS");
+        }
       } else {
         await page.keyboard.down("ShiftLeft");
         try {
@@ -211,7 +214,7 @@ async function defeatBandit(page: Page): Promise<void> {
       }
       continue;
     }
-    if (state.combat.playerAction === "idle") {
+    if (state.combat.playerAction === "idle" && state.combat.playerStamina >= 35) {
       await page.locator("#attack").click();
       await page.waitForTimeout(220);
       await page.locator("#attack").click();
@@ -233,9 +236,10 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   await page.waitForTimeout(650);
   await page.keyboard.up("ShiftLeft");
   expect((await snapshot(page)).combat.playerStamina).toBeLessThan(staminaBeforeBlock - 2);
+  const beforeDodge = await snapshot(page);
   await page.locator("#dodge").click();
-  await page.waitForTimeout(120);
-  expect((await snapshot(page)).combat.playerAction).toBe("dodge");
+  await expect.poll(async () => (await snapshot(page)).combat.playerStamina).toBeLessThan(beforeDodge.combat.playerStamina - 10);
+  await expect.poll(async () => (await snapshot(page)).position.z).toBeGreaterThan(beforeDodge.position.z + 0.2);
   await page.getByRole("button", { name: "Pause combat" }).click();
   await expect(page.locator("#pause-overlay")).toBeVisible();
   const paused = await snapshot(page);

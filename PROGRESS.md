@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 hosted-browser hardening on 2026-08-30: the first intact-asset Chromium run loaded both character models and passed 16 scenarios, exposing only automation timing/strategy failures. Collision evidence now waits for actual wall contact across emulation speeds, dodge evidence uses durable stamina and displacement outcomes instead of sampling a transient action frame, and the legitimate combat driver reserves a full-strength combo budget while dodging heavy/area attacks instead of exhausting itself into defeat.
+
 - PR #11 second-review hardening on 2026-08-30: the route-completion destination now lies beyond the physical combat gate, with a regression proving the approach side cannot complete the scenario, and the bandit's guard-break stagger uses the Warrior asset's existing `RecieveHit` clip.
 
 - PR #11 first-review hardening on 2026-08-30: combat evidence now reports the gate open only after its physical rise disables collision, held blocking suppresses stamina regeneration so its eight-second budget drains, and the sword bandit plays its actual `Sword_Attack` clips. Character GLBs now use baseline embedded JPEG textures without decoder-dependent glTF texture extensions, asset-load failures surface directly in browser assertions, and regressions cover held-block drain plus physical gate readiness. Lint, typecheck, 12 unit tests, production build, H2 specification checks, 23 bridge tests, and the complete H1 gate pass locally; hosted Chromium remains the authoritative browser run.
