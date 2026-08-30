@@ -264,12 +264,13 @@ test("the legitimate route defeats the bandit and unlocks the village gate", asy
   await centerOnVillageRoad(page);
   await holdUntil(page, "KeyW", (state) => state.combat.phase === "engaged");
   await defeatBandit(page);
-  await expect(page.locator("#combat-feedback")).toContainText("PATH UNLOCKED");
+  await expect(page.locator("#combat-feedback")).toBeVisible();
+  await expect(page.locator("#combat-feedback")).toHaveText("PATH UNLOCKED");
+  await page.screenshot({ path: resolve(evidenceDirectory, `combat-victory-${testInfo.project.name}.png`) });
   await expect.poll(async () => (await snapshot(page)).combat.gateOpen).toBe(true);
   const combatState = await snapshot(page);
   expect(combatState.combat.enemyHealth).toBe(0);
   expect(combatState.combat.gateOpen).toBe(true);
-  await page.screenshot({ path: resolve(evidenceDirectory, `combat-victory-${testInfo.project.name}.png`) });
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "complete");
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);

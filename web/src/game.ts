@@ -297,8 +297,14 @@ export class AlbionGame {
     this.enemyDodgeElapsed = 0;
     this.defeatElapsed = 0;
     this.gateRise = 0;
+    this.impactElapsed = 0;
+    this.feedbackElapsed = 0;
     this.telegraphRing.isVisible = false;
     this.targetMarker.isVisible = false;
+    this.impactFlash.isVisible = false;
+    this.elements.combatFeedback.hidden = true;
+    this.elements.combatFeedback.value = "";
+    this.elements.canvas.parentElement?.querySelectorAll(".damage-number").forEach((element) => element.remove());
     this.elements.completion.hidden = true;
     this.elements.defeatOverlay.hidden = true;
     this.elements.status.textContent = "Ready";

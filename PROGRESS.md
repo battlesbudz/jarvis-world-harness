@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 eleventh-review hardening on 2026-08-30: browser evidence now captures `PATH UNLOCKED` while the victory feedback is visibly rendered before independently waiting for the physical gate, and world reset clears feedback timers/content, hit-flash state, and all live damage-number elements so no prior-combat effects leak into the fresh spawn.
+
 - PR #11 hosted-browser combat hardening on 2026-08-30: current predecessor evidence passed 18 of 27 scenarios and isolated the remaining failures to transient combat timing. The control scenario now waits for attack recovery before measuring held block and uses the keyboard dodge path; the legitimate driver checks telegraphs every 90 ms, advances combos one authoritative strike at a time, alternates measured lateral dodges for heavy/area attacks, holds basic guard through impact, and uses a bounded 180-second profile budget.
 
 - PR #11 tenth-review hardening on 2026-08-30: player strikes now require the same authoritative unobstructed collision-geometry ray as enemy hits before either bandit dodge or damage can resolve, preventing melee through cottage and wall corners.
