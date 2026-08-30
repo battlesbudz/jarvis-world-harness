@@ -25,8 +25,12 @@ export const COMBAT = Object.freeze({
   exhaustedDodgeDistance: 0.75,
   dodgeDurationSeconds: 0.36,
   dodgeCooldownSeconds: 0.45,
+  enemyDodgeSeconds: 0.36,
+  hitReactionSeconds: 0.28,
   guardBreakSeconds: 0.75,
   enemyStaggerSeconds: 0.7,
+  enemyRecoverySeconds: 0.38,
+  defeatResetSeconds: 1.35,
   enemyAttackCycle: Object.freeze(["basic", "basic", "heavy", "area"] as const),
   enemyTelegraphSeconds: Object.freeze({ basic: 0.58, heavy: 0.92, area: 1.12 }),
 });

@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 twelfth-review animation timing on 2026-08-30: every state-bounded one-shot actor clip now derives its playback ratio from the authored clip length and the same authoritative attack, dodge, hit, stagger, recovery, guard-break, or defeat duration that advances gameplay, keeping visible motion and hit resolution synchronized.
+
 - PR #11 current-head CI scheduling on 2026-08-30: pull-request workflow runs now cancel obsolete in-progress executions so a known-bad predecessor cannot block authoritative current-head browser evidence; main-branch Pages builds remain serialized.
 
 - PR #11 hosted-ray registration fix on 2026-08-30: line-of-sight validation now imports Babylon's side-effectful Ray entry point so hosted production registers the picking implementation before `Scene.pickWithRay`; the prior core-only import surfaced a runtime diagnostic and prevented all authoritative strike resolution in Chromium.
