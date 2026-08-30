@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 fourth-review hardening on 2026-08-30: guarded player hits preserve any active bandit attack animation through its still-authoritative impact, the area telegraph outer radius is derived from the same 2.75-meter range used for hit validation, and input clearing on pause, focus loss, or reset also discards queued attack, dodge, and pause actions.
+
 - PR #11 third-review hardening on 2026-08-30: player attacks retain their real pre-spend stamina so exhausted damage is scaled exactly once, active enemy telegraphs persist through impact even when the Bio crosses the normal melee boundary, and stopped movement returns the visible Bio to the appropriate idle animation.
 
 - PR #11 hosted-browser hardening on 2026-08-30: the first intact-asset Chromium run loaded both character models and passed 16 scenarios, exposing only automation timing/strategy failures. Collision evidence now waits for actual wall contact across emulation speeds, dodge evidence uses durable stamina and displacement outcomes instead of sampling a transient action frame, and the legitimate combat driver reserves a full-strength combo budget while dodging heavy/area attacks instead of exhausting itself into defeat.

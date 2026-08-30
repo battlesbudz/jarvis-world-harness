@@ -98,6 +98,9 @@ export function createInputController(
     keys.clear();
     stopJoystick();
     lookPointer = null;
+    attackQueued = false;
+    dodgeQueued = false;
+    pauseQueued = false;
     blockHeld = false;
     combat.block.dataset.pressed = "false";
   };

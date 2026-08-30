@@ -103,6 +103,8 @@ const AGGRO_RADIUS = 5.4;
 const LEASH_RADIUS = 6.2;
 const PLAYER_RANGE = 2.05;
 const ENEMY_RANGE = 2.15;
+const AREA_ATTACK_RANGE = 2.75;
+const TELEGRAPH_OUTER_RADIUS = 3.4 / 2 + 0.12 / 2;
 const BODY_DISTANCE = 0.92;
 
 export class AlbionGame {
@@ -485,7 +487,7 @@ export class AlbionGame {
       this.playActor(this.enemyActor, "RecieveHit", false);
     } else {
       this.showFeedback("BLOCKED · HALF DAMAGE", "muted");
-      this.playActor(this.enemyActor, "Idle_Attacking", true);
+      if (!this.enemyAttack) this.playActor(this.enemyActor, "Idle_Attacking", true);
     }
     if (this.enemyHealth <= 0) this.winCombat();
   }
@@ -536,7 +538,7 @@ export class AlbionGame {
       this.enemyAttack = { kind, elapsed: 0, resolved: false };
       this.telegraphRing.material = this.scene.getMaterialByName(`telegraph-${kind}`);
       this.telegraphRing.isVisible = true;
-      this.telegraphRing.scaling.setAll(kind === "area" ? 1.35 : 0.8);
+      this.telegraphRing.scaling.setAll(kind === "area" ? AREA_ATTACK_RANGE / TELEGRAPH_OUTER_RADIUS : 0.8);
       this.playActor(this.enemyActor, kind === "heavy" ? "Sword_Attack2" : "Sword_Attack", false);
       this.showFeedback(kind === "area" ? "AREA ATTACK" : kind === "heavy" ? "HEAVY ATTACK" : "SWORD ATTACK", kind);
       this.playTone(kind === "basic" ? 240 : kind === "heavy" ? 155 : 110, 0.16, "sawtooth");
@@ -558,7 +560,7 @@ export class AlbionGame {
   }
 
   private applyEnemyHit(kind: EnemyAttackKind): void {
-    const range = kind === "area" ? 2.75 : ENEMY_RANGE;
+    const range = kind === "area" ? AREA_ATTACK_RANGE : ENEMY_RANGE;
     if (Vector3.Distance(this.player.position, this.enemy.position) > range) {
       this.showFeedback("EVADED", "success");
       return;
