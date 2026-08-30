@@ -41,7 +41,8 @@ export interface MovementInput {
 }
 
 export const SPAWN = Object.freeze({ x: 0, y: 0.9, z: -12 });
-export const DESTINATION = Object.freeze({ x: 0, z: 10 });
+// The combat gate is centered at z=10.8; completion must be beyond its far side.
+export const DESTINATION = Object.freeze({ x: 0, z: 14 });
 export const H2_SEED = "h2-babylon-foundation-v1";
 
 export function clamp(value: number, minimum: number, maximum: number): number {

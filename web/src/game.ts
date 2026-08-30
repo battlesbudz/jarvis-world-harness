@@ -482,7 +482,7 @@ export class AlbionGame {
       this.enemyAttack = null;
       this.telegraphRing.isVisible = false;
       this.showFeedback("GUARD BROKEN", "success");
-      this.playActor(this.enemyActor, "RecieveHit_2", false);
+      this.playActor(this.enemyActor, "RecieveHit", false);
     } else {
       this.showFeedback("BLOCKED · HALF DAMAGE", "muted");
       this.playActor(this.enemyActor, "Idle_Attacking", true);
