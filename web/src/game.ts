@@ -150,6 +150,7 @@ export class AlbionGame {
   private enemyAttackIndex = 0;
   private enemyAttackCooldown = 0.7;
   private enemyStaggerElapsed = 0;
+  private enemyDodgeElapsed = 0;
   private defeatElapsed = 0;
   private gateRise = 0;
   private impactElapsed = 0;
@@ -292,6 +293,7 @@ export class AlbionGame {
     this.enemyAttackIndex = 0;
     this.enemyAttackCooldown = 0.7;
     this.enemyStaggerElapsed = 0;
+    this.enemyDodgeElapsed = 0;
     this.defeatElapsed = 0;
     this.gateRise = 0;
     this.telegraphRing.isVisible = false;
@@ -419,6 +421,7 @@ export class AlbionGame {
     this.enemyAttack = null;
     this.enemyAttackCooldown = 0.7;
     this.enemyAttackIndex = 0;
+    this.enemyDodgeElapsed = 0;
     this.telegraphRing.isVisible = false;
     this.completedCombos = 0;
     this.elements.status.textContent = "Bandit disengaged";
@@ -476,6 +479,11 @@ export class AlbionGame {
     if (attack.step === 3 && banditDodgesThirdHit(this.completedCombos)) {
       const side = new Vector3(toward.z, 0, -toward.x).normalize();
       this.enemy.position.addInPlace(side.scale(1.35));
+      if (this.enemyAttack) this.enemyAttackIndex += 1;
+      this.enemyAttack = null;
+      this.enemyAttackCooldown = 0.58;
+      this.enemyDodgeElapsed = 0.36;
+      this.telegraphRing.isVisible = false;
       this.playActor(this.enemyActor, "Roll", false);
       this.showFeedback("DODGED", "warning");
       this.playTone(150, 0.1, "sine");
@@ -529,6 +537,11 @@ export class AlbionGame {
   private updateEnemy(delta: number): void {
     if (this.enemyStaggerElapsed > 0) {
       this.enemyStaggerElapsed = Math.max(0, this.enemyStaggerElapsed - delta);
+      return;
+    }
+    if (this.enemyDodgeElapsed > 0) {
+      this.enemyDodgeElapsed = Math.max(0, this.enemyDodgeElapsed - delta);
+      if (this.enemyDodgeElapsed === 0) this.playActor(this.enemyActor, "Idle_Attacking", true);
       return;
     }
     const toward = this.player.position.subtract(this.enemy.position);
@@ -820,7 +833,7 @@ export class AlbionGame {
   }
 
   private playActor(actor: LoadedActor | null, name: string, loop: boolean): void {
-    if (!actor || actor.current === name) return;
+    if (!actor || (actor.current === name && loop)) return;
     for (const animation of actor.animations.values()) animation.stop();
     const animation = actor.animations.get(name) ?? actor.animations.get("Idle");
     animation?.start(loop, 1, animation.from, animation.to, false);
