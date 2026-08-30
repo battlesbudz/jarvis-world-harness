@@ -205,23 +205,15 @@ async function defeatBandit(page: Page): Promise<void> {
             : state.combat.enemyPosition.x >= state.position.x
               ? "KeyA"
               : "KeyD";
-        const beforeDodge = state;
         await page.keyboard.down(dodgeKey);
         await page.keyboard.press("Space");
         try {
           await expect
-            .poll(async () => {
-              const current = await snapshot(page);
-              const displacement = Math.hypot(
-                current.position.x - beforeDodge.position.x,
-                current.position.z - beforeDodge.position.z,
-              );
-              return current.combat.playerAction === "dodge" || displacement > 0.3;
-            }, {
+            .poll(async () => (await snapshot(page)).combat.playerAction, {
               timeout: 10_000,
               intervals: [30],
             })
-            .toBe(true);
+            .toBe("dodge");
         } finally {
           await page.keyboard.up(dodgeKey);
         }
