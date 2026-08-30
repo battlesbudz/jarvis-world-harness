@@ -65,6 +65,7 @@ Automated evidence must prove all of the following from a resettable start state
 6. World OS selects and proposes the Non-Thinker's role-routine step and the Thinker's goal- or values-backed choice; the game client validates and performs both without reimplementing their cognition rules.
 7. System UI exposes health, target/interaction state, and combat feedback while omitting awakening progress.
 8. The complete path runs without a crash, softlock, browser runtime error, unresolved validation failure, or surviving test process.
+9. Codex completes one vision-first route attempt by choosing bounded keyboard, pointer, or touch actions from successive rendered screenshots rather than receiving a scripted route or private game-state telemetry.
 
 ## Evidence and visual QA
 
@@ -80,6 +81,12 @@ Visual evidence is captured from the running browser game, not from a free camer
 
 Evidence tooling must identify the exact project revision and scenario. Screenshots or video without matching machine-readable run evidence do not pass. Visual review must record what was inspected; file existence alone is insufficient. Automated mobile emulation covers touch and responsive behavior, while at least one operator check on the deployed URL covers the physical target phone before H2 closes.
 
+### Codex-operated visual lane
+
+The deterministic Playwright scenarios remain the fast regression authority. A separate Codex-operated lane proves that the development agent can actually observe and operate the rendered world. Playwright supplies only bounded keyboard, pointer, touch, screenshot, and browser-lifecycle mechanics; Codex chooses each action from the current screenshot.
+
+The Codex operator must not receive `window.__JARVIS_H2__`, coordinates, checkpoint names, DOM or accessibility extraction, repository source, terminal access, web search, or a predetermined action sequence. The runner rejects any Codex tool call and records the structured model decision, exact bounded input, screenshot, and complete model event stream for each step. A separate evaluator may privately read authoritative state, but it returns only accepted completion or a rejected premature finish to the operator. The operator cannot declare its own run successful.
+
 ## Executable evidence contract
 
 `milestones/H2/gate.json` defines completion with separate checks for:
@@ -90,6 +97,7 @@ Evidence tooling must identify the exact project revision and scenario. Screensh
 - browser movement, collision, combat, and System UI;
 - end-to-end cognition/bridge behavior and causal evidence;
 - captured mobile-browser visual evidence and runtime-log cleanliness.
+- a Codex-operated vision-first route with independent pass/fail evidence and no hidden operator inputs or tool use.
 
 Implementation commands are named before each H2 slice begins. Missing commands or evidence keep H2 incomplete; they do not permit the milestone to weaken or skip a criterion.
 

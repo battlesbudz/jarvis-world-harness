@@ -2,6 +2,8 @@
 
 Record human diagnoses, manual code interventions, changed acceptance criteria, model/runtime changes, and major environment changes during an autonomous milestone.
 
+- 2026-08-30: At operator direction during H2, the acceptance contract now explicitly requires a Codex-operated visual playtest in addition to deterministic Playwright regression routes. This records the clarified product intent that Codex itself must observe successive rendered frames and choose bounded controls. The lane separates Codex-visible screenshots from evaluator-private authoritative state and rejects terminal, source, DOM, web, hidden-coordinate, or predetermined-route access.
+
 - 2026-08-29: At operator direction, H2 changed from an Unreal-specific desktop prototype to a phone-first Babylon.js mobile-web prototype because no dedicated Unreal development host is available and direct phone testing through a temporary URL is the priority. The validated engine/World OS authority boundary and all protected product laws remain unchanged; Unreal is retained as a deferred client option.
 
 - 2026-08-13: PR #1 Codex review identified that a timed-out gate leader could exit before SIGKILL escalation while a stubborn descendant retained inherited pipes. The harness implementation and regression were manually updated in response; product laws and acceptance criteria were unchanged.

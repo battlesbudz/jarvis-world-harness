@@ -8,14 +8,17 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "typecheck": "tsc -b --pretty false",
-    "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test": "vitest run && node --test tools/codex-operator/*.test.mjs",
+    "test:e2e": "playwright test",
+    "test:codex-operator": "node tools/codex-operator/run.mjs",
+    "verify:codex-operator": "node tools/codex-operator/verify-report.mjs"
   },
   "dependencies": {
     "@babylonjs/core": "9.23.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@openai/codex": "0.151.0",
     "@playwright/test": "1.62.1",
     "@types/node": "24.10.9",
     "eslint": "10.9.1",

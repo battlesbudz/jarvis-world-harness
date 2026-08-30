@@ -109,6 +109,15 @@ npm run test:e2e
 
 The browser tests drive real keyboard, pointer, and touch events through the greybox and write ignored screenshots plus machine-readable state under `.harness/evidence/h2/`.
 
+Run the separate vision-first Codex operator lane with:
+
+```bash
+OPENAI_API_KEY=... npm run test:codex-operator
+npm run verify:codex-operator
+```
+
+This lane keeps Chromium alive while Codex chooses bounded inputs from successive screenshots. A private evaluator—not Codex—judges completion, and any terminal, file, web, DOM, or hidden-state tool use invalidates the run. See `docs/CODEX-VISUAL-PLAYTEST.md` for the trust boundary and evidence format.
+
 ## Important files
 
 - `AGENTS.md` — Codex operating contract.

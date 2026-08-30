@@ -6,4 +6,5 @@
 4. Implement the Bio controller, touch/keyboard input, simple combat loop, and minimum System UI using placeholder assets.
 5. Host the World OS behind the narrow bridge transport, then connect a minimal stable-identity cast and show one Thinker behavior and one routine-driven Non-Thinker behavior.
 6. Add deterministic browser automation, bridge logs, screenshots, and visual assertions for the complete playable path.
-7. Keep H1 regressions green and stop H2 only when every executable and visual evidence check passes.
+7. Add a Codex-operated vision-first lane in which Codex receives only rendered screenshots and bounded controls, while a separate evaluator privately judges authoritative state and records every decision and action.
+8. Keep H1 regressions green and stop H2 only when every executable and visual evidence check passes.

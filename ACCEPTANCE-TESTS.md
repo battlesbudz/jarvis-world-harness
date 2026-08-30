@@ -51,5 +51,6 @@ The prototype must prove a playable Babylon.js/World OS boundary in one small mo
 - [ ] World OS selects the Non-Thinker's role routine and the Thinker's goal- or values-backed choice; the game client only validates and performs them, and neither behavior is a cosmetic label-only distinction.
 - [ ] A deterministic end-to-end browser scenario emits machine-readable bridge, validation, engine outcome, and causal trace evidence.
 - [ ] Captured mobile-browser evidence includes an establishing view, player traversal, combat feedback, System UI, and both cognition behaviors.
+- [ ] A Codex-operated playtest uses rendered screenshots and bounded browser inputs to choose its own route actions; hidden coordinates, checkpoints, DOM, source code, terminal tools, and a predetermined route remain unavailable to the operator, while an independent evaluator records authoritative pass/fail evidence.
 - [ ] The required scenario completes without crashes, softlocks, browser runtime errors, or unresolved validation failures.
 - [ ] H2 uses placeholder/greybox content and does not silently expand into awakening, final art, procedural cities, or a large open world.
