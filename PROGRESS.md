@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 fifth-review hardening on 2026-08-30: pause requests are consumed but ignored during the defeat delay so its automatic reset cannot be hidden behind an inaccessible overlay, and damaging hits now hold an explicit short reaction state that cancels an interrupted attack and keeps the Bio's hit animation visible before locomotion resumes.
+
 - PR #11 fourth-review hardening on 2026-08-30: guarded player hits preserve any active bandit attack animation through its still-authoritative impact, the area telegraph outer radius is derived from the same 2.75-meter range used for hit validation, and input clearing on pause, focus loss, or reset also discards queued attack, dodge, and pause actions.
 
 - PR #11 third-review hardening on 2026-08-30: player attacks retain their real pre-spend stamina so exhausted damage is scaled exactly once, active enemy telegraphs persist through impact even when the Bio crosses the normal melee boundary, and stopped movement returns the visible Bio to the appropriate idle animation.

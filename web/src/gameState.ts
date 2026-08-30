@@ -1,6 +1,6 @@
 export type RouteCheckpoint = "spawn" | "bend" | "square" | "complete";
 export type CombatPhase = "approach" | "engaged" | "victory" | "defeat";
-export type CombatAction = "idle" | "attack-1" | "attack-2" | "attack-3" | "block" | "dodge" | "guard-broken";
+export type CombatAction = "idle" | "attack-1" | "attack-2" | "attack-3" | "block" | "dodge" | "hit" | "guard-broken";
 
 export interface Position3 {
   x: number;

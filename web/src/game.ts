@@ -142,6 +142,7 @@ export class AlbionGame {
   private dodgeCooldown = 0;
   private dodgeVelocity = Vector3.Zero();
   private guardBreakElapsed = 0;
+  private hitReactionElapsed = 0;
   private comboStep = 0;
   private comboWindow = 0;
   private completedCombos = 0;
@@ -283,6 +284,7 @@ export class AlbionGame {
     this.dodgeElapsed = 0;
     this.dodgeCooldown = 0;
     this.guardBreakElapsed = 0;
+    this.hitReactionElapsed = 0;
     this.comboStep = 0;
     this.comboWindow = 0;
     this.completedCombos = 0;
@@ -308,7 +310,8 @@ export class AlbionGame {
     if (this.disposed) return;
     try {
       const deltaSeconds = Math.min(this.engine.getDeltaTime() / 1000, 0.1);
-      if (this.input.consumePause()) this.setPaused(!this.paused);
+      const pauseRequested = this.input.consumePause();
+      if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
         this.updateCombat(deltaSeconds);
         if (this.phase !== "defeat") this.movePlayer(deltaSeconds);
@@ -370,6 +373,10 @@ export class AlbionGame {
       this.guardBreakElapsed = Math.max(0, this.guardBreakElapsed - delta);
       this.playerAction = "guard-broken";
       if (this.guardBreakElapsed === 0) this.playerAction = "idle";
+    } else if (this.hitReactionElapsed > 0) {
+      this.hitReactionElapsed = Math.max(0, this.hitReactionElapsed - delta);
+      this.playerAction = "hit";
+      if (this.hitReactionElapsed === 0) this.playerAction = "idle";
     } else if (this.dodgeElapsed > 0) {
       this.updateDodge(delta);
     } else if (this.attack) {
@@ -577,14 +584,21 @@ export class AlbionGame {
       this.playTone(72, 0.18, "square");
     }
     if (result.guardBroken) {
+      this.hitReactionElapsed = 0;
       this.guardBreakElapsed = COMBAT.guardBreakSeconds;
       this.playerAction = "guard-broken";
       this.showFeedback("GUARD BROKEN", "danger");
-    } else if (result.blocked && result.damage === 0) {
+    } else if (result.damage > 0) {
+      this.attack = null;
+      this.attackBuffered = false;
+      this.dodgeBuffered = false;
+      this.hitReactionElapsed = 0.28;
+      this.playerAction = "hit";
+      this.showFeedback(result.blocked ? "HEAVY BLOCK · CHIP DAMAGE" : `-${Math.round(result.damage)} HEALTH`, result.blocked ? "warning" : "danger");
+    } else if (result.blocked) {
       this.showFeedback("BLOCKED", "success");
       this.playTone(420, 0.07, "triangle");
-    } else if (result.blocked) this.showFeedback("HEAVY BLOCK · CHIP DAMAGE", "warning");
-    else this.showFeedback(`-${Math.round(result.damage)} HEALTH`, "danger");
+    }
     if (this.playerHealth <= 0) this.loseCombat();
   }
 
@@ -608,6 +622,7 @@ export class AlbionGame {
     this.telegraphRing.isVisible = false;
     this.attack = null;
     this.playerAction = "idle";
+    this.hitReactionElapsed = 0;
     this.defeatElapsed = 0;
     this.elements.defeatOverlay.hidden = false;
     this.elements.status.textContent = "Bio defeated";
