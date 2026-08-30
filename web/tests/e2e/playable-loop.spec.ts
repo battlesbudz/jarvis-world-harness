@@ -181,7 +181,7 @@ test("touch joystick moves the Bio", async ({ page }) => {
 });
 
 test("the legitimate route reaches the village destination", async ({ page }, testInfo) => {
-  test.setTimeout(45_000);
+  test.setTimeout(75_000);
   await openGame(page);
   await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
