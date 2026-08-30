@@ -31,6 +31,13 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run build
+      - name: Stamp deployment revision
+        if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        run: >-
+          node --input-type=module -e 'import { writeFileSync } from "node:fs";
+          writeFileSync("dist/deployment.json", JSON.stringify({ revision: process.env.H2_REVISION }) + "\n")'
+        env:
+          H2_REVISION: ${{ github.sha }}
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
         env:
@@ -58,9 +65,38 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
       - name: Deploy GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+  verify-production:
+    needs: deploy-pages
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Drive the deployed world
+        run: npm run test:e2e
+        env:
+          H2_BASE_URL: ${{ needs.deploy-pages.outputs.page_url }}
+          H2_REVISION: ${{ github.sha }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: h2-production-browser-evidence
+          path: .harness/evidence/h2
+          if-no-files-found: error

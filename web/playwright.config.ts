@@ -1,5 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const productionBaseUrl = process.env.H2_BASE_URL?.replace(/\/?$/, "/");
+
 export default defineConfig({
   testDir: "./tests/e2e",
   timeout: 30_000,
@@ -10,7 +12,7 @@ export default defineConfig({
   reporter: process.env.CI ? [["line"], ["html", { open: "never" }]] : "line",
   outputDir: "../.harness/evidence/h2/playwright",
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: productionBaseUrl ?? "http://127.0.0.1:4173",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -42,7 +44,7 @@ export default defineConfig({
       },
     },
   ],
-  webServer: {
+  webServer: productionBaseUrl ? undefined : {
     command: "npm run dev -- --host 127.0.0.1",
     url: "http://127.0.0.1:4173",
     reuseExistingServer: false,

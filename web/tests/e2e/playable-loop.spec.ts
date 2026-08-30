@@ -9,10 +9,16 @@ const evidenceDirectory = resolve(process.cwd(), "../.harness/evidence/h2");
 async function openGame(page: Page): Promise<void> {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
-  await page.goto("/?test=1", { waitUntil: "load" });
+  await page.goto("./?test=1", { waitUntil: "load" });
   await expect.poll(() => page.evaluate(() => window.__JARVIS_H2__?.snapshot().ready)).toBe(true);
   expect(pageErrors).toEqual([]);
 }
+
+test("production deployment matches the tested revision", async ({ request }) => {
+  test.skip(!process.env.H2_BASE_URL, "deployment metadata exists only in published builds");
+  const response = await request.get("./deployment.json", { failOnStatusCode: true });
+  expect(await response.json()).toEqual({ revision: projectRevision() });
+});
 
 async function snapshot(page: Page): Promise<GameSnapshot> {
   return page.evaluate(() => window.__JARVIS_H2__.snapshot());
