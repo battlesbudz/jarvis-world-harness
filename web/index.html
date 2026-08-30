@@ -15,13 +15,50 @@
         <strong id="status">Loading Albion…</strong>
         <span id="objective">Preparing the Bio spawn</span>
       </section>
-      <button id="reset" type="button" aria-label="Reset to Bio spawn">Reset</button>
+      <section id="player-hud" aria-label="Player combat status">
+        <div class="meter-row health-row">
+          <span>Health</span><output id="health-value">100 / 100</output>
+          <div class="meter"><div id="health-fill" class="meter-fill"></div></div>
+        </div>
+        <div class="meter-row stamina-row">
+          <span>Stamina</span><output id="stamina-value">100 / 100</output>
+          <div class="meter"><div id="stamina-fill" class="meter-fill"></div></div>
+        </div>
+      </section>
+      <div id="top-actions">
+        <button id="pause" type="button" aria-label="Pause combat">Pause</button>
+        <button id="reset" type="button" aria-label="Reset to Bio spawn">Reset</button>
+      </div>
       <div id="joystick" role="group" aria-label="Movement joystick">
         <div id="joystick-knob"></div>
       </div>
-      <div id="look-hint">Drag to look</div>
+      <div id="combat-controls" role="group" aria-label="Combat controls">
+        <button id="block" class="combat-button defense" type="button">Block</button>
+        <button id="dodge" class="combat-button defense" type="button">Dodge</button>
+        <button id="attack" class="combat-button attack" type="button">Attack</button>
+      </div>
+      <div id="look-hint">Drag to look · click to attack</div>
+      <div id="enemy-widget" hidden aria-label="Locked enemy">
+        <span class="target-marker">◆</span>
+        <strong>Sword Bandit</strong>
+        <div class="enemy-meter"><div id="enemy-health-fill"></div></div>
+      </div>
+      <output id="combat-feedback" hidden aria-live="assertive"></output>
       <output id="completion" hidden>Route complete — Albion is reachable.</output>
       <output id="diagnostics" hidden></output>
+      <section id="pause-overlay" class="screen-overlay" hidden>
+        <div class="overlay-card">
+          <span class="eyebrow">SYSTEM</span>
+          <h1>Combat paused</h1>
+          <button id="resume" type="button">Resume</button>
+        </div>
+      </section>
+      <section id="defeat-overlay" class="screen-overlay defeat" hidden>
+        <div class="overlay-card">
+          <span class="eyebrow">BIO DEFEATED</span>
+          <h1>The route resets…</h1>
+        </div>
+      </section>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>

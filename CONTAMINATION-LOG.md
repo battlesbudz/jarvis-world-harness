@@ -2,6 +2,8 @@
 
 Record human diagnoses, manual code interventions, changed acceptance criteria, model/runtime changes, and major environment changes during an autonomous milestone.
 
+- 2026-08-30: The operator specified the H2 combat design through an interactive interview: deliberate tap attacks; smart persistent target lock; lock-on strafing; unarmed timed three-hit combos with the third hit breaking guard; free movement during attacks; bounded attack closing; a sword bandit with a readable basic/basic/heavy/area cycle; block and physical-distance dodge; a shared continuously regenerating stamina economy; deterministic defensive patterns; HUD, sound, pause, defeat/reset, and gate-unlock behavior; landscape-first responsive controls; and temporary free legal anime-adjacent fantasy assets. These choices fill the already-authorized H2 combat/UI scope without changing protected laws or adding H3 awakening work.
+
 - 2026-08-29: At operator direction, H2 changed from an Unreal-specific desktop prototype to a phone-first Babylon.js mobile-web prototype because no dedicated Unreal development host is available and direct phone testing through a temporary URL is the priority. The validated engine/World OS authority boundary and all protected product laws remain unchanged; Unreal is retained as a deferred client option.
 
 - 2026-08-13: PR #1 Codex review identified that a timed-out gate leader could exit before SIGKILL escalation while a stubborn descendant retained inherited pipes. The harness implementation and regression were manually updated in response; product laws and acceptance criteria were unchanged.

@@ -11,6 +11,7 @@ async function openGame(page: Page): Promise<void> {
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto("./?test=1", { waitUntil: "load" });
   await expect.poll(() => page.evaluate(() => window.__JARVIS_H2__?.snapshot().ready)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__JARVIS_H2__?.snapshot().assetsReady), { timeout: 15_000 }).toBe(true);
   expect(pageErrors).toEqual([]);
 }
 
@@ -140,12 +141,16 @@ test("focus loss clears held movement", async ({ page }) => {
   await page.keyboard.down("KeyD");
   await page.waitForTimeout(300);
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(page.locator("#pause-overlay")).toBeVisible();
   const stopped = await snapshot(page);
   await page.waitForTimeout(400);
   await page.keyboard.up("KeyD");
   const settled = await snapshot(page);
   expect(Math.abs(settled.position.x - stopped.position.x)).toBeLessThan(0.2);
+  expect(settled.paused).toBe(true);
   expect(settled.runtimeErrors).toEqual([]);
+  await page.getByRole("button", { name: "Resume" }).click();
+  expect((await snapshot(page)).paused).toBe(false);
 });
 
 test("a back-forward-cache page hide keeps the game playable", async ({ page }) => {
@@ -180,12 +185,71 @@ test("touch joystick moves the Bio", async ({ page }) => {
   expect(state.runtimeErrors).toEqual([]);
 });
 
-test("the legitimate route reaches the village destination", async ({ page }, testInfo) => {
-  test.setTimeout(75_000);
+async function defeatBandit(page: Page): Promise<void> {
+  const deadline = Date.now() + 60_000;
+  while (Date.now() < deadline) {
+    const state = await snapshot(page);
+    if (state.combat.phase === "victory") return;
+    if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
+    if (state.combat.enemyTelegraph) {
+      if (state.combat.enemyAttack === "area") {
+        await page.keyboard.down("KeyS");
+        await page.keyboard.press("Space");
+        await page.waitForTimeout(430);
+        await page.keyboard.up("KeyS");
+      } else {
+        await page.keyboard.down("ShiftLeft");
+        try {
+          await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, { timeout: 2_500, intervals: [40] }).toBe(false);
+        } finally {
+          await page.keyboard.up("ShiftLeft");
+        }
+      }
+      continue;
+    }
+    if (state.combat.playerAction === "idle") {
+      await page.locator("#attack").click();
+      await page.waitForTimeout(220);
+      await page.locator("#attack").click();
+      await page.waitForTimeout(410);
+      await page.locator("#attack").click();
+    }
+    await page.waitForTimeout(180);
+  }
+  throw new Error(`bandit did not fall: ${JSON.stringify(await snapshot(page))}`);
+}
+
+test("combat controls expose stamina, blocking, dodge, and pause", async ({ page }) => {
+  await openGame(page);
+  await page.locator("#attack").click();
+  await page.waitForTimeout(90);
+  expect((await snapshot(page)).combat.playerStamina).toBeLessThan(100);
+  await page.keyboard.down("ShiftLeft");
+  await page.waitForTimeout(300);
+  await page.keyboard.up("ShiftLeft");
+  await page.locator("#dodge").click();
+  await page.waitForTimeout(120);
+  expect((await snapshot(page)).combat.playerAction).toBe("dodge");
+  await page.getByRole("button", { name: "Pause combat" }).click();
+  await expect(page.locator("#pause-overlay")).toBeVisible();
+  const paused = await snapshot(page);
+  await page.waitForTimeout(350);
+  expect(await snapshot(page)).toEqual(paused);
+});
+
+test("the legitimate route defeats the bandit and unlocks the village gate", async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
   await openGame(page);
   await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
   await centerOnVillageRoad(page);
+  await holdUntil(page, "KeyW", (state) => state.combat.phase === "engaged");
+  await defeatBandit(page);
+  await expect(page.locator("#combat-feedback")).toContainText("PATH UNLOCKED");
+  const combatState = await snapshot(page);
+  expect(combatState.combat.enemyHealth).toBe(0);
+  expect(combatState.combat.gateOpen).toBe(true);
+  await page.screenshot({ path: resolve(evidenceDirectory, `combat-victory-${testInfo.project.name}.png`) });
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "complete");
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);
@@ -197,7 +261,12 @@ test("the legitimate route reaches the village destination", async ({ page }, te
     resolve(evidenceDirectory, `traversal-${testInfo.project.name}.json`),
     `${JSON.stringify({ revision: projectRevision(), scenario: H2_SCENARIO, environment, finalState }, null, 2)}\n`,
   );
+  await writeFile(
+    resolve(evidenceDirectory, `combat-${testInfo.project.name}.json`),
+    `${JSON.stringify({ revision: projectRevision(), scenario: H2_COMBAT_SCENARIO, environment, combatState }, null, 2)}\n`,
+  );
 });
 
 const H2_SCENARIO = "h2-babylon-greybox-traversal-v1";
 const H2_COLLISION_SCENARIO = "h2-babylon-blocked-shortcut-v1";
+const H2_COMBAT_SCENARIO = "h2-babylon-bandit-combat-v1";

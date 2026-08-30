@@ -1,4 +1,6 @@
 export type RouteCheckpoint = "spawn" | "bend" | "square" | "complete";
+export type CombatPhase = "approach" | "engaged" | "victory" | "defeat";
+export type CombatAction = "idle" | "attack-1" | "attack-2" | "attack-3" | "block" | "dodge" | "guard-broken";
 
 export interface Position3 {
   x: number;
@@ -14,6 +16,22 @@ export interface GameSnapshot {
   yaw: number;
   checkpoint: RouteCheckpoint;
   collisionCount: number;
+  paused: boolean;
+  assetsReady: boolean;
+  combat: {
+    phase: CombatPhase;
+    targetLocked: boolean;
+    playerHealth: number;
+    playerStamina: number;
+    playerAction: CombatAction;
+    comboStep: number;
+    enemyHealth: number;
+    enemyHome: Position3;
+    enemyPosition: Position3;
+    enemyAttack: "basic" | "heavy" | "area" | null;
+    enemyTelegraph: boolean;
+    gateOpen: boolean;
+  };
   runtimeErrors: string[];
 }
 
