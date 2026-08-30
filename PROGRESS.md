@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 current-head CI scheduling on 2026-08-30: pull-request workflow runs now cancel obsolete in-progress executions so a known-bad predecessor cannot block authoritative current-head browser evidence; main-branch Pages builds remain serialized.
+
 - PR #11 hosted-ray registration fix on 2026-08-30: line-of-sight validation now imports Babylon's side-effectful Ray entry point so hosted production registers the picking implementation before `Scene.pickWithRay`; the prior core-only import surfaced a runtime diagnostic and prevented all authoritative strike resolution in Chromium.
 
 - PR #11 eleventh-review hardening on 2026-08-30: browser evidence now captures `PATH UNLOCKED` while the victory feedback is visibly rendered before independently waiting for the physical gate, and world reset clears feedback timers/content, hit-flash state, and all live damage-number elements so no prior-combat effects leak into the fresh spawn.

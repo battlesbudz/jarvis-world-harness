@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('h2-web-pr-{0}', github.event.pull_request.number) || 'h2-pages' }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   web-foundation:
