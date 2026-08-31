@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 authoritative strike-budget consumption on 2026-08-31: after each attack click, the route waits for authoritative `attack-*` state or at least five stamina spent before decrementing the cycle budget, preventing two slow-frame clicks from collapsing into one boolean queued action and starving hosted combat damage.
+
 - PR #11 recovery-window attack cadence on 2026-08-31: the route permits one safe opening strike, then no more than two strikes after each defensively resolved telegraph, fitting their combined timing inside the authoritative 380 ms enemy recovery plus 580 ms cooldown. No additional combo can overlap the next basic guard, while a 30-stamina floor preserves its impact budget.
 
 - PR #11 ground-plane telegraph correction on 2026-08-31: Babylon's torus warning mesh now retains its authored horizontal XZ orientation at ground height, so the scaled basic, heavy, and area rings visibly outline their authoritative hit-validation radius instead of standing vertically and extending underground.

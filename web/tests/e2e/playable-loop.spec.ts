@@ -372,7 +372,18 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
       && state.combat.playerAction === "idle"
       && state.combat.playerStamina >= 30
     ) {
+      const staminaBeforeAttack = state.combat.playerStamina;
       await page.locator("#attack").click();
+      await expect
+        .poll(async () => {
+          const current = await snapshot(page);
+          return current.combat.playerAction.startsWith("attack-")
+            || current.combat.playerStamina <= staminaBeforeAttack - 5;
+        }, {
+          timeout: 10_000,
+          intervals: [30],
+        })
+        .toBe(true);
       attacksRemaining -= 1;
     }
     await page.waitForTimeout(90);
