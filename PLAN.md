@@ -7,3 +7,4 @@
 5. Host the World OS behind the narrow bridge transport, then connect a minimal stable-identity cast and show one Thinker behavior and one routine-driven Non-Thinker behavior.
 6. Add deterministic browser automation, bridge logs, screenshots, and visual assertions for the complete playable path.
 7. Keep H1 regressions green and stop H2 only when every executable and visual evidence check passes.
+8. Repair PR #11's post-victory route driver so it uses continuous browser-frame movement, proves the opened gate can be traversed on every required viewport, and preserves real-input evidence.
