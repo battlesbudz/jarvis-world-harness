@@ -273,6 +273,12 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
           await page.keyboard.up("ShiftLeft");
         }
         const guarded = await snapshot(page);
+        if (guarded.combat.phase === "victory") {
+          if (!capturedVisibleFeedback) {
+            throw new Error("bandit fell without captured visible player-hit feedback");
+          }
+          return;
+        }
         expect(guarded.resetId).toBe(resetBeforeGuard);
         expect(guarded.combat.phase).toBe("engaged");
         expect(guarded.combat.playerHealth).toBe(healthBeforeGuard);

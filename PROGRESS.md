@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 basic-telegraph victory cancellation on 2026-08-31: if a pending Bio strike legitimately defeats the bandit and cancels a basic telegraph, the guard branch now accepts the authoritative victory only after confirming required visible-hit evidence was already captured; non-victory resolutions still require unchanged health/reset and continued engagement.
+
 - PR #11 authoritative basic-block proof on 2026-08-31: strikes now begin only with a 50-stamina reserve, leaving enough for the attack cost, held-block drain, and basic impact. Every short-telegraph defense independently proves unchanged health, unchanged reset identity, and continued engagement after resolution instead of accepting telegraph disappearance as success.
 
 - PR #11 throttled-frame basic defense on 2026-08-31: the deterministic route now holds authoritative guard through the short 580 ms basic telegraph, which hosted capped frames could resolve before ordinary locomotion established separation. Longer heavy and area attacks still require proven physical separation, and the independent controls scenario still exercises stamina drain plus keyboard dodge displacement.
