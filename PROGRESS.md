@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 visible-feedback evidence correction on 2026-08-31: each combat profile now captures its required `combat-victory` evidence on the first authoritative damaging hit while the hit feedback is visibly rendered, then records a distinct later `gate-open` image after persistent collision state proves the route is physically available.
+
 - PR #11 hosted range/evidence stabilization on 2026-08-31: the legitimate combat driver now spends stamina only inside the Bio's authoritative closing-step range instead of repeatedly missing after a physical evade. Victory screenshots and assertions wait for persistent enemy-health and physical-gate state while retaining the transient feedback text as context, so slow runners cannot reject a real win merely because the banner's display timer elapsed.
 
 - PR #11 physical-evasion proof completion on 2026-08-31: route defense can no longer treat telegraph resolution itself as a successful evade; held movement ends only after the authoritative snapshot proves player/enemy separation exceeds the attack range, then independently confirms the telegraph has resolved.

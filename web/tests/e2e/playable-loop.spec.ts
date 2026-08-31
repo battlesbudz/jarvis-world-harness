@@ -231,10 +231,18 @@ test("touch joystick moves the Bio", async ({ page }) => {
   expect(state.runtimeErrors).toEqual([]);
 });
 
-async function defeatBandit(page: Page): Promise<void> {
+async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<void> {
   const deadline = Date.now() + 180_000;
+  let capturedVisibleFeedback = false;
   while (Date.now() < deadline) {
     const state = await snapshot(page);
+    if (!capturedVisibleFeedback && state.combat.enemyHealth < 100) {
+      const feedback = page.locator("#combat-feedback");
+      if (await feedback.isVisible()) {
+        await page.screenshot({ path: feedbackScreenshot });
+        capturedVisibleFeedback = true;
+      }
+    }
     if (state.combat.phase === "victory") return;
     if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
     if (state.combat.enemyTelegraph) {
@@ -307,24 +315,27 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
 test("the legitimate route defeats the bandit and unlocks the village gate", async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   await openGame(page);
+  await mkdir(evidenceDirectory, { recursive: true });
   await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
   await centerOnVillageRoad(page);
   await holdUntil(page, "KeyW", (state) => state.combat.phase === "engaged");
   await holdUntil(page, "KeyW", (state) => state.position.z >= 3.2);
-  await defeatBandit(page);
+  await defeatBandit(
+    page,
+    resolve(evidenceDirectory, `combat-victory-${testInfo.project.name}.png`),
+  );
   await expect(page.locator("#combat-feedback")).toHaveText("PATH UNLOCKED");
   await expect.poll(async () => (await snapshot(page)).combat.gateOpen).toBe(true);
   const combatState = await snapshot(page);
   expect(combatState.combat.enemyHealth).toBe(0);
   expect(combatState.combat.gateOpen).toBe(true);
-  await page.screenshot({ path: resolve(evidenceDirectory, `combat-victory-${testInfo.project.name}.png`) });
+  await page.screenshot({ path: resolve(evidenceDirectory, `gate-open-${testInfo.project.name}.png`) });
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "complete");
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);
   expect(finalState.runtimeErrors).toEqual([]);
   const environment = await evidenceEnvironment(page, testInfo);
-  await mkdir(evidenceDirectory, { recursive: true });
   await page.screenshot({ path: resolve(evidenceDirectory, `route-complete-${testInfo.project.name}.png`) });
   await writeFile(
     resolve(evidenceDirectory, `traversal-${testInfo.project.name}.json`),
