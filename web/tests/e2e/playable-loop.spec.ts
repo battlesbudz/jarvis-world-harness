@@ -114,17 +114,18 @@ function navigationKey(state: GameSnapshot, target: { x: number; z: number }): s
 }
 
 async function completeRoute(page: Page): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
+  const centeringDeadline = Date.now() + 15_000;
+  while (Date.now() < centeringDeadline) {
     const state = await snapshot(page);
-    if (Math.abs(state.position.x) <= 0.2) break;
-    await hold(page, navigationKey(state, { x: 0, z: state.position.z }), 120);
+    if (Math.abs(state.position.x) <= 0.35) break;
+    await hold(page, navigationKey(state, { x: 0, z: state.position.z }), 80);
   }
   const centered = await snapshot(page);
-  if (Math.abs(centered.position.x) > 0.2) {
+  if (Math.abs(centered.position.x) > 0.65) {
     throw new Error(`could not center on opened gate: ${JSON.stringify(centered)}`);
   }
-  while (Date.now() < deadline) {
+  const traversalDeadline = Date.now() + 20_000;
+  while (Date.now() < traversalDeadline) {
     const state = await snapshot(page);
     if (state.checkpoint === "complete") return;
     const beforeGateExit = state.position.z < 12;
@@ -367,7 +368,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
       state.position.z - state.combat.enemyPosition.z,
     );
     if (
-      enemyDistance <= 2.35
+      enemyDistance <= 1.55
       && attacksRemaining > 0
       && state.combat.playerAction === "idle"
       && state.combat.playerStamina >= 30
@@ -385,6 +386,24 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
         })
         .toBe(true);
       attacksRemaining -= 1;
+      const movementKey = evasiveKey(await snapshot(page));
+      await page.keyboard.down(movementKey);
+      try {
+        await expect
+          .poll(async () => {
+            const current = await snapshot(page);
+            return current.combat.phase === "victory" || Math.hypot(
+              current.position.x - current.combat.enemyPosition.x,
+              current.position.z - current.combat.enemyPosition.z,
+            ) >= 3.1;
+          }, {
+            timeout: 10_000,
+            intervals: [30],
+          })
+          .toBe(true);
+      } finally {
+        await page.keyboard.up(movementKey);
+      }
     }
     await page.waitForTimeout(90);
   }

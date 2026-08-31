@@ -1,5 +1,9 @@
 # Progress
 
+- PR #11 close-range disengagement on 2026-08-31: the deterministic combat proof closes to a high-confidence hit distance, waits for the runtime to consume the strike, and immediately disengages beyond every enemy attack radius. This prevents a slow browser profile from remaining committed to an attack animation when a basic telegraph resolves.
+
+- PR #11 independent gate deadlines on 2026-08-31: gate centering and gate traversal have independent time budgets, and centering accepts the full capsule-safe corridor instead of exhausting traversal time while chasing an unnecessarily narrow center line.
+
 - PR #11 authoritative strike-budget consumption on 2026-08-31: after each attack click, the route waits for authoritative `attack-*` state or at least five stamina spent before decrementing the cycle budget, preventing two slow-frame clicks from collapsing into one boolean queued action and starving hosted combat damage.
 
 - PR #11 recovery-window attack cadence on 2026-08-31: the route permits one safe opening strike, then no more than two strikes after each defensively resolved telegraph, fitting their combined timing inside the authoritative 380 ms enemy recovery plus 580 ms cooldown. No additional combo can overlap the next basic guard, while a 30-stamina floor preserves its impact budget.
