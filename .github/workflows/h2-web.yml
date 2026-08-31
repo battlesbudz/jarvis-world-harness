@@ -40,7 +40,6 @@ jobs:
           H2_REVISION: ${{ github.sha }}
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
-        continue-on-error: true
         env:
           H2_REVISION: ${{ github.sha }}
       - uses: actions/upload-artifact@v4
