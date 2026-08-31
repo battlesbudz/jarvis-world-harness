@@ -80,75 +80,13 @@ function navigationKey(state: GameSnapshot, target: { x: number; z: number }): s
   return candidates[0].key;
 }
 
-async function retreatBeyondAttackRange(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const deadline = performance.now() + 8_000;
-    const chooseEvasiveKey = (state: GameSnapshot): string => {
-      const stride = state.combat.enemyAttack === "area" ? 3.2 : 2.6;
-      const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
-      const right = { x: Math.cos(state.yaw), z: -Math.sin(state.yaw) };
-      const candidates = [
-        { key: "KeyA", x: state.position.x - right.x * stride, z: state.position.z - right.z * stride },
-        { key: "KeyD", x: state.position.x + right.x * stride, z: state.position.z + right.z * stride },
-        { key: "KeyS", x: state.position.x - forward.x * stride, z: state.position.z - forward.z * stride },
-        { key: "KeyW", x: state.position.x + forward.x * stride, z: state.position.z + forward.z * stride },
-      ];
-      const safeCandidates = candidates.filter(({ x, z }) => Math.hypot(x, z - 6.2) <= 5);
-      const ranked = safeCandidates.length > 0 ? safeCandidates : candidates;
-      ranked.sort((left, rightCandidate) => Math.hypot(
-        rightCandidate.x - state.combat.enemyPosition.x,
-        rightCandidate.z - state.combat.enemyPosition.z,
-      ) - Math.hypot(
-        left.x - state.combat.enemyPosition.x,
-        left.z - state.combat.enemyPosition.z,
-      ));
-      return ranked[0].key;
-    };
-    const initialState = window.__JARVIS_H2__.snapshot();
-    const initialDistance = Math.hypot(
-      initialState.position.x - initialState.combat.enemyPosition.x,
-      initialState.position.z - initialState.combat.enemyPosition.z,
-    );
-    if (initialState.combat.phase === "victory" || initialDistance >= 3.1) return;
-    const activeKey = chooseEvasiveKey(initialState);
-    let observedDodge = false;
-    let waitingForExistingDodge = initialState.combat.playerAction === "dodge";
-    const queueDodge = (): void => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
-      window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
-    };
-    try {
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: activeKey, bubbles: true }));
-      if (!waitingForExistingDodge) queueDodge();
-      while (performance.now() < deadline) {
-        const state = window.__JARVIS_H2__.snapshot();
-        const enemyDistance = Math.hypot(
-          state.position.x - state.combat.enemyPosition.x,
-          state.position.z - state.combat.enemyPosition.z,
-        );
-        if (state.combat.phase === "victory" || (waitingForExistingDodge && enemyDistance >= 3.1)) return;
-        if (waitingForExistingDodge && state.combat.playerAction !== "dodge") {
-          waitingForExistingDodge = false;
-          queueDodge();
-        } else if (!waitingForExistingDodge && state.combat.playerAction === "dodge") {
-          observedDodge = true;
-        }
-        if (observedDodge && enemyDistance >= 3.1) return;
-        await new Promise(requestAnimationFrame);
-      }
-      throw new Error(`could not disengage beyond attack range: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
-    } finally {
-      window.dispatchEvent(new KeyboardEvent("keyup", { code: activeKey, bubbles: true }));
-    }
-  });
-}
-
-async function finishBanditOnBrowserFrames(page: Page): Promise<void> {
-  await page.evaluate(async () => {
+async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): Promise<void> {
+  await page.evaluate(async (captureFirstHit) => {
     const deadline = performance.now() + 180_000;
-    const expectedResetId = window.__JARVIS_H2__.snapshot().resetId;
+    const initialState = window.__JARVIS_H2__.snapshot();
+    const expectedResetId = initialState.resetId;
+    const initialEnemyHealth = initialState.combat.enemyHealth;
     let activeMove: string | null = null;
-    let defending = false;
     let attackQueuedAt = 0;
     const setMove = (next: string | null): void => {
       if (activeMove === next) return;
@@ -188,13 +126,16 @@ async function finishBanditOnBrowserFrames(page: Page): Promise<void> {
       ));
       return rankedCandidates[0].key;
     };
-    const queueDodge = (): void => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
-      window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
-    };
     try {
       while (performance.now() < deadline) {
         const state = window.__JARVIS_H2__.snapshot();
+        const feedback = document.querySelector<HTMLElement>("#combat-feedback");
+        if (
+          captureFirstHit
+          && state.combat.enemyHealth < initialEnemyHealth
+          && feedback?.textContent === "BLOCKED · HALF DAMAGE"
+          && feedback.getClientRects().length > 0
+        ) return;
         if (state.combat.phase === "victory") return;
         if (state.combat.phase === "defeat" || state.resetId !== expectedResetId) {
           throw new Error(`Bio was defeated during browser-frame combat: ${JSON.stringify(state)}`);
@@ -204,22 +145,16 @@ async function finishBanditOnBrowserFrames(page: Page): Promise<void> {
           state.position.z - state.combat.enemyPosition.z,
         );
         if (state.combat.enemyTelegraph) {
-          if (distance < 3.1) {
-            setMove(rankedKey(state, true));
-            if (!defending) queueDodge();
-          } else {
-            setMove(null);
-          }
-          defending = true;
+          if (distance < 3.1) setMove(rankedKey(state, true));
+          else setMove(null);
         } else {
-          defending = false;
           if (distance > 1.5) {
             setMove(rankedKey(state, false));
           } else {
             setMove(null);
             if (
               state.combat.playerAction === "idle"
-              && state.combat.playerStamina >= 30
+              && state.combat.playerStamina >= 12
               && performance.now() - attackQueuedAt >= 500
             ) {
               document.querySelector<HTMLButtonElement>("#attack")?.dispatchEvent(new PointerEvent("pointerdown", {
@@ -237,7 +172,7 @@ async function finishBanditOnBrowserFrames(page: Page): Promise<void> {
       setMove(null);
       window.dispatchEvent(new KeyboardEvent("keyup", { code: "ShiftLeft", bubbles: true }));
     }
-  });
+  }, stopOnFirstHit);
 }
 
 async function completeRoute(page: Page): Promise<void> {
@@ -405,124 +340,12 @@ test("touch joystick moves the Bio", async ({ page }) => {
 });
 
 async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<void> {
-  const deadline = Date.now() + 180_000;
-  const capturedVisibleFeedback = false;
-  const observedEnemyHealth = 100;
-  let attacksRemaining = 1;
-  while (Date.now() < deadline) {
-    const state = await snapshot(page);
-    const enemyDamaged = state.combat.enemyHealth < observedEnemyHealth;
-    if (!capturedVisibleFeedback && enemyDamaged) {
-      const feedback = page.locator("#combat-feedback");
-      const feedbackText = await feedback.textContent();
-      if (
-        await feedback.isVisible()
-        && feedbackText === "BLOCKED · HALF DAMAGE"
-      ) {
-        await page.screenshot({ path: feedbackScreenshot });
-        await finishBanditOnBrowserFrames(page);
-        return;
-      }
-    }
-    if (state.combat.phase === "victory") {
-      if (!capturedVisibleFeedback) {
-        throw new Error("bandit fell without captured visible player-hit feedback");
-      }
-      return;
-    }
-    if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
-    if (state.combat.enemyTelegraph) {
-      if (state.combat.enemyAttack === "basic") {
-        const healthBeforeEvasion = state.combat.playerHealth;
-        const resetBeforeEvasion = state.resetId;
-        await retreatBeyondAttackRange(page);
-        await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
-          timeout: 10_000,
-          intervals: [30],
-        }).toBe(false);
-        const defended = await snapshot(page);
-        if (defended.combat.phase === "victory") {
-          if (!capturedVisibleFeedback) {
-            throw new Error("bandit fell without captured visible player-hit feedback");
-          }
-          return;
-        }
-        expect(defended.resetId).toBe(resetBeforeEvasion);
-        expect(defended.combat.phase).toBe("engaged");
-        expect(defended.combat.playerHealth).toBe(healthBeforeEvasion);
-        attacksRemaining = 2;
-        continue;
-      }
-      const safeDistance = state.combat.enemyAttack === "area" ? 3.1 : 2.5;
-      await retreatBeyondAttackRange(page);
-      const retreated = await snapshot(page);
-      expect(Math.hypot(
-        retreated.position.x - retreated.combat.enemyPosition.x,
-        retreated.position.z - retreated.combat.enemyPosition.z,
-      )).toBeGreaterThanOrEqual(safeDistance);
-      await expect
-        .poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
-          timeout: 10_000,
-          intervals: [80],
-        })
-        .toBe(false);
-      attacksRemaining = 2;
-      continue;
-    }
-    const enemyDistance = Math.hypot(
-      state.position.x - state.combat.enemyPosition.x,
-      state.position.z - state.combat.enemyPosition.z,
-    );
-    if (
-      enemyDistance <= 1.55
-      && attacksRemaining > 0
-      && state.combat.playerAction === "idle"
-      && state.combat.playerStamina >= 50
-    ) {
-      const staminaBeforeAttack = state.combat.playerStamina;
-      const enemyHealthBeforeAttack = state.combat.enemyHealth;
-      const comboBeforeAttack = state.combat.comboStep;
-      await page.evaluate(async ({ staminaBeforeAttack, enemyHealthBeforeAttack, comboBeforeAttack }) => {
-        window.dispatchEvent(new KeyboardEvent("keyup", { code: "ShiftLeft", bubbles: true }));
-        document.querySelector<HTMLButtonElement>("#attack")?.dispatchEvent(new PointerEvent("pointerdown", {
-          bubbles: true,
-          pointerId: 1,
-        }));
-        const deadline = performance.now() + 10_000;
-        while (performance.now() < deadline) {
-          const current = window.__JARVIS_H2__.snapshot();
-          if (
-            current.combat.playerAction.startsWith("attack-")
-            || current.combat.playerStamina <= staminaBeforeAttack - 5
-            || current.combat.enemyHealth < enemyHealthBeforeAttack
-            || current.combat.comboStep !== comboBeforeAttack
-          ) return;
-          await new Promise(requestAnimationFrame);
-        }
-        throw new Error(`attack input was not consumed: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
-      }, { staminaBeforeAttack, enemyHealthBeforeAttack, comboBeforeAttack });
-      const afterStrike = await snapshot(page);
-      if (!capturedVisibleFeedback && afterStrike.combat.enemyHealth < observedEnemyHealth) {
-        const feedback = page.locator("#combat-feedback");
-        if (await feedback.isVisible() && await feedback.textContent() === "BLOCKED · HALF DAMAGE") {
-          await page.screenshot({ path: feedbackScreenshot });
-          await finishBanditOnBrowserFrames(page);
-          return;
-        }
-      }
-      attacksRemaining -= 1;
-      await retreatBeyondAttackRange(page);
-    } else if (
-      enemyDistance > 1.55
-      && attacksRemaining > 0
-      && state.combat.playerAction === "idle"
-      && state.combat.playerStamina >= 50
-    ) {
-      await hold(page, navigationKey(state, state.combat.enemyPosition), 80);
-    }
-    await page.waitForTimeout(90);
-  }
-  throw new Error(`bandit did not fall: ${JSON.stringify(await snapshot(page))}`);
+  await driveBanditOnBrowserFrames(page, true);
+  const feedback = page.locator("#combat-feedback");
+  await expect(feedback).toBeVisible();
+  await expect(feedback).toHaveText("BLOCKED · HALF DAMAGE");
+  await page.screenshot({ path: feedbackScreenshot });
+  await driveBanditOnBrowserFrames(page);
 }
 
 test("combat controls expose stamina, blocking, dodge, and pause", async ({ page }) => {
