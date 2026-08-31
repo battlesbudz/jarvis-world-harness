@@ -258,6 +258,20 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
     }
     if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
     if (state.combat.enemyTelegraph) {
+      if (state.combat.enemyAttack === "basic") {
+        await page.keyboard.down("ShiftLeft");
+        try {
+          await expect
+            .poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+              timeout: 10_000,
+              intervals: [30],
+            })
+            .toBe(false);
+        } finally {
+          await page.keyboard.up("ShiftLeft");
+        }
+        continue;
+      }
       const movementKey = evasiveKey(state);
       const safeDistance = state.combat.enemyAttack === "area" ? 3.1 : 2.5;
       await page.keyboard.down(movementKey);

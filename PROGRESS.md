@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 throttled-frame basic defense on 2026-08-31: the deterministic route now holds authoritative guard through the short 580 ms basic telegraph, which hosted capped frames could resolve before ordinary locomotion established separation. Longer heavy and area attacks still require proven physical separation, and the independent controls scenario still exercises stamina drain plus keyboard dodge displacement.
+
 - PR #11 fail-closed combat screenshot proof on 2026-08-31: an uncaptured enemy-health decrease remains pending until the unambiguous `BLOCKED · HALF DAMAGE` player-strike message is visibly rendered, and victory now fails explicitly unless that frame was written, so direct Playwright CI cannot pass without its required combat-feedback PNG.
 
 - PR #11 damage-frame evidence binding on 2026-08-31: visible combat evidence is captured only on a newly observed authoritative enemy-health decrease whose currently rendered feedback is the Bio's exact blocked-hit or guard-break message, preventing a later telegraph or evasion banner from satisfying the evidence contract.
