@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 capsule-safe gate corridor on 2026-08-31: opened-gate centering now requires `|x| <= 0.6`, safely inside the approximately 0.755-meter center clearance left by the 2.35-meter opening and the Bio's 0.42-meter collider radius, before any forward crossing input begins.
+
 - PR #11 staged opened-gate traversal on 2026-08-31: post-victory navigation now first uses live-yaw steering to center the Bio within the gate opening at its current depth, verifies the lateral corridor, and only then advances toward the destination, preventing a z-dominant steering choice from repeatedly pushing into a permanent gate flank.
 
 - PR #11 dual basic defense and camera-aware exit on 2026-08-31: short basic telegraphs now combine held guard with the same camera-ranked arena-safe physical escape, then still require an unchanged-health outcome. After victory, route completion selects W/A/S/D from live yaw to maximize progress toward the world-space destination instead of assuming camera-relative W points through the gate.

@@ -117,11 +117,11 @@ async function completeRoute(page: Page): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     const state = await snapshot(page);
-    if (Math.abs(state.position.x) <= 0.8) break;
+    if (Math.abs(state.position.x) <= 0.6) break;
     await hold(page, navigationKey(state, { x: 0, z: state.position.z }), 120);
   }
   const centered = await snapshot(page);
-  if (Math.abs(centered.position.x) > 0.8) {
+  if (Math.abs(centered.position.x) > 0.6) {
     throw new Error(`could not center on opened gate: ${JSON.stringify(centered)}`);
   }
   while (Date.now() < deadline) {
