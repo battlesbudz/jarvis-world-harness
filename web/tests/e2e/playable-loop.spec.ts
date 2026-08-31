@@ -255,7 +255,7 @@ test("focus loss clears held movement", async ({ page }) => {
   expect(Math.abs(settled.position.x - stopped.position.x)).toBeLessThan(0.2);
   expect(settled.paused).toBe(true);
   expect(settled.runtimeErrors).toEqual([]);
-  await page.getByRole("button", { name: "Pause combat" }).click();
+  await page.getByRole("button", { name: "Resume" }).click();
   expect((await snapshot(page)).paused).toBe(false);
 });
 
