@@ -135,7 +135,14 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
           && state.combat.enemyHealth < initialEnemyHealth
           && feedback?.textContent === "BLOCKED · HALF DAMAGE"
           && feedback.getClientRects().length > 0
-        ) return;
+        ) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyP", bubbles: true }));
+          window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyP", bubbles: true }));
+          while (!window.__JARVIS_H2__.snapshot().paused) await new Promise(requestAnimationFrame);
+          const pauseOverlay = document.querySelector<HTMLElement>("#pause-overlay");
+          if (pauseOverlay) pauseOverlay.hidden = true;
+          return;
+        }
         if (state.combat.phase === "victory") return;
         if (state.combat.phase === "defeat" || state.resetId !== expectedResetId) {
           throw new Error(`Bio was defeated during browser-frame combat: ${JSON.stringify(state)}`);
@@ -341,10 +348,13 @@ test("touch joystick moves the Bio", async ({ page }) => {
 
 async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<void> {
   await driveBanditOnBrowserFrames(page, true);
+  expect((await snapshot(page)).paused).toBe(true);
   const feedback = page.locator("#combat-feedback");
   await expect(feedback).toBeVisible();
   await expect(feedback).toHaveText("BLOCKED · HALF DAMAGE");
   await page.screenshot({ path: feedbackScreenshot });
+  await page.keyboard.press("KeyP");
+  await expect.poll(async () => (await snapshot(page)).paused).toBe(false);
   await driveBanditOnBrowserFrames(page);
 }
 

@@ -1,6 +1,6 @@
 # Progress
 
-- PR #11 continuous browser-frame combat on 2026-08-31: the full evidence fight is driven inside `requestAnimationFrame` through the real input handlers, pausing only to capture the first authoritative damage-bound screenshot. The controller closes and attacks at the real strike stamina floor, then uses stamina-free movement to clear each live telegraph without CDP gaps or dodge starvation; separate control coverage still proves dodge and guard integration.
+- PR #11 continuous browser-frame combat on 2026-08-31: the full evidence fight is driven inside `requestAnimationFrame` through the real input handlers. The first authoritative damage frame is frozen through the real pause input for an atomic unobstructed screenshot, then resumed; the controller closes and attacks at the real strike stamina floor and uses stamina-free movement to clear telegraphs without CDP gaps or dodge starvation. Separate control coverage still proves dodge and guard integration.
 
 - PR #11 browser-frame input driving on 2026-08-31: route predicates and attack consumption now wait in `requestAnimationFrame`, and disengagement uses the real buffered dodge input in a camera-ranked direction. The proof also captures damage feedback immediately after an authoritative hit, before evasion can replace the banner.
 
