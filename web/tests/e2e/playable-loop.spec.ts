@@ -113,6 +113,20 @@ function navigationKey(state: GameSnapshot, target: { x: number; z: number }): s
   return candidates[0].key;
 }
 
+async function retreatBeyondAttackRange(page: Page): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const state = await snapshot(page);
+    const enemyDistance = Math.hypot(
+      state.position.x - state.combat.enemyPosition.x,
+      state.position.z - state.combat.enemyPosition.z,
+    );
+    if (state.combat.phase === "victory" || enemyDistance >= 3.1) return;
+    await hold(page, evasiveKey(state), 80);
+  }
+  throw new Error(`could not disengage beyond attack range: ${JSON.stringify(await snapshot(page))}`);
+}
+
 async function completeRoute(page: Page): Promise<void> {
   const centeringDeadline = Date.now() + 15_000;
   while (Date.now() < centeringDeadline) {
@@ -308,19 +322,15 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
       if (state.combat.enemyAttack === "basic") {
         const healthBeforeGuard = state.combat.playerHealth;
         const resetBeforeGuard = state.resetId;
-        const movementKey = evasiveKey(state);
-        await page.keyboard.down(movementKey);
         await page.keyboard.down("ShiftLeft");
         try {
-          await expect
-            .poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
-              timeout: 10_000,
-              intervals: [30],
-            })
-            .toBe(false);
+          await retreatBeyondAttackRange(page);
+          await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+            timeout: 10_000,
+            intervals: [30],
+          }).toBe(false);
         } finally {
           await page.keyboard.up("ShiftLeft");
-          await page.keyboard.up(movementKey);
         }
         const guarded = await snapshot(page);
         if (guarded.combat.phase === "victory") {
@@ -335,25 +345,13 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
         attacksRemaining = 2;
         continue;
       }
-      const movementKey = evasiveKey(state);
       const safeDistance = state.combat.enemyAttack === "area" ? 3.1 : 2.5;
-      await page.keyboard.down(movementKey);
-      try {
-        await expect
-          .poll(async () => {
-            const current = await snapshot(page);
-            return Math.hypot(
-              current.position.x - current.combat.enemyPosition.x,
-              current.position.z - current.combat.enemyPosition.z,
-            ) >= safeDistance;
-          }, {
-            timeout: 10_000,
-            intervals: [30],
-          })
-          .toBe(true);
-      } finally {
-        await page.keyboard.up(movementKey);
-      }
+      await retreatBeyondAttackRange(page);
+      const retreated = await snapshot(page);
+      expect(Math.hypot(
+        retreated.position.x - retreated.combat.enemyPosition.x,
+        retreated.position.z - retreated.combat.enemyPosition.z,
+      )).toBeGreaterThanOrEqual(safeDistance);
       await expect
         .poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
           timeout: 10_000,
@@ -371,44 +369,36 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
       enemyDistance <= 1.55
       && attacksRemaining > 0
       && state.combat.playerAction === "idle"
-      && state.combat.playerStamina >= 30
+      && state.combat.playerStamina >= 50
     ) {
       const staminaBeforeAttack = state.combat.playerStamina;
+      const enemyHealthBeforeAttack = state.combat.enemyHealth;
+      const comboBeforeAttack = state.combat.comboStep;
       await page.locator("#attack").click();
       await expect
         .poll(async () => {
           const current = await snapshot(page);
           return current.combat.playerAction.startsWith("attack-")
-            || current.combat.playerStamina <= staminaBeforeAttack - 5;
+            || current.combat.playerStamina <= staminaBeforeAttack - 5
+            || current.combat.enemyHealth < enemyHealthBeforeAttack
+            || current.combat.comboStep !== comboBeforeAttack;
         }, {
           timeout: 10_000,
           intervals: [30],
         })
         .toBe(true);
       attacksRemaining -= 1;
-      const movementKey = evasiveKey(await snapshot(page));
-      await page.keyboard.down(movementKey);
+      await page.keyboard.down("ShiftLeft");
       try {
-        await expect
-          .poll(async () => {
-            const current = await snapshot(page);
-            return current.combat.phase === "victory" || Math.hypot(
-              current.position.x - current.combat.enemyPosition.x,
-              current.position.z - current.combat.enemyPosition.z,
-            ) >= 3.1;
-          }, {
-            timeout: 10_000,
-            intervals: [30],
-          })
-          .toBe(true);
+        await retreatBeyondAttackRange(page);
       } finally {
-        await page.keyboard.up(movementKey);
+        await page.keyboard.up("ShiftLeft");
       }
     } else if (
       enemyDistance > 1.55
       && attacksRemaining > 0
       && state.combat.playerAction === "idle"
-      && state.combat.playerStamina >= 30
+      && state.combat.playerStamina >= 50
     ) {
       await hold(page, navigationKey(state, state.combat.enemyPosition), 80);
     }
