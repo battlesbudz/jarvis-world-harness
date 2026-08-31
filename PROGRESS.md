@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 explicit combat re-engagement on 2026-08-31: between telegraphs, the deterministic route uses live-yaw steering to close from the bandit's 2.15-meter chase boundary to the 1.55-meter strike threshold before each budgeted hit, then resumes its verified disengagement.
+
 - PR #11 close-range disengagement on 2026-08-31: the deterministic combat proof closes to a high-confidence hit distance, waits for the runtime to consume the strike, and immediately disengages beyond every enemy attack radius. This prevents a slow browser profile from remaining committed to an attack animation when a basic telegraph resolves.
 
 - PR #11 independent gate deadlines on 2026-08-31: gate centering and gate traversal have independent time budgets, and centering accepts the full capsule-safe corridor instead of exhausting traversal time while chasing an unnecessarily narrow center line.

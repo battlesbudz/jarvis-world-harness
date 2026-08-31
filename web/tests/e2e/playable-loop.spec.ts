@@ -404,6 +404,13 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
       } finally {
         await page.keyboard.up(movementKey);
       }
+    } else if (
+      enemyDistance > 1.55
+      && attacksRemaining > 0
+      && state.combat.playerAction === "idle"
+      && state.combat.playerStamina >= 30
+    ) {
+      await hold(page, navigationKey(state, state.combat.enemyPosition), 80);
     }
     await page.waitForTimeout(90);
   }
