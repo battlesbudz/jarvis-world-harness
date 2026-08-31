@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 staged opened-gate traversal on 2026-08-31: post-victory navigation now first uses live-yaw steering to center the Bio within the gate opening at its current depth, verifies the lateral corridor, and only then advances toward the destination, preventing a z-dominant steering choice from repeatedly pushing into a permanent gate flank.
+
 - PR #11 dual basic defense and camera-aware exit on 2026-08-31: short basic telegraphs now combine held guard with the same camera-ranked arena-safe physical escape, then still require an unchanged-health outcome. After victory, route completion selects W/A/S/D from live yaw to maximize progress toward the world-space destination instead of assuming camera-relative W points through the gate.
 
 - PR #11 basic-telegraph victory cancellation on 2026-08-31: if a pending Bio strike legitimately defeats the bandit and cancels a basic telegraph, the guard branch now accepts the authoritative victory only after confirming required visible-hit evidence was already captured; non-victory resolutions still require unchanged health/reset and continued engagement.
