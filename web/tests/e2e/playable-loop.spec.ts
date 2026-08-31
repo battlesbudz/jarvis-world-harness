@@ -245,7 +245,6 @@ async function defeatBandit(page: Page): Promise<void> {
         await expect
           .poll(async () => {
             const current = await snapshot(page);
-            if (!current.combat.enemyTelegraph) return true;
             return Math.hypot(
               current.position.x - current.combat.enemyPosition.x,
               current.position.z - current.combat.enemyPosition.z,

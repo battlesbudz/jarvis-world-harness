@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 physical-evasion proof completion on 2026-08-31: route defense can no longer treat telegraph resolution itself as a successful evade; held movement ends only after the authoritative snapshot proves player/enemy separation exceeds the attack range, then independently confirms the telegraph has resolved.
+
 - PR #11 sixteenth-review camera-relative evasion on 2026-08-31: hosted route defense now transforms W/A/S/D candidates through the snapshot's live lock-on camera yaw before ranking projected arena safety and enemy separation, so every chosen key matches its actual world-space displacement.
 
 - PR #11 hosted route physical-evasion strategy on 2026-08-30: after all 21 non-route browser scenarios passed, the victory driver replaced stamina-dependent queued dodges with ordinary collision-aware movement selected from safe arena-interior candidates. Each defense stops moving as soon as authoritative player/enemy separation exceeds the exact melee or area range, then waits for telegraph resolution; the dedicated controls scenario continues to prove block and dodge behavior independently.
