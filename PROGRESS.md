@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 ground-plane telegraph correction on 2026-08-31: Babylon's torus warning mesh now retains its authored horizontal XZ orientation at ground height, so the scaled basic, heavy, and area rings visibly outline their authoritative hit-validation radius instead of standing vertically and extending underground.
+
 - PR #11 continuous gate-corridor steering on 2026-08-31: the Bio now centers to `|x| <= 0.2`, uses 80 ms camera-aware pulses, laterally corrects whenever pre-exit drift exceeds 0.2, and fails if any snapshot before `z = 12` leaves the capsule-safe `|x| <= 0.65` bound, so yawed forward input cannot drift into a flank.
 
 - PR #11 capsule-safe gate corridor on 2026-08-31: opened-gate centering now requires `|x| <= 0.6`, safely inside the approximately 0.755-meter center clearance left by the 2.35-meter opening and the Bio's 0.42-meter collider radius, before any forward crossing input begins.

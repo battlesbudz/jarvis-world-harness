@@ -180,7 +180,6 @@ export class AlbionGame {
     this.targetMarker.isVisible = false;
     this.targetMarker.isPickable = false;
     this.telegraphRing = CreateTorus("enemy-telegraph", { diameter: 3.4, thickness: 0.12, tessellation: 48 }, this.scene);
-    this.telegraphRing.rotation.x = Math.PI / 2;
     this.telegraphRing.position.y = 0.08;
     this.telegraphRing.isVisible = false;
     this.impactFlash = CreateSphere("combat-impact", { diameter: 0.5 }, this.scene);
