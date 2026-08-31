@@ -35,10 +35,19 @@ async function hold(page: Page, key: string, milliseconds: number): Promise<void
   await page.keyboard.up(key);
 }
 
-async function holdUntil(page: Page, key: string, condition: (state: GameSnapshot) => boolean): Promise<void> {
+type HoldCondition = "collision" | "x6" | "square" | "engaged" | "z3.2";
+
+async function holdUntil(page: Page, key: string, condition: HoldCondition): Promise<void> {
   await page.keyboard.down(key);
   try {
-    await expect.poll(async () => condition(await snapshot(page)), { timeout: 10_000, intervals: [50] }).toBe(true);
+    await page.waitForFunction((kind) => {
+      const state = window.__JARVIS_H2__.snapshot();
+      if (kind === "collision") return state.collisionCount > 0;
+      if (kind === "x6") return state.position.x >= 6;
+      if (kind === "square") return state.checkpoint === "square";
+      if (kind === "engaged") return state.combat.phase === "engaged";
+      return state.position.z >= 3.2;
+    }, condition, { timeout: 15_000, polling: "raf" });
   } finally {
     await page.keyboard.up(key);
   }
@@ -73,8 +82,7 @@ function navigationKey(state: GameSnapshot, target: { x: number; z: number }): s
 
 async function retreatBeyondAttackRange(page: Page): Promise<void> {
   await page.evaluate(async () => {
-    const deadline = performance.now() + 15_000;
-    const sleep = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    const deadline = performance.now() + 8_000;
     const chooseEvasiveKey = (state: GameSnapshot): string => {
       const stride = state.combat.enemyAttack === "area" ? 3.2 : 2.6;
       const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
@@ -96,8 +104,12 @@ async function retreatBeyondAttackRange(page: Page): Promise<void> {
       ));
       return ranked[0].key;
     };
-    let activeKey: string | null = null;
+    const initialState = window.__JARVIS_H2__.snapshot();
+    const activeKey = chooseEvasiveKey(initialState);
     try {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: activeKey, bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
       while (performance.now() < deadline) {
         const state = window.__JARVIS_H2__.snapshot();
         const enemyDistance = Math.hypot(
@@ -105,15 +117,11 @@ async function retreatBeyondAttackRange(page: Page): Promise<void> {
           state.position.z - state.combat.enemyPosition.z,
         );
         if (state.combat.phase === "victory" || enemyDistance >= 3.1) return;
-        activeKey = chooseEvasiveKey(state);
-        window.dispatchEvent(new KeyboardEvent("keydown", { code: activeKey, bubbles: true }));
-        await sleep(80);
-        window.dispatchEvent(new KeyboardEvent("keyup", { code: activeKey, bubbles: true }));
-        activeKey = null;
+        await new Promise(requestAnimationFrame);
       }
       throw new Error(`could not disengage beyond attack range: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
     } finally {
-      if (activeKey) window.dispatchEvent(new KeyboardEvent("keyup", { code: activeKey, bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: activeKey, bubbles: true }));
     }
   });
 }
@@ -188,7 +196,7 @@ test("loads a deterministic rendered village without runtime errors", async ({ p
 
 test("keyboard movement is physical and the shortcut wall blocks passage", async ({ page }, testInfo) => {
   await openGame(page);
-  await holdUntil(page, "KeyW", (state) => state.collisionCount > 0);
+  await holdUntil(page, "KeyW", "collision");
   const blocked = await snapshot(page);
   expect(blocked.position.z).toBeGreaterThan(-12);
   expect(blocked.position.z).toBeLessThan(-2.7);
@@ -365,18 +373,34 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
       const staminaBeforeAttack = state.combat.playerStamina;
       const enemyHealthBeforeAttack = state.combat.enemyHealth;
       const comboBeforeAttack = state.combat.comboStep;
-      await page.locator("#attack").click();
-      await page.waitForFunction(
-        ({ staminaBeforeAttack, enemyHealthBeforeAttack, comboBeforeAttack }) => {
+      await page.evaluate(async ({ staminaBeforeAttack, enemyHealthBeforeAttack, comboBeforeAttack }) => {
+        window.dispatchEvent(new KeyboardEvent("keyup", { code: "ShiftLeft", bubbles: true }));
+        document.querySelector<HTMLButtonElement>("#attack")?.dispatchEvent(new PointerEvent("pointerdown", {
+          bubbles: true,
+          pointerId: 1,
+        }));
+        const deadline = performance.now() + 10_000;
+        while (performance.now() < deadline) {
           const current = window.__JARVIS_H2__.snapshot();
-          return current.combat.playerAction.startsWith("attack-")
+          if (
+            current.combat.playerAction.startsWith("attack-")
             || current.combat.playerStamina <= staminaBeforeAttack - 5
             || current.combat.enemyHealth < enemyHealthBeforeAttack
-            || current.combat.comboStep !== comboBeforeAttack;
-        },
-        { staminaBeforeAttack, enemyHealthBeforeAttack, comboBeforeAttack },
-        { timeout: 10_000, polling: "raf" },
-      );
+            || current.combat.comboStep !== comboBeforeAttack
+          ) return;
+          await new Promise(requestAnimationFrame);
+        }
+        throw new Error(`attack input was not consumed: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
+      }, { staminaBeforeAttack, enemyHealthBeforeAttack, comboBeforeAttack });
+      const afterStrike = await snapshot(page);
+      if (!capturedVisibleFeedback && afterStrike.combat.enemyHealth < observedEnemyHealth) {
+        const feedback = page.locator("#combat-feedback");
+        if (await feedback.isVisible() && await feedback.textContent() === "BLOCKED · HALF DAMAGE") {
+          await page.screenshot({ path: feedbackScreenshot });
+          capturedVisibleFeedback = true;
+          observedEnemyHealth = afterStrike.combat.enemyHealth;
+        }
+      }
       attacksRemaining -= 1;
       await page.keyboard.down("ShiftLeft");
       try {
@@ -420,8 +444,8 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   expect(await snapshot(page)).toEqual(paused);
   await page.getByRole("button", { name: "Resume" }).click();
   await page.getByRole("button", { name: "Reset to Bio spawn" }).click();
-  await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
-  await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
+  await holdUntil(page, "KeyD", "x6");
+  await holdUntil(page, "KeyW", "square");
   await centerOnVillageRoad(page);
   await page.keyboard.down("KeyW");
   const beforeGuardedImpact = await page.evaluate(async () => {
@@ -456,11 +480,11 @@ test("the legitimate route defeats the bandit and unlocks the village gate", asy
   test.setTimeout(240_000);
   await openGame(page);
   await mkdir(evidenceDirectory, { recursive: true });
-  await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
-  await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
+  await holdUntil(page, "KeyD", "x6");
+  await holdUntil(page, "KeyW", "square");
   await centerOnVillageRoad(page);
-  await holdUntil(page, "KeyW", (state) => state.combat.phase === "engaged");
-  await holdUntil(page, "KeyW", (state) => state.position.z >= 3.2);
+  await holdUntil(page, "KeyW", "engaged");
+  await holdUntil(page, "KeyW", "z3.2");
   await defeatBandit(
     page,
     resolve(evidenceDirectory, `combat-victory-${testInfo.project.name}.png`),

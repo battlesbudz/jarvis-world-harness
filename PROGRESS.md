@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 browser-frame input driving on 2026-08-31: route predicates and attack consumption now wait in `requestAnimationFrame`, and disengagement uses the real buffered dodge input in a camera-ranked direction. The proof also captures damage feedback immediately after an authoritative hit, before evasion can replace the banner.
+
 - PR #11 in-browser combat synchronization on 2026-08-31: frame-sensitive strike confirmation, guarded-impact observation, and adaptive escape pulses now run inside the browser animation loop while dispatching the same keyboard events used by players. Slow CDP round trips can no longer consume the combat deadline or miss a complete action between snapshots.
 
 - PR #11 authoritative guard integration on 2026-08-31: the cross-viewport controls scenario now reaches live combat, holds guard before the first basic telegraph, and proves unchanged health, continued engagement, and stamina loss beyond the 12-point impact cost. The route may safely evade basics without weakening browser coverage of actual block resolution.
