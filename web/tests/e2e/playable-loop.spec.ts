@@ -117,17 +117,25 @@ async function completeRoute(page: Page): Promise<void> {
   const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     const state = await snapshot(page);
-    if (Math.abs(state.position.x) <= 0.6) break;
+    if (Math.abs(state.position.x) <= 0.2) break;
     await hold(page, navigationKey(state, { x: 0, z: state.position.z }), 120);
   }
   const centered = await snapshot(page);
-  if (Math.abs(centered.position.x) > 0.6) {
+  if (Math.abs(centered.position.x) > 0.2) {
     throw new Error(`could not center on opened gate: ${JSON.stringify(centered)}`);
   }
   while (Date.now() < deadline) {
     const state = await snapshot(page);
     if (state.checkpoint === "complete") return;
-    await hold(page, navigationKey(state, { x: 0, z: 14 }), 120);
+    const beforeGateExit = state.position.z < 12;
+    const target = beforeGateExit && Math.abs(state.position.x) > 0.2
+      ? { x: 0, z: state.position.z }
+      : { x: 0, z: 14 };
+    await hold(page, navigationKey(state, target), 80);
+    const advanced = await snapshot(page);
+    if (advanced.position.z < 12 && Math.abs(advanced.position.x) > 0.65) {
+      throw new Error(`left capsule-safe gate corridor: ${JSON.stringify(advanced)}`);
+    }
   }
   throw new Error(`could not traverse opened gate: ${JSON.stringify(await snapshot(page))}`);
 }
