@@ -234,11 +234,18 @@ test("touch joystick moves the Bio", async ({ page }) => {
 async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<void> {
   const deadline = Date.now() + 180_000;
   let capturedVisibleFeedback = false;
+  let observedEnemyHealth = 100;
   while (Date.now() < deadline) {
     const state = await snapshot(page);
-    if (!capturedVisibleFeedback && state.combat.enemyHealth < 100) {
+    const enemyDamaged = state.combat.enemyHealth < observedEnemyHealth;
+    observedEnemyHealth = state.combat.enemyHealth;
+    if (!capturedVisibleFeedback && enemyDamaged) {
       const feedback = page.locator("#combat-feedback");
-      if (await feedback.isVisible()) {
+      const feedbackText = await feedback.textContent();
+      if (
+        await feedback.isVisible()
+        && (feedbackText === "BLOCKED · HALF DAMAGE" || feedbackText === "GUARD BROKEN")
+      ) {
         await page.screenshot({ path: feedbackScreenshot });
         capturedVisibleFeedback = true;
       }

@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 damage-frame evidence binding on 2026-08-31: visible combat evidence is captured only on a newly observed authoritative enemy-health decrease whose currently rendered feedback is the Bio's exact blocked-hit or guard-break message, preventing a later telegraph or evasion banner from satisfying the evidence contract.
+
 - PR #11 visible-feedback evidence correction on 2026-08-31: each combat profile now captures its required `combat-victory` evidence on the first authoritative damaging hit while the hit feedback is visibly rendered, then records a distinct later `gate-open` image after persistent collision state proves the route is physically available.
 
 - PR #11 hosted range/evidence stabilization on 2026-08-31: the legitimate combat driver now spends stamina only inside the Bio's authoritative closing-step range instead of repeatedly missing after a physical evade. Victory screenshots and assertions wait for persistent enemy-health and physical-gate state while retaining the transient feedback text as context, so slow runners cannot reject a real win merely because the banner's display timer elapsed.
