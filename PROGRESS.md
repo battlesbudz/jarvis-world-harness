@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 hosted range/evidence stabilization on 2026-08-31: the legitimate combat driver now spends stamina only inside the Bio's authoritative closing-step range instead of repeatedly missing after a physical evade. Victory screenshots and assertions wait for persistent enemy-health and physical-gate state while retaining the transient feedback text as context, so slow runners cannot reject a real win merely because the banner's display timer elapsed.
+
 - PR #11 physical-evasion proof completion on 2026-08-31: route defense can no longer treat telegraph resolution itself as a successful evade; held movement ends only after the authoritative snapshot proves player/enemy separation exceeds the attack range, then independently confirms the telegraph has resolved.
 
 - PR #11 sixteenth-review camera-relative evasion on 2026-08-31: hosted route defense now transforms W/A/S/D candidates through the snapshot's live lock-on camera yaw before ranking projected arena safety and enemy separation, so every chosen key matches its actual world-space displacement.
