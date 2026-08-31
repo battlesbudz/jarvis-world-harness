@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 in-browser combat synchronization on 2026-08-31: frame-sensitive strike confirmation, guarded-impact observation, and adaptive escape pulses now run inside the browser animation loop while dispatching the same keyboard events used by players. Slow CDP round trips can no longer consume the combat deadline or miss a complete action between snapshots.
+
 - PR #11 authoritative guard integration on 2026-08-31: the cross-viewport controls scenario now reaches live combat, holds guard before the first basic telegraph, and proves unchanged health, continued engagement, and stamina loss beyond the 12-point impact cost. The route may safely evade basics without weakening browser coverage of actual block resolution.
 
 - PR #11 adaptive combat movement on 2026-08-31: escape movement is now issued as short, live-state-ranked pulses so the proof can route around arena geometry instead of holding one stale direction. Strike consumption also accepts authoritative enemy-health or combo advancement, covering attacks that start and finish between slow hosted snapshots, and the 50-stamina entry floor preserves the basic guard budget.

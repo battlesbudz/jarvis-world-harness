@@ -53,48 +53,6 @@ async function centerOnVillageRoad(page: Page): Promise<void> {
   throw new Error(`could not center on village road: ${JSON.stringify(await snapshot(page))}`);
 }
 
-function evasiveKey(state: GameSnapshot): string {
-  const stride = state.combat.enemyAttack === "area" ? 3.2 : 2.6;
-  const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
-  const right = { x: Math.cos(state.yaw), z: -Math.sin(state.yaw) };
-  const candidates = [
-    {
-      key: "KeyA",
-      x: state.position.x - right.x * stride,
-      z: state.position.z - right.z * stride,
-    },
-    {
-      key: "KeyD",
-      x: state.position.x + right.x * stride,
-      z: state.position.z + right.z * stride,
-    },
-    {
-      key: "KeyS",
-      x: state.position.x - forward.x * stride,
-      z: state.position.z - forward.z * stride,
-    },
-    {
-      key: "KeyW",
-      x: state.position.x + forward.x * stride,
-      z: state.position.z + forward.z * stride,
-    },
-  ];
-  const safeCandidates = candidates.filter(({ x, z }) => Math.hypot(x, z - 6.2) <= 5);
-  const ranked = safeCandidates.length > 0 ? safeCandidates : candidates;
-  ranked.sort((left, right) => {
-    const leftSeparation = Math.hypot(
-      left.x - state.combat.enemyPosition.x,
-      left.z - state.combat.enemyPosition.z,
-    );
-    const rightSeparation = Math.hypot(
-      right.x - state.combat.enemyPosition.x,
-      right.z - state.combat.enemyPosition.z,
-    );
-    return rightSeparation - leftSeparation;
-  });
-  return ranked[0].key;
-}
-
 function navigationKey(state: GameSnapshot, target: { x: number; z: number }): string {
   const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
   const right = { x: Math.cos(state.yaw), z: -Math.sin(state.yaw) };
@@ -114,17 +72,50 @@ function navigationKey(state: GameSnapshot, target: { x: number; z: number }): s
 }
 
 async function retreatBeyondAttackRange(page: Page): Promise<void> {
-  const deadline = Date.now() + 15_000;
-  while (Date.now() < deadline) {
-    const state = await snapshot(page);
-    const enemyDistance = Math.hypot(
-      state.position.x - state.combat.enemyPosition.x,
-      state.position.z - state.combat.enemyPosition.z,
-    );
-    if (state.combat.phase === "victory" || enemyDistance >= 3.1) return;
-    await hold(page, evasiveKey(state), 80);
-  }
-  throw new Error(`could not disengage beyond attack range: ${JSON.stringify(await snapshot(page))}`);
+  await page.evaluate(async () => {
+    const deadline = performance.now() + 15_000;
+    const sleep = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+    const chooseEvasiveKey = (state: GameSnapshot): string => {
+      const stride = state.combat.enemyAttack === "area" ? 3.2 : 2.6;
+      const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
+      const right = { x: Math.cos(state.yaw), z: -Math.sin(state.yaw) };
+      const candidates = [
+        { key: "KeyA", x: state.position.x - right.x * stride, z: state.position.z - right.z * stride },
+        { key: "KeyD", x: state.position.x + right.x * stride, z: state.position.z + right.z * stride },
+        { key: "KeyS", x: state.position.x - forward.x * stride, z: state.position.z - forward.z * stride },
+        { key: "KeyW", x: state.position.x + forward.x * stride, z: state.position.z + forward.z * stride },
+      ];
+      const safeCandidates = candidates.filter(({ x, z }) => Math.hypot(x, z - 6.2) <= 5);
+      const ranked = safeCandidates.length > 0 ? safeCandidates : candidates;
+      ranked.sort((left, rightCandidate) => Math.hypot(
+        rightCandidate.x - state.combat.enemyPosition.x,
+        rightCandidate.z - state.combat.enemyPosition.z,
+      ) - Math.hypot(
+        left.x - state.combat.enemyPosition.x,
+        left.z - state.combat.enemyPosition.z,
+      ));
+      return ranked[0].key;
+    };
+    let activeKey: string | null = null;
+    try {
+      while (performance.now() < deadline) {
+        const state = window.__JARVIS_H2__.snapshot();
+        const enemyDistance = Math.hypot(
+          state.position.x - state.combat.enemyPosition.x,
+          state.position.z - state.combat.enemyPosition.z,
+        );
+        if (state.combat.phase === "victory" || enemyDistance >= 3.1) return;
+        activeKey = chooseEvasiveKey(state);
+        window.dispatchEvent(new KeyboardEvent("keydown", { code: activeKey, bubbles: true }));
+        await sleep(80);
+        window.dispatchEvent(new KeyboardEvent("keyup", { code: activeKey, bubbles: true }));
+        activeKey = null;
+      }
+      throw new Error(`could not disengage beyond attack range: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
+    } finally {
+      if (activeKey) window.dispatchEvent(new KeyboardEvent("keyup", { code: activeKey, bubbles: true }));
+    }
+  });
 }
 
 async function completeRoute(page: Page): Promise<void> {
@@ -375,18 +366,17 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
       const enemyHealthBeforeAttack = state.combat.enemyHealth;
       const comboBeforeAttack = state.combat.comboStep;
       await page.locator("#attack").click();
-      await expect
-        .poll(async () => {
-          const current = await snapshot(page);
+      await page.waitForFunction(
+        ({ staminaBeforeAttack, enemyHealthBeforeAttack, comboBeforeAttack }) => {
+          const current = window.__JARVIS_H2__.snapshot();
           return current.combat.playerAction.startsWith("attack-")
             || current.combat.playerStamina <= staminaBeforeAttack - 5
             || current.combat.enemyHealth < enemyHealthBeforeAttack
             || current.combat.comboStep !== comboBeforeAttack;
-        }, {
-          timeout: 10_000,
-          intervals: [30],
-        })
-        .toBe(true);
+        },
+        { staminaBeforeAttack, enemyHealthBeforeAttack, comboBeforeAttack },
+        { timeout: 10_000, polling: "raf" },
+      );
       attacksRemaining -= 1;
       await page.keyboard.down("ShiftLeft");
       try {
@@ -433,20 +423,28 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
   await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
   await centerOnVillageRoad(page);
-  await holdUntil(page, "KeyW", (state) => state.combat.phase === "engaged");
-  const beforeGuardedImpact = await snapshot(page);
-  await page.keyboard.down("ShiftLeft");
+  await page.keyboard.down("KeyW");
+  const beforeGuardedImpact = await page.evaluate(async () => {
+    while (window.__JARVIS_H2__.snapshot().combat.phase !== "engaged") {
+      await new Promise(requestAnimationFrame);
+    }
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "ShiftLeft", bubbles: true }));
+    return window.__JARVIS_H2__.snapshot();
+  });
+  await page.keyboard.up("KeyW");
   try {
-    await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+    await page.waitForFunction(() => {
+      const state = window.__JARVIS_H2__.snapshot();
+      return state.combat.enemyAttack === "basic" && state.combat.enemyTelegraph;
+    }, undefined, { timeout: 15_000, polling: "raf" });
+    await page.waitForFunction(() => !window.__JARVIS_H2__.snapshot().combat.enemyTelegraph, undefined, {
       timeout: 15_000,
-      intervals: [30],
-    }).toBe(true);
-    await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
-      timeout: 15_000,
-      intervals: [30],
-    }).toBe(false);
+      polling: "raf",
+    });
   } finally {
-    await page.keyboard.up("ShiftLeft");
+    await page.evaluate(() => {
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "ShiftLeft", bubbles: true }));
+    });
   }
   const afterGuardedImpact = await snapshot(page);
   expect(afterGuardedImpact.combat.playerHealth).toBe(beforeGuardedImpact.combat.playerHealth);
