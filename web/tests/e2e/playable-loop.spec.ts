@@ -55,11 +55,29 @@ async function centerOnVillageRoad(page: Page): Promise<void> {
 
 function evasiveKey(state: GameSnapshot): string {
   const stride = state.combat.enemyAttack === "area" ? 3.2 : 2.6;
+  const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
+  const right = { x: Math.cos(state.yaw), z: -Math.sin(state.yaw) };
   const candidates = [
-    { key: "KeyA", x: state.position.x - stride, z: state.position.z },
-    { key: "KeyD", x: state.position.x + stride, z: state.position.z },
-    { key: "KeyS", x: state.position.x, z: state.position.z - stride },
-    { key: "KeyW", x: state.position.x, z: state.position.z + stride },
+    {
+      key: "KeyA",
+      x: state.position.x - right.x * stride,
+      z: state.position.z - right.z * stride,
+    },
+    {
+      key: "KeyD",
+      x: state.position.x + right.x * stride,
+      z: state.position.z + right.z * stride,
+    },
+    {
+      key: "KeyS",
+      x: state.position.x - forward.x * stride,
+      z: state.position.z - forward.z * stride,
+    },
+    {
+      key: "KeyW",
+      x: state.position.x + forward.x * stride,
+      z: state.position.z + forward.z * stride,
+    },
   ];
   const safeCandidates = candidates.filter(({ x, z }) => Math.hypot(x, z - 6.2) <= 5);
   const ranked = safeCandidates.length > 0 ? safeCandidates : candidates;
