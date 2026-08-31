@@ -165,51 +165,52 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
 }
 
 async function completeRoute(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const deadline = performance.now() + 30_000;
-    let activeMove: string | null = null;
-    const setMove = (next: string | null): void => {
-      if (activeMove === next) return;
-      if (activeMove) window.dispatchEvent(new KeyboardEvent("keyup", { code: activeMove, bubbles: true }));
-      activeMove = next;
-      if (activeMove) window.dispatchEvent(new KeyboardEvent("keydown", { code: activeMove, bubbles: true }));
-    };
-    const rankedKey = (state: GameSnapshot, target: { x: number; z: number }): string => {
-      const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
-      const right = { x: Math.cos(state.yaw), z: -Math.sin(state.yaw) };
-      const desired = { x: target.x - state.position.x, z: target.z - state.position.z };
-      const candidates = [
-        { key: "KeyW", x: forward.x, z: forward.z },
-        { key: "KeyS", x: -forward.x, z: -forward.z },
-        { key: "KeyD", x: right.x, z: right.z },
-        { key: "KeyA", x: -right.x, z: -right.z },
-      ];
-      candidates.sort((left, rightCandidate) => (
-        rightCandidate.x * desired.x + rightCandidate.z * desired.z
-      ) - (
-        left.x * desired.x + left.z * desired.z
-      ));
-      return candidates[0].key;
-    };
-    try {
-      while (performance.now() < deadline) {
-        const state = window.__JARVIS_H2__.snapshot();
-        if (state.checkpoint === "complete") return;
-        if (state.combat.phase !== "victory" || !state.combat.gateOpen) {
-          throw new Error(`gate traversal lost its victory state: ${JSON.stringify(state)}`);
-        }
-        const mustCenterBeforeGate = state.position.z < 10.2 && Math.abs(state.position.x) > 0.18;
-        const target = mustCenterBeforeGate
-          ? { x: 0, z: state.position.z }
-          : { x: 0, z: 14 };
-        setMove(rankedKey(state, target));
-        await new Promise(requestAnimationFrame);
-      }
-      throw new Error(`could not traverse opened gate: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
-    } finally {
-      setMove(null);
+  const turnTo = async (targetYaw: number): Promise<void> => {
+    const canvas = page.locator("#game-canvas");
+    const bounds = await canvas.boundingBox();
+    if (!bounds) throw new Error("game canvas has no bounds");
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const state = await snapshot(page);
+      const difference = Math.atan2(Math.sin(targetYaw - state.yaw), Math.cos(targetYaw - state.yaw));
+      if (Math.abs(difference) <= 0.04) return;
+      const deltaX = Math.max(-Math.min(120, bounds.width * 0.35), Math.min(Math.min(120, bounds.width * 0.35), difference / 0.005));
+      const startX = bounds.x + bounds.width / 2;
+      const startY = bounds.y + bounds.height / 2;
+      await page.mouse.move(startX, startY);
+      await page.mouse.down();
+      await page.mouse.move(startX + deltaX, startY, { steps: 2 });
+      await page.mouse.up();
     }
-  });
+    throw new Error(`could not face gate route: ${JSON.stringify(await snapshot(page))}`);
+  };
+
+  const initial = await snapshot(page);
+  if (initial.combat.phase !== "victory" || !initial.combat.gateOpen) {
+    throw new Error(`gate traversal lost its victory state: ${JSON.stringify(initial)}`);
+  }
+  if (Math.abs(initial.position.x) > 0.18) {
+    await turnTo(initial.position.x > 0 ? -Math.PI / 2 : Math.PI / 2);
+    await page.keyboard.down("KeyW");
+    try {
+      await page.waitForFunction(() => Math.abs(window.__JARVIS_H2__.snapshot().position.x) <= 0.18, null, {
+        timeout: 90_000,
+        polling: "raf",
+      });
+    } finally {
+      await page.keyboard.up("KeyW");
+    }
+  }
+  const centered = await snapshot(page);
+  await turnTo(Math.atan2(-centered.position.x, 14 - centered.position.z));
+  await page.keyboard.down("KeyW");
+  try {
+    await page.waitForFunction(() => window.__JARVIS_H2__.snapshot().checkpoint === "complete", null, {
+      timeout: 120_000,
+      polling: "raf",
+    });
+  } finally {
+    await page.keyboard.up("KeyW");
+  }
 }
 
 function projectRevision(): string {
