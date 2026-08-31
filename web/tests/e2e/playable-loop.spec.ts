@@ -423,7 +423,7 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   await page.keyboard.press("Space");
   await expect.poll(async () => (await snapshot(page)).combat.playerStamina).toBeLessThan(beforeDodge.combat.playerStamina - 10);
   await expect.poll(async () => (await snapshot(page)).position.z).toBeGreaterThan(beforeDodge.position.z + 0.2);
-  await page.getByRole("button", { name: "Resume" }).click();
+  await page.getByRole("button", { name: "Pause combat" }).click();
   await expect(page.locator("#pause-overlay")).toBeVisible();
   const paused = await snapshot(page);
   await page.waitForTimeout(350);
