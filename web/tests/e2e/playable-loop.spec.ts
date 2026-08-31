@@ -259,6 +259,8 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
     if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
     if (state.combat.enemyTelegraph) {
       if (state.combat.enemyAttack === "basic") {
+        const healthBeforeGuard = state.combat.playerHealth;
+        const resetBeforeGuard = state.resetId;
         await page.keyboard.down("ShiftLeft");
         try {
           await expect
@@ -270,6 +272,10 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
         } finally {
           await page.keyboard.up("ShiftLeft");
         }
+        const guarded = await snapshot(page);
+        expect(guarded.resetId).toBe(resetBeforeGuard);
+        expect(guarded.combat.phase).toBe("engaged");
+        expect(guarded.combat.playerHealth).toBe(healthBeforeGuard);
         continue;
       }
       const movementKey = evasiveKey(state);
@@ -306,7 +312,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
     if (
       enemyDistance <= 2.35
       && state.combat.playerAction === "idle"
-      && state.combat.playerStamina >= 20
+      && state.combat.playerStamina >= 50
     ) {
       await page.locator("#attack").click();
     }
