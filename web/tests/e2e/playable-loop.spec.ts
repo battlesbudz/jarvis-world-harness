@@ -255,7 +255,7 @@ test("focus loss clears held movement", async ({ page }) => {
   expect(Math.abs(settled.position.x - stopped.position.x)).toBeLessThan(0.2);
   expect(settled.paused).toBe(true);
   expect(settled.runtimeErrors).toEqual([]);
-  await page.getByRole("button", { name: "Resume" }).click();
+  await page.getByRole("button", { name: "Pause combat" }).click();
   expect((await snapshot(page)).paused).toBe(false);
 });
 
@@ -408,7 +408,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
 }
 
 test("combat controls expose stamina, blocking, dodge, and pause", async ({ page }) => {
-  test.setTimeout(45_000);
+  test.setTimeout(120_000);
   await openGame(page);
   await page.locator("#attack").click();
   await page.waitForTimeout(90);
@@ -423,11 +423,35 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   await page.keyboard.press("Space");
   await expect.poll(async () => (await snapshot(page)).combat.playerStamina).toBeLessThan(beforeDodge.combat.playerStamina - 10);
   await expect.poll(async () => (await snapshot(page)).position.z).toBeGreaterThan(beforeDodge.position.z + 0.2);
-  await page.getByRole("button", { name: "Pause combat" }).click();
+  await page.getByRole("button", { name: "Resume" }).click();
   await expect(page.locator("#pause-overlay")).toBeVisible();
   const paused = await snapshot(page);
   await page.waitForTimeout(350);
   expect(await snapshot(page)).toEqual(paused);
+  await page.getByRole("button", { name: "Resume" }).click();
+  await page.getByRole("button", { name: "Reset to Bio spawn" }).click();
+  await holdUntil(page, "KeyD", (state) => state.position.x >= 6);
+  await holdUntil(page, "KeyW", (state) => state.checkpoint === "square");
+  await centerOnVillageRoad(page);
+  await holdUntil(page, "KeyW", (state) => state.combat.phase === "engaged");
+  const beforeGuardedImpact = await snapshot(page);
+  await page.keyboard.down("ShiftLeft");
+  try {
+    await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+      timeout: 15_000,
+      intervals: [30],
+    }).toBe(true);
+    await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+      timeout: 15_000,
+      intervals: [30],
+    }).toBe(false);
+  } finally {
+    await page.keyboard.up("ShiftLeft");
+  }
+  const afterGuardedImpact = await snapshot(page);
+  expect(afterGuardedImpact.combat.playerHealth).toBe(beforeGuardedImpact.combat.playerHealth);
+  expect(afterGuardedImpact.combat.playerStamina).toBeLessThan(beforeGuardedImpact.combat.playerStamina - 12);
+  expect(afterGuardedImpact.combat.phase).toBe("engaged");
 });
 
 test("the legitimate route defeats the bandit and unlocks the village gate", async ({ page }, testInfo) => {
