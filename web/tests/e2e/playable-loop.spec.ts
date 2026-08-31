@@ -189,10 +189,14 @@ async function completeRoute(page: Page): Promise<void> {
     throw new Error(`gate traversal lost its victory state: ${JSON.stringify(initial)}`);
   }
   if (Math.abs(initial.position.x) > 0.18) {
+    const centeringFromPositiveX = initial.position.x > 0;
     await turnTo(initial.position.x > 0 ? -Math.PI / 2 : Math.PI / 2);
     await page.keyboard.down("KeyW");
     try {
-      await page.waitForFunction(() => Math.abs(window.__JARVIS_H2__.snapshot().position.x) <= 0.18, null, {
+      await page.waitForFunction((fromPositiveX) => {
+        const x = window.__JARVIS_H2__.snapshot().position.x;
+        return Math.abs(x) <= 0.18 || (fromPositiveX ? x <= 0 : x >= 0);
+      }, centeringFromPositiveX, {
         timeout: 90_000,
         polling: "raf",
       });
