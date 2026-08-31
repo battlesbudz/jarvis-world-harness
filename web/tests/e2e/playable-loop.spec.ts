@@ -143,6 +143,103 @@ async function retreatBeyondAttackRange(page: Page): Promise<void> {
   });
 }
 
+async function finishBanditOnBrowserFrames(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const deadline = performance.now() + 180_000;
+    const expectedResetId = window.__JARVIS_H2__.snapshot().resetId;
+    let activeMove: string | null = null;
+    let defending = false;
+    let attackQueuedAt = 0;
+    const setMove = (next: string | null): void => {
+      if (activeMove === next) return;
+      if (activeMove) window.dispatchEvent(new KeyboardEvent("keyup", { code: activeMove, bubbles: true }));
+      activeMove = next;
+      if (activeMove) window.dispatchEvent(new KeyboardEvent("keydown", { code: activeMove, bubbles: true }));
+    };
+    const rankedKey = (state: GameSnapshot, away: boolean): string => {
+      const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
+      const right = { x: Math.cos(state.yaw), z: -Math.sin(state.yaw) };
+      const desired = away
+        ? {
+            x: state.position.x - state.combat.enemyPosition.x,
+            z: state.position.z - state.combat.enemyPosition.z,
+          }
+        : {
+            x: state.combat.enemyPosition.x - state.position.x,
+            z: state.combat.enemyPosition.z - state.position.z,
+          };
+      const candidates = [
+        { key: "KeyW", x: forward.x, z: forward.z },
+        { key: "KeyS", x: -forward.x, z: -forward.z },
+        { key: "KeyD", x: right.x, z: right.z },
+        { key: "KeyA", x: -right.x, z: -right.z },
+      ];
+      const arenaSafeCandidates = away
+        ? candidates.filter((candidate) => Math.hypot(
+            state.position.x + candidate.x * 3.2,
+            state.position.z + candidate.z * 3.2 - 6.2,
+          ) <= 5)
+        : candidates;
+      const rankedCandidates = arenaSafeCandidates.length > 0 ? arenaSafeCandidates : candidates;
+      rankedCandidates.sort((left, rightCandidate) => (
+        rightCandidate.x * desired.x + rightCandidate.z * desired.z
+      ) - (
+        left.x * desired.x + left.z * desired.z
+      ));
+      return rankedCandidates[0].key;
+    };
+    const queueDodge = (): void => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
+    };
+    try {
+      while (performance.now() < deadline) {
+        const state = window.__JARVIS_H2__.snapshot();
+        if (state.combat.phase === "victory") return;
+        if (state.combat.phase === "defeat" || state.resetId !== expectedResetId) {
+          throw new Error(`Bio was defeated during browser-frame combat: ${JSON.stringify(state)}`);
+        }
+        const distance = Math.hypot(
+          state.position.x - state.combat.enemyPosition.x,
+          state.position.z - state.combat.enemyPosition.z,
+        );
+        if (state.combat.enemyTelegraph) {
+          if (distance < 3.1) {
+            setMove(rankedKey(state, true));
+            if (!defending) queueDodge();
+          } else {
+            setMove(null);
+          }
+          defending = true;
+        } else {
+          defending = false;
+          if (distance > 1.5) {
+            setMove(rankedKey(state, false));
+          } else {
+            setMove(null);
+            if (
+              state.combat.playerAction === "idle"
+              && state.combat.playerStamina >= 30
+              && performance.now() - attackQueuedAt >= 500
+            ) {
+              document.querySelector<HTMLButtonElement>("#attack")?.dispatchEvent(new PointerEvent("pointerdown", {
+                bubbles: true,
+                pointerId: 1,
+              }));
+              attackQueuedAt = performance.now();
+            }
+          }
+        }
+        await new Promise(requestAnimationFrame);
+      }
+      throw new Error(`bandit did not fall in browser-frame combat: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
+    } finally {
+      setMove(null);
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "ShiftLeft", bubbles: true }));
+    }
+  });
+}
+
 async function completeRoute(page: Page): Promise<void> {
   const centeringDeadline = Date.now() + 15_000;
   while (Date.now() < centeringDeadline) {
@@ -309,8 +406,8 @@ test("touch joystick moves the Bio", async ({ page }) => {
 
 async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<void> {
   const deadline = Date.now() + 180_000;
-  let capturedVisibleFeedback = false;
-  let observedEnemyHealth = 100;
+  const capturedVisibleFeedback = false;
+  const observedEnemyHealth = 100;
   let attacksRemaining = 1;
   while (Date.now() < deadline) {
     const state = await snapshot(page);
@@ -323,8 +420,8 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
         && feedbackText === "BLOCKED · HALF DAMAGE"
       ) {
         await page.screenshot({ path: feedbackScreenshot });
-        capturedVisibleFeedback = true;
-        observedEnemyHealth = state.combat.enemyHealth;
+        await finishBanditOnBrowserFrames(page);
+        return;
       }
     }
     if (state.combat.phase === "victory") {
@@ -409,8 +506,8 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
         const feedback = page.locator("#combat-feedback");
         if (await feedback.isVisible() && await feedback.textContent() === "BLOCKED · HALF DAMAGE") {
           await page.screenshot({ path: feedbackScreenshot });
-          capturedVisibleFeedback = true;
-          observedEnemyHealth = afterStrike.combat.enemyHealth;
+          await finishBanditOnBrowserFrames(page);
+          return;
         }
       }
       attacksRemaining -= 1;
