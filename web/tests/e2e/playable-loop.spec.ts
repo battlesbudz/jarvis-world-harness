@@ -106,17 +106,19 @@ async function retreatBeyondAttackRange(page: Page): Promise<void> {
     };
     const initialState = window.__JARVIS_H2__.snapshot();
     const activeKey = chooseEvasiveKey(initialState);
+    let observedDodge = false;
     try {
       window.dispatchEvent(new KeyboardEvent("keydown", { code: activeKey, bubbles: true }));
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
       window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
       while (performance.now() < deadline) {
         const state = window.__JARVIS_H2__.snapshot();
+        if (state.combat.playerAction === "dodge") observedDodge = true;
         const enemyDistance = Math.hypot(
           state.position.x - state.combat.enemyPosition.x,
           state.position.z - state.combat.enemyPosition.z,
         );
-        if (state.combat.phase === "victory" || enemyDistance >= 3.1) return;
+        if (state.combat.phase === "victory" || (observedDodge && enemyDistance >= 3.1)) return;
         await new Promise(requestAnimationFrame);
       }
       throw new Error(`could not disengage beyond attack range: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
@@ -319,28 +321,23 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
     if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
     if (state.combat.enemyTelegraph) {
       if (state.combat.enemyAttack === "basic") {
-        const healthBeforeGuard = state.combat.playerHealth;
-        const resetBeforeGuard = state.resetId;
-        await page.keyboard.down("ShiftLeft");
-        try {
-          await retreatBeyondAttackRange(page);
-          await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
-            timeout: 10_000,
-            intervals: [30],
-          }).toBe(false);
-        } finally {
-          await page.keyboard.up("ShiftLeft");
-        }
-        const guarded = await snapshot(page);
-        if (guarded.combat.phase === "victory") {
+        const healthBeforeEvasion = state.combat.playerHealth;
+        const resetBeforeEvasion = state.resetId;
+        await retreatBeyondAttackRange(page);
+        await expect.poll(async () => (await snapshot(page)).combat.enemyTelegraph, {
+          timeout: 10_000,
+          intervals: [30],
+        }).toBe(false);
+        const defended = await snapshot(page);
+        if (defended.combat.phase === "victory") {
           if (!capturedVisibleFeedback) {
             throw new Error("bandit fell without captured visible player-hit feedback");
           }
           return;
         }
-        expect(guarded.resetId).toBe(resetBeforeGuard);
-        expect(guarded.combat.phase).toBe("engaged");
-        expect(guarded.combat.playerHealth).toBe(healthBeforeGuard);
+        expect(defended.resetId).toBe(resetBeforeEvasion);
+        expect(defended.combat.phase).toBe("engaged");
+        expect(defended.combat.playerHealth).toBe(healthBeforeEvasion);
         attacksRemaining = 2;
         continue;
       }
@@ -402,12 +399,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
         }
       }
       attacksRemaining -= 1;
-      await page.keyboard.down("ShiftLeft");
-      try {
-        await retreatBeyondAttackRange(page);
-      } finally {
-        await page.keyboard.up("ShiftLeft");
-      }
+      await retreatBeyondAttackRange(page);
     } else if (
       enemyDistance > 1.55
       && attacksRemaining > 0
