@@ -280,6 +280,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
   const deadline = Date.now() + 180_000;
   let capturedVisibleFeedback = false;
   let observedEnemyHealth = 100;
+  let attacksRemaining = 1;
   while (Date.now() < deadline) {
     const state = await snapshot(page);
     const enemyDamaged = state.combat.enemyHealth < observedEnemyHealth;
@@ -330,6 +331,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
         expect(guarded.resetId).toBe(resetBeforeGuard);
         expect(guarded.combat.phase).toBe("engaged");
         expect(guarded.combat.playerHealth).toBe(healthBeforeGuard);
+        attacksRemaining = 2;
         continue;
       }
       const movementKey = evasiveKey(state);
@@ -357,6 +359,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
           intervals: [80],
         })
         .toBe(false);
+      attacksRemaining = 2;
       continue;
     }
     const enemyDistance = Math.hypot(
@@ -365,10 +368,12 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
     );
     if (
       enemyDistance <= 2.35
+      && attacksRemaining > 0
       && state.combat.playerAction === "idle"
-      && state.combat.playerStamina >= 50
+      && state.combat.playerStamina >= 30
     ) {
       await page.locator("#attack").click();
+      attacksRemaining -= 1;
     }
     await page.waitForTimeout(90);
   }

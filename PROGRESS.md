@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 recovery-window attack cadence on 2026-08-31: the route permits one safe opening strike, then no more than two strikes after each defensively resolved telegraph, fitting their combined timing inside the authoritative 380 ms enemy recovery plus 580 ms cooldown. No additional combo can overlap the next basic guard, while a 30-stamina floor preserves its impact budget.
+
 - PR #11 ground-plane telegraph correction on 2026-08-31: Babylon's torus warning mesh now retains its authored horizontal XZ orientation at ground height, so the scaled basic, heavy, and area rings visibly outline their authoritative hit-validation radius instead of standing vertically and extending underground.
 
 - PR #11 continuous gate-corridor steering on 2026-08-31: the Bio now centers to `|x| <= 0.2`, uses 80 ms camera-aware pulses, laterally corrects whenever pre-exit drift exceeds 0.2, and fails if any snapshot before `z = 12` leaves the capsule-safe `|x| <= 0.65` bound, so yawed forward input cannot drift into a flank.
