@@ -238,19 +238,24 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
   while (Date.now() < deadline) {
     const state = await snapshot(page);
     const enemyDamaged = state.combat.enemyHealth < observedEnemyHealth;
-    observedEnemyHealth = state.combat.enemyHealth;
     if (!capturedVisibleFeedback && enemyDamaged) {
       const feedback = page.locator("#combat-feedback");
       const feedbackText = await feedback.textContent();
       if (
         await feedback.isVisible()
-        && (feedbackText === "BLOCKED · HALF DAMAGE" || feedbackText === "GUARD BROKEN")
+        && feedbackText === "BLOCKED · HALF DAMAGE"
       ) {
         await page.screenshot({ path: feedbackScreenshot });
         capturedVisibleFeedback = true;
+        observedEnemyHealth = state.combat.enemyHealth;
       }
     }
-    if (state.combat.phase === "victory") return;
+    if (state.combat.phase === "victory") {
+      if (!capturedVisibleFeedback) {
+        throw new Error("bandit fell without captured visible player-hit feedback");
+      }
+      return;
+    }
     if (state.combat.phase === "defeat") throw new Error("Bio was defeated during deterministic combat path");
     if (state.combat.enemyTelegraph) {
       const movementKey = evasiveKey(state);
