@@ -1,5 +1,7 @@
 # Progress
 
+- PR #11 hosted-route repair on 2026-08-31: the failed run proved combat victory, zero enemy health, and an opened gate on all three required browser profiles, but Playwright's host-timed 80 ms steering loop could not reliably center and traverse under hosted frame pacing. Post-victory navigation now runs on browser animation frames, continuously re-ranks real keyboard movement toward the gate center/destination, releases input on every exit, and fails closed if victory or gate authority is lost. Lint, typecheck, 13 unit tests, production build, and diff validation pass locally; hosted WebGL evidence remains required.
+
 - PR #11 continuous browser-frame combat on 2026-08-31: the full evidence fight is driven inside `requestAnimationFrame` through the real input handlers. The first authoritative damage frame is frozen through the real pause input for an atomic unobstructed screenshot, then resumed; the controller closes and attacks at the real strike stamina floor and uses stamina-free movement to clear telegraphs without CDP gaps or dodge starvation. Separate control coverage still proves dodge and guard integration.
 
 - PR #11 browser-frame input driving on 2026-08-31: route predicates and attack consumption now wait in `requestAnimationFrame`, and disengagement uses the real buffered dodge input in a camera-ranked direction. The proof also captures damage feedback immediately after an authoritative hit, before evasion can replace the banner.
