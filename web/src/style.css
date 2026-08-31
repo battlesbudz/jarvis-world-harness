@@ -75,10 +75,16 @@ body {
   line-height: 1.35;
 }
 
-#reset {
+#top-actions {
   position: absolute;
   top: max(16px, env(safe-area-inset-top));
   right: max(16px, env(safe-area-inset-right));
+  display: flex;
+  gap: 8px;
+}
+
+#reset,
+#pause {
   min-width: 54px;
   min-height: 48px;
   padding: 0 15px;
@@ -92,10 +98,56 @@ body {
   backdrop-filter: blur(8px);
 }
 
-#reset:focus-visible {
+#reset:focus-visible,
+#pause:focus-visible,
+.combat-button:focus-visible,
+#resume:focus-visible {
   outline: 3px solid #6bc3dd;
   outline-offset: 3px;
 }
+
+#player-hud {
+  position: absolute;
+  top: max(104px, calc(env(safe-area-inset-top) + 92px));
+  left: max(16px, env(safe-area-inset-left));
+  width: min(280px, 50vw);
+  display: grid;
+  gap: 7px;
+  padding: 10px 12px;
+  border: 1px solid rgb(220 190 120 / 32%);
+  border-radius: 10px;
+  background: rgb(12 27 27 / 82%);
+  backdrop-filter: blur(7px);
+  pointer-events: none;
+}
+
+.meter-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  color: #e8dfc4;
+  font: 700 10px/1 system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.meter {
+  grid-column: 1 / -1;
+  height: 9px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 99px;
+  background: rgb(0 0 0 / 55%);
+}
+
+.meter-fill {
+  width: 100%;
+  height: 100%;
+  transition: width 100ms linear;
+}
+
+#health-fill { background: linear-gradient(90deg, #76291f, #dc5947); }
+#stamina-fill { background: linear-gradient(90deg, #947329, #e6c44e); }
 
 #joystick {
   position: absolute;
@@ -127,13 +179,154 @@ body {
 #look-hint {
   position: absolute;
   right: max(24px, env(safe-area-inset-right));
-  bottom: max(42px, calc(env(safe-area-inset-bottom) + 20px));
+  bottom: max(168px, calc(env(safe-area-inset-bottom) + 154px));
   color: rgb(238 229 199 / 72%);
   font: 600 11px/1 system-ui, sans-serif;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   pointer-events: none;
 }
+
+#combat-controls {
+  position: absolute;
+  right: max(22px, env(safe-area-inset-right));
+  bottom: max(24px, calc(env(safe-area-inset-bottom) + 10px));
+  display: grid;
+  grid-template-columns: 70px 78px;
+  grid-template-rows: 58px 70px;
+  gap: 8px;
+  align-items: end;
+}
+
+.combat-button {
+  border: 1px solid rgb(237 220 171 / 62%);
+  border-radius: 50%;
+  color: #f7efd8;
+  background: radial-gradient(circle at 35% 30%, rgb(73 105 94 / 95%), rgb(18 40 37 / 95%));
+  box-shadow: inset 0 0 16px rgb(0 0 0 / 28%), 0 8px 24px rgb(0 0 0 / 28%);
+  font: 800 11px/1 system-ui, sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  touch-action: none;
+}
+
+.combat-button.attack {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 78px;
+  height: 78px;
+  align-self: center;
+  border-color: rgb(255 181 110 / 78%);
+  background: radial-gradient(circle at 35% 30%, #a94c32, #4c1713 72%);
+}
+
+.combat-button.defense { width: 62px; height: 62px; }
+.combat-button[data-pressed="true"] { transform: scale(0.94); filter: brightness(1.3); }
+.combat-button:disabled { opacity: 0.38; }
+
+#enemy-widget {
+  position: absolute;
+  width: 132px;
+  transform: translate(-50%, -110%);
+  color: #fff4dc;
+  font: 700 11px/1.2 system-ui, sans-serif;
+  text-align: center;
+  text-shadow: 0 2px 4px #000;
+  pointer-events: none;
+}
+
+.target-marker {
+  display: block;
+  color: #64d1e7;
+  font-size: 17px;
+  animation: target-pulse 900ms ease-in-out infinite alternate;
+}
+
+.enemy-meter {
+  height: 7px;
+  margin-top: 4px;
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 44%);
+  border-radius: 99px;
+  background: rgb(0 0 0 / 70%);
+}
+
+#enemy-health-fill {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, #781d1d, #ef5b43);
+}
+
+#combat-feedback {
+  position: absolute;
+  top: 28%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 7px 12px;
+  border-radius: 6px;
+  color: #ffe5a7;
+  background: rgb(15 21 20 / 72%);
+  font: 900 clamp(13px, 3vw, 18px)/1 system-ui, sans-serif;
+  letter-spacing: 0.1em;
+  text-shadow: 0 2px 5px #000;
+  pointer-events: none;
+}
+
+#combat-feedback[data-tone="success"] { color: #8ce0b0; }
+#combat-feedback[data-tone="danger"] { color: #ff7768; }
+#combat-feedback[data-tone="area"] { color: #ef83ff; }
+
+.damage-number {
+  position: absolute;
+  z-index: 5;
+  transform: translate(-50%, -50%);
+  color: #ffd36a;
+  font: 900 22px/1 system-ui, sans-serif;
+  text-shadow: 0 2px 5px #000;
+  pointer-events: none;
+  animation: damage-rise 700ms ease-out forwards;
+}
+
+.player-damage { color: #ff7465; }
+
+.screen-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgb(5 13 14 / 72%);
+  backdrop-filter: blur(7px);
+}
+
+.screen-overlay[hidden] { display: none; }
+
+.overlay-card {
+  width: min(86vw, 340px);
+  padding: 26px;
+  border: 1px solid rgb(223 199 139 / 52%);
+  border-radius: 16px;
+  background: linear-gradient(145deg, #17342f, #0d1d1d);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 55%);
+  text-align: center;
+}
+
+.overlay-card h1 { margin: 10px 0 20px; font-size: 24px; }
+.overlay-card button {
+  min-width: 120px;
+  min-height: 48px;
+  border: 1px solid #79c9dc;
+  border-radius: 99px;
+  color: #f9f1db;
+  background: #1c5158;
+  font: 800 13px/1 system-ui, sans-serif;
+  text-transform: uppercase;
+}
+
+.defeat .overlay-card { border-color: #a94c3f; background: linear-gradient(145deg, #3b1717, #150b0b); }
+
+@keyframes target-pulse { to { transform: translateY(-3px); filter: brightness(1.5); } }
+@keyframes damage-rise { to { transform: translate(-50%, -115%); opacity: 0; } }
 
 #completion {
   position: absolute;
@@ -178,6 +371,28 @@ body {
     left: 31px;
     width: 42px;
     height: 42px;
+  }
+
+  #player-hud {
+    top: max(122px, calc(env(safe-area-inset-top) + 110px));
+    width: 46vw;
+  }
+
+  #top-actions {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  #reset,
+  #pause {
+    min-height: 42px;
+    padding-inline: 10px;
+  }
+
+  #combat-controls {
+    right: max(12px, env(safe-area-inset-right));
+    transform: scale(0.84);
+    transform-origin: right bottom;
   }
 }
 

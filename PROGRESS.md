@@ -1,5 +1,103 @@
 # Progress
 
+- PR #11 center-crossing hardening on 2026-08-31: Codex identified that a 100 ms capped folded-profile frame can move 0.46 m and skip the 0.36 m center acceptance band. The continuous centering hold now stops either inside the band or on the first sign crossing of the route axis, preventing an overshoot from continuing away from the gate while retaining real input and the capsule-safe corridor bound.
+
+- PR #11 folded-profile route follow-up on 2026-08-31: browser-frame steering passed desktop and unfolded landscape, but folded software WebGL rendered too few steering frames to cross the gate before its bounded deadline. The route driver now turns with the real pointer-look control, holds continuous forward keyboard input until centered, turns directly toward the destination, and holds forward until the authoritative completion checkpoint. This removes per-frame zigzag decisions while preserving real player input and bounded fail-closed waits. Lint, typecheck, 13 unit tests, production build, and diff validation pass locally; hosted WebGL evidence remains required.
+
+- PR #11 hosted-route repair on 2026-08-31: the failed run proved combat victory, zero enemy health, and an opened gate on all three required browser profiles, but Playwright's host-timed 80 ms steering loop could not reliably center and traverse under hosted frame pacing. Post-victory navigation now runs on browser animation frames, continuously re-ranks real keyboard movement toward the gate center/destination, releases input on every exit, and fails closed if victory or gate authority is lost. Lint, typecheck, 13 unit tests, production build, and diff validation pass locally; hosted WebGL evidence remains required.
+
+- PR #11 continuous browser-frame combat on 2026-08-31: the full evidence fight is driven inside `requestAnimationFrame` through the real input handlers. The first authoritative damage frame is frozen through the real pause input for an atomic unobstructed screenshot, then resumed; the controller closes and attacks at the real strike stamina floor and uses stamina-free movement to clear telegraphs without CDP gaps or dodge starvation. Separate control coverage still proves dodge and guard integration.
+
+- PR #11 browser-frame input driving on 2026-08-31: route predicates and attack consumption now wait in `requestAnimationFrame`, and disengagement uses the real buffered dodge input in a camera-ranked direction. The proof also captures damage feedback immediately after an authoritative hit, before evasion can replace the banner.
+
+- PR #11 in-browser combat synchronization on 2026-08-31: frame-sensitive strike confirmation, guarded-impact observation, and adaptive escape pulses now run inside the browser animation loop while dispatching the same keyboard events used by players. Slow CDP round trips can no longer consume the combat deadline or miss a complete action between snapshots.
+
+- PR #11 authoritative guard integration on 2026-08-31: the cross-viewport controls scenario now reaches live combat, holds guard before the first basic telegraph, and proves unchanged health, continued engagement, and stamina loss beyond the 12-point impact cost. The route may safely evade basics without weakening browser coverage of actual block resolution.
+
+- PR #11 adaptive combat movement on 2026-08-31: escape movement is now issued as short, live-state-ranked pulses so the proof can route around arena geometry instead of holding one stale direction. Strike consumption also accepts authoritative enemy-health or combo advancement, covering attacks that start and finish between slow hosted snapshots, and the 50-stamina entry floor preserves the basic guard budget.
+
+- PR #11 explicit combat re-engagement on 2026-08-31: between telegraphs, the deterministic route uses live-yaw steering to close from the bandit's 2.15-meter chase boundary to the 1.55-meter strike threshold before each budgeted hit, then resumes its verified disengagement.
+
+- PR #11 close-range disengagement on 2026-08-31: the deterministic combat proof closes to a high-confidence hit distance, waits for the runtime to consume the strike, and immediately disengages beyond every enemy attack radius. This prevents a slow browser profile from remaining committed to an attack animation when a basic telegraph resolves.
+
+- PR #11 independent gate deadlines on 2026-08-31: gate centering and gate traversal have independent time budgets, and centering accepts the full capsule-safe corridor instead of exhausting traversal time while chasing an unnecessarily narrow center line.
+
+- PR #11 authoritative strike-budget consumption on 2026-08-31: after each attack click, the route waits for authoritative `attack-*` state or at least five stamina spent before decrementing the cycle budget, preventing two slow-frame clicks from collapsing into one boolean queued action and starving hosted combat damage.
+
+- PR #11 recovery-window attack cadence on 2026-08-31: the route permits one safe opening strike, then no more than two strikes after each defensively resolved telegraph, fitting their combined timing inside the authoritative 380 ms enemy recovery plus 580 ms cooldown. No additional combo can overlap the next basic guard, while a 30-stamina floor preserves its impact budget.
+
+- PR #11 ground-plane telegraph correction on 2026-08-31: Babylon's torus warning mesh now retains its authored horizontal XZ orientation at ground height, so the scaled basic, heavy, and area rings visibly outline their authoritative hit-validation radius instead of standing vertically and extending underground.
+
+- PR #11 continuous gate-corridor steering on 2026-08-31: the Bio now centers to `|x| <= 0.2`, uses 80 ms camera-aware pulses, laterally corrects whenever pre-exit drift exceeds 0.2, and fails if any snapshot before `z = 12` leaves the capsule-safe `|x| <= 0.65` bound, so yawed forward input cannot drift into a flank.
+
+- PR #11 capsule-safe gate corridor on 2026-08-31: opened-gate centering now requires `|x| <= 0.6`, safely inside the approximately 0.755-meter center clearance left by the 2.35-meter opening and the Bio's 0.42-meter collider radius, before any forward crossing input begins.
+
+- PR #11 staged opened-gate traversal on 2026-08-31: post-victory navigation now first uses live-yaw steering to center the Bio within the gate opening at its current depth, verifies the lateral corridor, and only then advances toward the destination, preventing a z-dominant steering choice from repeatedly pushing into a permanent gate flank.
+
+- PR #11 dual basic defense and camera-aware exit on 2026-08-31: short basic telegraphs now combine held guard with the same camera-ranked arena-safe physical escape, then still require an unchanged-health outcome. After victory, route completion selects W/A/S/D from live yaw to maximize progress toward the world-space destination instead of assuming camera-relative W points through the gate.
+
+- PR #11 basic-telegraph victory cancellation on 2026-08-31: if a pending Bio strike legitimately defeats the bandit and cancels a basic telegraph, the guard branch now accepts the authoritative victory only after confirming required visible-hit evidence was already captured; non-victory resolutions still require unchanged health/reset and continued engagement.
+
+- PR #11 authoritative basic-block proof on 2026-08-31: strikes now begin only with a 50-stamina reserve, leaving enough for the attack cost, held-block drain, and basic impact. Every short-telegraph defense independently proves unchanged health, unchanged reset identity, and continued engagement after resolution instead of accepting telegraph disappearance as success.
+
+- PR #11 throttled-frame basic defense on 2026-08-31: the deterministic route now holds authoritative guard through the short 580 ms basic telegraph, which hosted capped frames could resolve before ordinary locomotion established separation. Longer heavy and area attacks still require proven physical separation, and the independent controls scenario still exercises stamina drain plus keyboard dodge displacement.
+
+- PR #11 fail-closed combat screenshot proof on 2026-08-31: an uncaptured enemy-health decrease remains pending until the unambiguous `BLOCKED · HALF DAMAGE` player-strike message is visibly rendered, and victory now fails explicitly unless that frame was written, so direct Playwright CI cannot pass without its required combat-feedback PNG.
+
+- PR #11 damage-frame evidence binding on 2026-08-31: visible combat evidence is captured only on a newly observed authoritative enemy-health decrease whose currently rendered feedback is the Bio's exact blocked-hit or guard-break message, preventing a later telegraph or evasion banner from satisfying the evidence contract.
+
+- PR #11 visible-feedback evidence correction on 2026-08-31: each combat profile now captures its required `combat-victory` evidence on the first authoritative damaging hit while the hit feedback is visibly rendered, then records a distinct later `gate-open` image after persistent collision state proves the route is physically available.
+
+- PR #11 hosted range/evidence stabilization on 2026-08-31: the legitimate combat driver now spends stamina only inside the Bio's authoritative closing-step range instead of repeatedly missing after a physical evade. Victory screenshots and assertions wait for persistent enemy-health and physical-gate state while retaining the transient feedback text as context, so slow runners cannot reject a real win merely because the banner's display timer elapsed.
+
+- PR #11 physical-evasion proof completion on 2026-08-31: route defense can no longer treat telegraph resolution itself as a successful evade; held movement ends only after the authoritative snapshot proves player/enemy separation exceeds the attack range, then independently confirms the telegraph has resolved.
+
+- PR #11 sixteenth-review camera-relative evasion on 2026-08-31: hosted route defense now transforms W/A/S/D candidates through the snapshot's live lock-on camera yaw before ranking projected arena safety and enemy separation, so every chosen key matches its actual world-space displacement.
+
+- PR #11 hosted route physical-evasion strategy on 2026-08-30: after all 21 non-route browser scenarios passed, the victory driver replaced stamina-dependent queued dodges with ordinary collision-aware movement selected from safe arena-interior candidates. Each defense stops moving as soon as authoritative player/enemy separation exceeds the exact melee or area range, then waits for telegraph resolution; the dedicated controls scenario continues to prove block and dodge behavior independently.
+
+- PR #11 fifteenth-review dodge-state proof on 2026-08-30: queued-dodge direction is now released only after the authoritative 360 ms `dodge` action is observed, removing ordinary held-key locomotion as a false-positive start signal.
+
+- PR #11 fourteenth-review queued-dodge evidence on 2026-08-30: the hosted route keeps its selected lateral key held pending authoritative dodge-start evidence, ensuring a dodge buffered behind an attack still samples the intended safe direction on capped slow frames.
+
+- PR #11 hosted combat-route stabilization on 2026-08-30: the deterministic route now advances from the aggro edge into the arena interior before fighting, selects lateral dodges toward the center or away from the bandit, and holds dodge/block defense until the authoritative telegraph resolves instead of assuming wall-clock timing. Current hosted evidence passes 21 of 27 scenarios, with only the prior boundary-crossing route driver failing across the three profiles.
+
+- PR #11 thirteenth-review clock synchronization on 2026-08-30: Babylon animation groups now use a per-frame scene time scale derived from the exact capped combat delta and freeze while paused, so slow mobile frames cannot advance visible attacks, dodges, reactions, or defeat motion ahead of authoritative gameplay. A focused regression covers normal, capped, paused, and zero-delta clocks.
+
+- PR #11 twelfth-review animation timing on 2026-08-30: every state-bounded one-shot actor clip now derives its playback ratio from the authored clip length and the same authoritative attack, dodge, hit, stagger, recovery, guard-break, or defeat duration that advances gameplay, keeping visible motion and hit resolution synchronized.
+
+- PR #11 current-head CI scheduling on 2026-08-30: pull-request workflow runs now cancel obsolete in-progress executions so a known-bad predecessor cannot block authoritative current-head browser evidence; main-branch Pages builds remain serialized.
+
+- PR #11 hosted-ray registration fix on 2026-08-30: line-of-sight validation now imports Babylon's side-effectful Ray entry point so hosted production registers the picking implementation before `Scene.pickWithRay`; the prior core-only import surfaced a runtime diagnostic and prevented all authoritative strike resolution in Chromium.
+
+- PR #11 eleventh-review hardening on 2026-08-30: browser evidence now captures `PATH UNLOCKED` while the victory feedback is visibly rendered before independently waiting for the physical gate, and world reset clears feedback timers/content, hit-flash state, and all live damage-number elements so no prior-combat effects leak into the fresh spawn.
+
+- PR #11 hosted-browser combat hardening on 2026-08-30: current predecessor evidence passed 18 of 27 scenarios and isolated the remaining failures to transient combat timing. The control scenario now waits for attack recovery before measuring held block and uses the keyboard dodge path; the legitimate driver checks telegraphs every 90 ms, advances combos one authoritative strike at a time, alternates measured lateral dodges for heavy/area attacks, holds basic guard through impact, and uses a bounded 180-second profile budget.
+
+- PR #11 tenth-review hardening on 2026-08-30: player strikes now require the same authoritative unobstructed collision-geometry ray as enemy hits before either bandit dodge or damage can resolve, preventing melee through cottage and wall corners.
+
+- PR #11 ninth-review hardening on 2026-08-30: bandit chase and dodge displacement now use collision-aware movement with an enabled enemy collider, enemy damage additionally requires an unobstructed collision-geometry ray, and disengagement clears both stagger and dodge reaction state while completed staggers return the actor to guard idle.
+
+- PR #11 eighth-review hardening on 2026-08-30: the bandit's alternating third-hit dodge is now an explicit short state that cancels and advances any active telegraph before playing Roll without same-frame locomotion replacement, and identical consecutive non-looping attack clips restart so buffered combo boundaries remain visually synchronized.
+
+- PR #11 seventh-review hardening on 2026-08-30: the Bio's collision center is bounded inside the 42-meter ground footprint with capsule clearance, preventing traversal around the outer endpoints of the combat-gate flanks, and every enemy telegraph ring now derives its visible outer radius from the exact basic/heavy or area hit-validation range.
+
+- PR #11 sixth-review hardening on 2026-08-30: collision-enabled stone flanks now span the world boundary around the closed combat gate so the village cannot be entered around its sides, damaging hit reactions clear active dodge time and velocity, and narrow portrait layouts stack the Pause/Reset actions above the HUD without obscuring the status panel.
+
+- PR #11 fifth-review hardening on 2026-08-30: pause requests are consumed but ignored during the defeat delay so its automatic reset cannot be hidden behind an inaccessible overlay, and damaging hits now hold an explicit short reaction state that cancels an interrupted attack and keeps the Bio's hit animation visible before locomotion resumes.
+
+- PR #11 fourth-review hardening on 2026-08-30: guarded player hits preserve any active bandit attack animation through its still-authoritative impact, the area telegraph outer radius is derived from the same 2.75-meter range used for hit validation, and input clearing on pause, focus loss, or reset also discards queued attack, dodge, and pause actions.
+
+- PR #11 third-review hardening on 2026-08-30: player attacks retain their real pre-spend stamina so exhausted damage is scaled exactly once, active enemy telegraphs persist through impact even when the Bio crosses the normal melee boundary, and stopped movement returns the visible Bio to the appropriate idle animation.
+
+- PR #11 hosted-browser hardening on 2026-08-30: the first intact-asset Chromium run loaded both character models and passed 16 scenarios, exposing only automation timing/strategy failures. Collision evidence now waits for actual wall contact across emulation speeds, dodge evidence uses durable stamina and displacement outcomes instead of sampling a transient action frame, and the legitimate combat driver reserves a full-strength combo budget while dodging heavy/area attacks instead of exhausting itself into defeat.
+
+- PR #11 second-review hardening on 2026-08-30: the route-completion destination now lies beyond the physical combat gate, with a regression proving the approach side cannot complete the scenario, and the bandit's guard-break stagger uses the Warrior asset's existing `RecieveHit` clip.
+
+- PR #11 first-review hardening on 2026-08-30: combat evidence now reports the gate open only after its physical rise disables collision, held blocking suppresses stamina regeneration so its eight-second budget drains, and the sword bandit plays its actual `Sword_Attack` clips. Character GLBs now use baseline embedded JPEG textures without decoder-dependent glTF texture extensions, asset-load failures surface directly in browser assertions, and regressions cover held-block drain plus physical gate readiness. Lint, typecheck, 12 unit tests, production build, H2 specification checks, 23 bridge tests, and the complete H1 gate pass locally; hosted Chromium remains the authoritative browser run.
+
+- H2 combat and System UI slice on 2026-08-30: the operator completed a one-question-at-a-time combat design interview. The implementation adds a tap-driven three-hit unarmed combo, one-action input buffering, automatic target lock and strafing, freely moving attacks with a bounded closing step, shared stamina for attacks/block/dodge, severe exhausted actions, guard breaks, physical-distance dodges, readable basic/basic/heavy/area sword-bandit attacks, predictable block/dodge defense, health/stamina/enemy bars, hit flash and damage numbers, synthesized sound feedback, pause/defeat/reset flow, and a combat-gated path. Free CC0 Quaternius Monk and Warrior models are bundled locally with source/license evidence. Pure combat rules, browser scenarios, and the `h2-browser-combat-ui` gate now cover the agreed loop across desktop, folded-phone, and unfolded-landscape profiles.
+
 - H2 mobile-route time-budget correction on 2026-08-30: the complete route scenario now has a 75-second outer ceiling while retaining its 10-second per-movement bounds. Production evidence showed the unfolded mobile retry reach `complete` with no runtime errors before the prior 45-second test ceiling interrupted key release.
 
 - H2 mobile-route evidence stability on 2026-08-30: the bounded road-centering helper now allows slower mobile emulation enough time to cover the same measured lateral distance as desktop. The production gate exposed the prior three-second ceiling when folded and unfolded profiles stopped just outside the route tolerance without runtime or collision errors.
