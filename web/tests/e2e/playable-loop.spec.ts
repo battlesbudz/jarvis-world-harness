@@ -105,20 +105,35 @@ async function retreatBeyondAttackRange(page: Page): Promise<void> {
       return ranked[0].key;
     };
     const initialState = window.__JARVIS_H2__.snapshot();
+    const initialDistance = Math.hypot(
+      initialState.position.x - initialState.combat.enemyPosition.x,
+      initialState.position.z - initialState.combat.enemyPosition.z,
+    );
+    if (initialState.combat.phase === "victory" || initialDistance >= 3.1) return;
     const activeKey = chooseEvasiveKey(initialState);
     let observedDodge = false;
-    try {
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: activeKey, bubbles: true }));
+    let waitingForExistingDodge = initialState.combat.playerAction === "dodge";
+    const queueDodge = (): void => {
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
       window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
+    };
+    try {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: activeKey, bubbles: true }));
+      if (!waitingForExistingDodge) queueDodge();
       while (performance.now() < deadline) {
         const state = window.__JARVIS_H2__.snapshot();
-        if (state.combat.playerAction === "dodge") observedDodge = true;
         const enemyDistance = Math.hypot(
           state.position.x - state.combat.enemyPosition.x,
           state.position.z - state.combat.enemyPosition.z,
         );
-        if (state.combat.phase === "victory" || (observedDodge && enemyDistance >= 3.1)) return;
+        if (state.combat.phase === "victory" || (waitingForExistingDodge && enemyDistance >= 3.1)) return;
+        if (waitingForExistingDodge && state.combat.playerAction !== "dodge") {
+          waitingForExistingDodge = false;
+          queueDodge();
+        } else if (!waitingForExistingDodge && state.combat.playerAction === "dodge") {
+          observedDodge = true;
+        }
+        if (observedDodge && enemyDistance >= 3.1) return;
         await new Promise(requestAnimationFrame);
       }
       throw new Error(`could not disengage beyond attack range: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
