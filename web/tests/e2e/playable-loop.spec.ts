@@ -95,6 +95,34 @@ function evasiveKey(state: GameSnapshot): string {
   return ranked[0].key;
 }
 
+function navigationKey(state: GameSnapshot, target: { x: number; z: number }): string {
+  const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
+  const right = { x: Math.cos(state.yaw), z: -Math.sin(state.yaw) };
+  const desired = { x: target.x - state.position.x, z: target.z - state.position.z };
+  const candidates = [
+    { key: "KeyW", x: forward.x, z: forward.z },
+    { key: "KeyS", x: -forward.x, z: -forward.z },
+    { key: "KeyD", x: right.x, z: right.z },
+    { key: "KeyA", x: -right.x, z: -right.z },
+  ];
+  candidates.sort((left, rightCandidate) => (
+    rightCandidate.x * desired.x + rightCandidate.z * desired.z
+  ) - (
+    left.x * desired.x + left.z * desired.z
+  ));
+  return candidates[0].key;
+}
+
+async function completeRoute(page: Page): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    const state = await snapshot(page);
+    if (state.checkpoint === "complete") return;
+    await hold(page, navigationKey(state, { x: 0, z: 14 }), 120);
+  }
+  throw new Error(`could not traverse opened gate: ${JSON.stringify(await snapshot(page))}`);
+}
+
 function projectRevision(): string {
   const revision = process.env.H2_REVISION
     ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: resolve(process.cwd(), ".."), encoding: "utf8" }).trim();
@@ -261,6 +289,8 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
       if (state.combat.enemyAttack === "basic") {
         const healthBeforeGuard = state.combat.playerHealth;
         const resetBeforeGuard = state.resetId;
+        const movementKey = evasiveKey(state);
+        await page.keyboard.down(movementKey);
         await page.keyboard.down("ShiftLeft");
         try {
           await expect
@@ -271,6 +301,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
             .toBe(false);
         } finally {
           await page.keyboard.up("ShiftLeft");
+          await page.keyboard.up(movementKey);
         }
         const guarded = await snapshot(page);
         if (guarded.combat.phase === "victory") {
@@ -369,7 +400,7 @@ test("the legitimate route defeats the bandit and unlocks the village gate", asy
   expect(combatState.combat.enemyHealth).toBe(0);
   expect(combatState.combat.gateOpen).toBe(true);
   await page.screenshot({ path: resolve(evidenceDirectory, `gate-open-${testInfo.project.name}.png`) });
-  await holdUntil(page, "KeyW", (state) => state.checkpoint === "complete");
+  await completeRoute(page);
   await expect(page.locator("#completion")).toBeVisible();
   const finalState = await snapshot(page);
   expect(finalState.runtimeErrors).toEqual([]);
