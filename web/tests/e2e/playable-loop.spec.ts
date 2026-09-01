@@ -420,6 +420,47 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   expect(afterGuardedImpact.combat.phase).toBe("engaged");
 });
 
+test("rapid taps preserve the readable three-strike combo", async ({ page }) => {
+  await openGame(page);
+  await page.locator("#attack").evaluate((button) => {
+    for (let index = 0; index < 3; index += 1) {
+      button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: index + 1 }));
+    }
+  });
+  await expect.poll(async () => (await snapshot(page)).combat.playerAction, { timeout: 4_000 }).toBe("attack-3");
+  await expect.poll(async () => (await snapshot(page)).combat.comboStep).toBe(0);
+  expect((await snapshot(page)).runtimeErrors).toEqual([]);
+});
+
+test("target lock keeps the hero and camera facing the bandit", async ({ page }) => {
+  await openGame(page);
+  await holdUntil(page, "KeyD", "x6");
+  await holdUntil(page, "KeyW", "square");
+  await centerOnVillageRoad(page);
+  await holdUntil(page, "KeyW", "engaged");
+  const canvas = page.locator("#game-canvas");
+  const bounds = await canvas.boundingBox();
+  if (!bounds) throw new Error("game canvas has no bounds");
+  await page.mouse.move(bounds.x + bounds.width * 0.55, bounds.y + bounds.height * 0.5);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.5, { steps: 3 });
+  await page.mouse.up();
+  await page.waitForTimeout(100);
+  const state = await snapshot(page);
+  const targetYaw = Math.atan2(
+    state.combat.enemyPosition.x - state.position.x,
+    state.combat.enemyPosition.z - state.position.z,
+  );
+  const heroDifference = Math.atan2(
+    Math.sin(targetYaw - state.combat.playerFacingYaw),
+    Math.cos(targetYaw - state.combat.playerFacingYaw),
+  );
+  const cameraDifference = Math.atan2(Math.sin(targetYaw - state.yaw), Math.cos(targetYaw - state.yaw));
+  expect(Math.abs(heroDifference)).toBeLessThan(0.02);
+  expect(Math.abs(cameraDifference)).toBeLessThan(0.02);
+  expect(state.runtimeErrors).toEqual([]);
+});
+
 test("the legitimate route defeats the bandit and unlocks the village gate", async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   await openGame(page);
