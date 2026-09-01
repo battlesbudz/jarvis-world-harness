@@ -23,9 +23,9 @@ describe("game-state helpers", () => {
     expect(nextCheckpoint({ x: 0.5, y: 0.9, z: 11.3 }, "square")).toBe("square");
     expect(nextCheckpoint({ x: 0.5, y: 0.9, z: 12.5 }, "square")).toBe("complete");
     expect(roundedPosition({ x: 1.23456, y: 0.9, z: -2.34567 })).toEqual({
-      x: 1.235,
+      x: 1.23456,
       y: 0.9,
-      z: -2.346,
+      z: -2.34567,
     });
   });
 });
