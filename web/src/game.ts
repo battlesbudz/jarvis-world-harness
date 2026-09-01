@@ -327,6 +327,7 @@ export class AlbionGame {
       const pauseRequested = this.input.consumePause();
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
+        this.ageEffects(simulationSeconds);
         this.updateCombat(simulationSeconds);
         let movementSeconds = simulationSeconds;
         while (movementSeconds > 0) {
@@ -335,7 +336,7 @@ export class AlbionGame {
           this.updateRoute();
           movementSeconds -= stepSeconds;
         }
-        this.updateEffects(simulationSeconds);
+        this.syncEffectTransforms(simulationSeconds);
         this.updateCamera();
       }
       this.updateHud();
@@ -792,11 +793,14 @@ export class AlbionGame {
     }
   }
 
-  private updateEffects(delta: number): void {
+  private syncEffectTransforms(delta: number): void {
     this.targetMarker.position.copyFrom(this.enemy.position.add(new Vector3(0, 2.35, 0)));
     this.targetMarker.rotation.y += delta * 2;
     this.telegraphRing.position.x = this.enemy.position.x;
     this.telegraphRing.position.z = this.enemy.position.z;
+  }
+
+  private ageEffects(delta: number): void {
     if (this.impactElapsed > 0) {
       this.impactElapsed = Math.max(0, this.impactElapsed - delta);
       this.impactFlash.isVisible = this.impactElapsed > 0;
