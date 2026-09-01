@@ -398,21 +398,32 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   }
   const beforeDodge = await snapshot(page);
   const dodge = await page.evaluate(async (initial) => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyW", bubbles: true }));
     window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
     window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
     let minimumStamina = initial.combat.playerStamina;
+    let sawDodge = false;
     const deadline = performance.now() + 15_000;
-    while (performance.now() < deadline) {
-      await new Promise(requestAnimationFrame);
-      const current = window.__JARVIS_H2__.snapshot();
-      minimumStamina = Math.min(minimumStamina, current.combat.playerStamina);
-      if (Math.hypot(current.position.x - initial.position.x, current.position.z - initial.position.z) > 0.2) {
-        return { current, minimumStamina };
+    try {
+      while (performance.now() < deadline) {
+        await new Promise(requestAnimationFrame);
+        const current = window.__JARVIS_H2__.snapshot();
+        minimumStamina = Math.min(minimumStamina, current.combat.playerStamina);
+        sawDodge ||= current.combat.playerAction === "dodge";
+        if (sawDodge && current.combat.playerAction === "idle") return { current, minimumStamina };
       }
+      throw new Error(`dodge did not complete: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
+    } finally {
+      window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", bubbles: true }));
     }
-    throw new Error(`dodge did not move Bio: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
   }, beforeDodge);
   expect(dodge.minimumStamina).toBeLessThan(beforeDodge.combat.playerStamina - 10);
+  const dodgeDistance = Math.hypot(
+    dodge.current.position.x - beforeDodge.position.x,
+    dodge.current.position.z - beforeDodge.position.z,
+  );
+  expect(dodgeDistance).toBeGreaterThan(2.4);
+  expect(dodgeDistance).toBeLessThan(3.2);
   await page.getByRole("button", { name: "Pause combat" }).click();
   await expect(page.locator("#pause-overlay")).toBeVisible();
   const paused = await snapshot(page);
