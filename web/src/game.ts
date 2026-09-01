@@ -488,7 +488,12 @@ export class AlbionGame {
         ? COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind] + COMBAT.enemyRecoverySeconds
         : COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind];
       include(transition - this.enemyAttack.elapsed);
-    } else include(this.enemyAttackCooldown);
+    } else if (
+      this.phase === "engaged"
+      && this.enemyStaggerElapsed === 0
+      && this.enemyDodgeElapsed === 0
+      && Vector3.Distance(this.player.position, this.enemy.position) <= ENEMY_RANGE
+    ) include(this.enemyAttackCooldown);
     if (this.dodgeBuffered) include(this.dodgeCooldown);
     include(this.dodgeElapsed);
     include(this.guardBreakElapsed);
