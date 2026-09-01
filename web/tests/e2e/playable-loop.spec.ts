@@ -534,6 +534,7 @@ test("target lock keeps the hero and camera facing the bandit", async ({ page })
       afterMove.position.z - beforeMove.position.z,
     )).toBeGreaterThan(0.05);
     await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
+    await page.keyboard.up("ShiftLeft");
     await page.keyboard.down("KeyD");
     await page.keyboard.press("Space");
     await expect.poll(async () => (await snapshot(page)).combat.playerAction, { timeout: 15_000 }).toBe("dodge");
