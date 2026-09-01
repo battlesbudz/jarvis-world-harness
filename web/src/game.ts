@@ -358,6 +358,7 @@ export class AlbionGame {
         if (this.dodgeStartedThisFrame) {
           this.dodgeStartDelay = previousCooldownElapsed;
           this.dodgeCooldown = Math.max(0, this.dodgeCooldown - (simulationSeconds - previousCooldownElapsed));
+          this.staminaRegenDelay += previousCooldownElapsed;
           if (simulationSeconds > 0 && previousCooldownElapsed > 0) {
             this.scaleCurrentAnimationForRender(
               this.playerActor,
