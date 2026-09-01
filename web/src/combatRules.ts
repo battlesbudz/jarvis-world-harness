@@ -33,15 +33,14 @@ export const COMBAT = Object.freeze({
   enemyRecoverySeconds: 0.38,
   defeatResetSeconds: 1.35,
   frameCapSeconds: 0.1,
+  maxCatchUpSeconds: 0.3,
   enemyAttackCycle: Object.freeze(["basic", "basic", "heavy", "area"] as const),
   enemyTelegraphSeconds: Object.freeze({ basic: 0.58, heavy: 0.92, area: 1.12 }),
 });
 
 export function cappedAnimationTimeScale(rawDeltaSeconds: number, paused: boolean): number {
   if (paused || rawDeltaSeconds <= 0) return 0;
-  // Animation already advances on rendered frames. Slowing it again when combat
-  // simulation caps a long frame creates visible stutter on mobile devices.
-  return 1;
+  return Math.min(rawDeltaSeconds, COMBAT.maxCatchUpSeconds) / rawDeltaSeconds;
 }
 
 export function targetWithinAttackArc(
