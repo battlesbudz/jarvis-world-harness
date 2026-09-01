@@ -272,6 +272,7 @@ export class AlbionGame {
     this.gate.checkCollisions = true;
     this.yaw = 0;
     this.pitch = 0.24;
+    this.player.rotation.y = 0;
     this.checkpoint = "spawn";
     this.collisionCount = 0;
     this.collisionActive = false;
@@ -322,15 +323,20 @@ export class AlbionGame {
     if (this.disposed) return;
     try {
       const rawDeltaSeconds = Math.max(0, this.engine.getDeltaTime() / 1000);
-      const deltaSeconds = Math.min(rawDeltaSeconds, COMBAT.frameCapSeconds);
+      const simulationSeconds = Math.min(rawDeltaSeconds, COMBAT.maxCatchUpSeconds);
       const pauseRequested = this.input.consumePause();
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
-        this.updateCombat(deltaSeconds);
-        if (this.phase !== "defeat") this.movePlayer(deltaSeconds);
+        let remainingSeconds = simulationSeconds;
+        while (remainingSeconds > 0) {
+          const stepSeconds = Math.min(remainingSeconds, COMBAT.frameCapSeconds);
+          this.updateCombat(stepSeconds);
+          if (this.phase !== "defeat") this.movePlayer(stepSeconds);
+          this.updateRoute();
+          this.updateEffects(stepSeconds);
+          remainingSeconds -= stepSeconds;
+        }
         this.updateCamera();
-        this.updateRoute();
-        this.updateEffects(deltaSeconds);
       }
       this.updateHud();
       this.scene.animationTimeScale = cappedAnimationTimeScale(rawDeltaSeconds, this.paused);
