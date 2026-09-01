@@ -141,7 +141,7 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
           state.position.z - state.combat.enemyPosition.z,
         );
         if (state.combat.enemyTelegraph) {
-          const shouldBlock = state.combat.enemyAttack === "basic";
+          const shouldBlock = state.combat.enemyAttack === "basic" && state.combat.playerStamina >= 20;
           setBlocking(shouldBlock);
           if (!shouldBlock && distance < 4.2) {
             setMove(rankedKey(state, true));
@@ -160,13 +160,16 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
             setMove(null);
             if (
               state.combat.playerAction === "idle"
-              && state.combat.playerStamina >= 32
+              && state.combat.playerStamina >= 70
               && performance.now() - attackQueuedAt >= 500
             ) {
-              document.querySelector<HTMLButtonElement>("#attack")?.dispatchEvent(new PointerEvent("pointerdown", {
-                bubbles: true,
-                pointerId: 1,
-              }));
+              const attackButton = document.querySelector<HTMLButtonElement>("#attack");
+              for (let index = 0; index < 3; index += 1) {
+                attackButton?.dispatchEvent(new PointerEvent("pointerdown", {
+                  bubbles: true,
+                  pointerId: index + 1,
+                }));
+              }
               attackQueuedAt = performance.now();
             }
           }
@@ -449,12 +452,11 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   await holdUntil(page, "KeyW", "square");
   await centerOnVillageRoad(page);
   await page.keyboard.down("KeyW");
-  const beforeGuardedImpact = await page.evaluate(async () => {
+  await page.evaluate(async () => {
     while (window.__JARVIS_H2__.snapshot().combat.phase !== "engaged") {
       await new Promise(requestAnimationFrame);
     }
     window.dispatchEvent(new KeyboardEvent("keydown", { code: "ShiftLeft", bubbles: true }));
-    return window.__JARVIS_H2__.snapshot();
   });
   await page.keyboard.up("KeyW");
   try {
@@ -462,19 +464,20 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
       const state = window.__JARVIS_H2__.snapshot();
       return state.combat.enemyAttack === "basic" && state.combat.enemyTelegraph;
     }, undefined, { timeout: 30_000, polling: "raf" });
+    const beforeGuardedImpact = await snapshot(page);
     await page.waitForFunction(() => !window.__JARVIS_H2__.snapshot().combat.enemyTelegraph, undefined, {
       timeout: 30_000,
       polling: "raf",
     });
+    const afterGuardedImpact = await snapshot(page);
+    expect(afterGuardedImpact.combat.playerHealth).toBe(beforeGuardedImpact.combat.playerHealth);
+    expect(afterGuardedImpact.combat.playerStamina).toBeLessThan(beforeGuardedImpact.combat.playerStamina - 12);
+    expect(afterGuardedImpact.combat.phase).toBe("engaged");
   } finally {
     await page.evaluate(() => {
       window.dispatchEvent(new KeyboardEvent("keyup", { code: "ShiftLeft", bubbles: true }));
     });
   }
-  const afterGuardedImpact = await snapshot(page);
-  expect(afterGuardedImpact.combat.playerHealth).toBe(beforeGuardedImpact.combat.playerHealth);
-  expect(afterGuardedImpact.combat.playerStamina).toBeLessThan(beforeGuardedImpact.combat.playerStamina - 12);
-  expect(afterGuardedImpact.combat.phase).toBe("engaged");
 });
 
 test("rapid taps preserve the readable three-strike combo", async ({ page }) => {
@@ -505,18 +508,7 @@ test("target lock keeps the hero and camera facing the bandit", async ({ page })
     await page.mouse.down();
     await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.5, { steps: 3 });
     await page.mouse.up();
-    const lockedFacingError = (state: GameSnapshot): number => {
-      const targetYaw = Math.atan2(
-        state.combat.enemyPosition.x - state.position.x,
-        state.combat.enemyPosition.z - state.position.z,
-      );
-      const heroDifference = Math.atan2(
-        Math.sin(targetYaw - state.combat.playerFacingYaw),
-        Math.cos(targetYaw - state.combat.playerFacingYaw),
-      );
-      const cameraDifference = Math.atan2(Math.sin(targetYaw - state.yaw), Math.cos(targetYaw - state.yaw));
-      return Math.max(Math.abs(heroDifference), Math.abs(cameraDifference));
-    };
+    const lockedFacingError = (state: GameSnapshot): number => state.combat.targetFacingError;
     await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
     const beforeMove = await snapshot(page);
     const afterMove = await page.evaluate(async () => {
