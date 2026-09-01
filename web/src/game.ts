@@ -151,8 +151,6 @@ export class AlbionGame {
   private dodgeBuffered = false;
   private dodgeElapsed = 0;
   private dodgeCooldown = 0;
-  private dodgeStartedThisFrame = false;
-  private dodgeStartDelay = 0;
   private dodgeVelocity = Vector3.Zero();
   private guardBreakElapsed = 0;
   private hitReactionElapsed = 0;
@@ -172,6 +170,8 @@ export class AlbionGame {
   private playerReactionHeldUntilRender = false;
   private deferredPlayerAnimation: ActorAnimationRequest | null = null;
   private animationSpeedRestores: Array<{ animation: AnimationGroup; speedRatio: number }> = [];
+  private simulationFrameSeconds = 0;
+  private simulationStepOffset = 0;
   private audioContext: AudioContext | null = null;
 
   constructor(private readonly elements: GameElements, private readonly runtimeErrors: string[]) {
@@ -302,8 +302,6 @@ export class AlbionGame {
     this.dodgeBuffered = false;
     this.dodgeElapsed = 0;
     this.dodgeCooldown = 0;
-    this.dodgeStartedThisFrame = false;
-    this.dodgeStartDelay = 0;
     this.guardBreakElapsed = 0;
     this.hitReactionElapsed = 0;
     this.comboStep = 0;
@@ -346,36 +344,30 @@ export class AlbionGame {
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
         this.animationSpeedRestores = [];
+        this.simulationFrameSeconds = simulationSeconds;
+        this.simulationStepOffset = 0;
         this.ageEffects(simulationSeconds);
-        this.dodgeStartedThisFrame = false;
-        const previousCooldownElapsed = Math.min(this.dodgeCooldown, simulationSeconds);
-        this.dodgeCooldown = Math.max(0, this.dodgeCooldown - simulationSeconds);
         if (this.phase !== "defeat") {
           if (this.playerAction === "block" && !this.input.blocking()) this.playerAction = "idle";
           this.consumeDodgeInput();
           this.startBufferedAction();
         }
-        if (this.dodgeStartedThisFrame) {
-          this.dodgeStartDelay = previousCooldownElapsed;
-          this.dodgeCooldown = Math.max(0, this.dodgeCooldown - (simulationSeconds - previousCooldownElapsed));
-          this.staminaRegenDelay += previousCooldownElapsed;
-          if (simulationSeconds > 0 && previousCooldownElapsed > 0) {
-            this.scaleCurrentAnimationForRender(
-              this.playerActor,
-              (simulationSeconds - previousCooldownElapsed) / simulationSeconds,
-            );
-          }
-        }
         let movementSeconds = simulationSeconds;
+        let elapsedSeconds = 0;
         while (movementSeconds > 0.000001) {
+          this.simulationStepOffset = elapsedSeconds;
+          if (this.phase !== "defeat") this.startBufferedAction();
           const stepSeconds = this.nextSimulationStep(Math.min(movementSeconds, COMBAT.frameCapSeconds));
           if (this.phase !== "defeat") {
             this.movePlayer(stepSeconds);
           }
           this.updateRoute();
           this.updateCombat(stepSeconds);
+          this.dodgeCooldown = Math.max(0, this.dodgeCooldown - stepSeconds);
           movementSeconds -= stepSeconds;
+          elapsedSeconds += stepSeconds;
         }
+        this.simulationFrameSeconds = 0;
         this.syncEffectTransforms(simulationSeconds);
         this.updateCamera();
       }
@@ -493,10 +485,8 @@ export class AlbionGame {
         : COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind];
       include(transition - this.enemyAttack.elapsed);
     } else include(this.enemyAttackCooldown);
-    if (this.dodgeElapsed > 0) {
-      include(this.dodgeElapsed);
-      include(this.dodgeStartDelay);
-    }
+    if (this.dodgeBuffered) include(this.dodgeCooldown);
+    include(this.dodgeElapsed);
     include(this.guardBreakElapsed);
     include(this.hitReactionElapsed);
     include(this.enemyStaggerElapsed);
@@ -657,20 +647,14 @@ export class AlbionGame {
     this.player.rotation.y = Math.atan2(direction.x, direction.z);
     this.dodgeElapsed = COMBAT.dodgeDurationSeconds;
     this.dodgeCooldown = COMBAT.dodgeCooldownSeconds;
-    this.dodgeStartedThisFrame = true;
-    this.dodgeStartDelay = 0;
     this.playerAction = "dodge";
     this.playActor(this.playerActor, "Roll", false, COMBAT.dodgeDurationSeconds);
     this.playTone(310, 0.1, "sine");
   }
 
   private updateDodge(delta: number): void {
-    const delayed = Math.min(delta, this.dodgeStartDelay);
-    this.dodgeStartDelay = Math.max(0, this.dodgeStartDelay - delta);
-    const activeDelta = delta - delayed;
-    if (activeDelta === 0) return;
-    this.movePlayerCollider(this.dodgeVelocity.scale(Math.min(activeDelta, this.dodgeElapsed)));
-    this.dodgeElapsed = Math.max(0, this.dodgeElapsed - activeDelta);
+    this.movePlayerCollider(this.dodgeVelocity.scale(Math.min(delta, this.dodgeElapsed)));
+    this.dodgeElapsed = Math.max(0, this.dodgeElapsed - delta);
     if (this.dodgeElapsed === 0) {
       this.playerAction = "idle";
       if (this.targetLocked) this.faceLockedTarget();
@@ -769,7 +753,6 @@ export class AlbionGame {
       this.attackBuffered = false;
       this.dodgeBuffered = false;
       this.dodgeElapsed = 0;
-      this.dodgeStartDelay = 0;
       this.dodgeVelocity = Vector3.Zero();
       this.hitReactionElapsed = COMBAT.hitReactionSeconds;
       this.playerAction = "hit";
@@ -817,7 +800,7 @@ export class AlbionGame {
   }
 
   private movePlayer(delta: number): void {
-    if (this.dodgeElapsed > 0) return;
+    if (this.dodgeElapsed > 0 || (this.dodgeBuffered && this.dodgeCooldown > 0)) return;
     const movement = this.input.movement();
     if (this.targetLocked) this.faceLockedTarget();
     if (movement.forward === 0 && movement.right === 0) {
@@ -1023,6 +1006,12 @@ export class AlbionGame {
         : 1;
     animation?.start(loop, speedRatio, animation.from, animation.to, false);
     actor.current = name;
+    if (this.simulationFrameSeconds > 0 && this.simulationStepOffset > 0) {
+      this.scaleCurrentAnimationForRender(
+        actor,
+        (this.simulationFrameSeconds - this.simulationStepOffset) / this.simulationFrameSeconds,
+      );
+    }
   }
 
   private scaleCurrentAnimationForRender(actor: LoadedActor | null, scale: number): void {
