@@ -527,8 +527,11 @@ export class AlbionGame {
     this.phase = "engaged";
     this.targetLocked = true;
     this.targetMarker.isVisible = true;
-    this.faceLockedTarget();
-    this.yaw = this.player.rotation.y;
+    if (this.dodgeElapsed === 0) this.faceLockedTarget();
+    else {
+      const toward = this.enemy.position.subtract(this.player.position);
+      this.yaw = Math.atan2(toward.x, toward.z);
+    }
     this.elements.status.textContent = "Bandit engaged";
     this.elements.objective.textContent = "Defeat the sword bandit to open the gate";
     this.showFeedback("COMBAT", "warning");
