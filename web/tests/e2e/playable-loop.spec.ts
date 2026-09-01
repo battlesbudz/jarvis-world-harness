@@ -141,8 +141,9 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
           state.position.z - state.combat.enemyPosition.z,
         );
         if (state.combat.enemyTelegraph) {
-          setBlocking(state.combat.enemyAttack !== "area" && state.combat.playerStamina < 20);
-          if (distance < 4.2) {
+          const shouldBlock = state.combat.enemyAttack === "basic";
+          setBlocking(shouldBlock);
+          if (!shouldBlock && distance < 4.2) {
             setMove(rankedKey(state, true));
             if (state.combat.playerStamina >= 20 && dodgedAttack !== state.combat.enemyAttack) {
               window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
@@ -415,6 +416,7 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
           window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
           window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
           queuedSecondDodge = true;
+          window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyW", bubbles: true }));
         }
         const distance = Math.hypot(
           current.position.x - initial.position.x,
@@ -554,7 +556,6 @@ test("the legitimate route defeats the bandit and unlocks the village gate", asy
   await holdUntil(page, "KeyW", "square");
   await centerOnVillageRoad(page);
   await holdUntil(page, "KeyW", "engaged");
-  await holdUntil(page, "KeyW", "z3.2");
   await defeatBandit(
     page,
     resolve(evidenceDirectory, `combat-victory-${testInfo.project.name}.png`),
