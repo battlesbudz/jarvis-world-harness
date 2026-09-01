@@ -330,7 +330,11 @@ export class AlbionGame {
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
         this.ageEffects(simulationSeconds);
-        if (this.phase !== "defeat") this.consumeDodgeInput();
+        this.dodgeCooldown = Math.max(0, this.dodgeCooldown - simulationSeconds);
+        if (this.phase !== "defeat") {
+          this.consumeDodgeInput();
+          this.startBufferedAction();
+        }
         let movementSeconds = simulationSeconds;
         while (movementSeconds > 0) {
           const stepSeconds = Math.min(movementSeconds, COMBAT.frameCapSeconds);
@@ -370,7 +374,6 @@ export class AlbionGame {
     const regenSeconds = Math.max(0, delta - this.staminaRegenDelay);
     this.staminaRegenDelay = Math.max(0, this.staminaRegenDelay - delta);
     this.playerStamina = regenerateStamina(this.playerStamina, regenSeconds, blocking);
-    this.dodgeCooldown = Math.max(0, this.dodgeCooldown - delta);
     this.comboWindow = Math.max(0, this.comboWindow - delta);
     if (this.comboWindow === 0 && !this.attack) this.comboStep = 0;
     if (this.phase === "defeat") {
@@ -410,13 +413,6 @@ export class AlbionGame {
       this.playActor(this.playerActor, "Idle_Attacking", true);
     } else {
       this.playerAction = "idle";
-      if (this.dodgeBuffered && this.dodgeCooldown === 0) {
-        this.dodgeBuffered = false;
-        this.startDodge();
-      } else if (this.attackBuffered) {
-        this.attackBuffered = false;
-        this.startAttack();
-      }
     }
     if (this.phase === "engaged") this.updateEnemy(delta);
     else if (this.phase === "victory") this.openGate(delta);
@@ -435,6 +431,17 @@ export class AlbionGame {
       }
       this.startDodge();
     } else this.dodgeBuffered = true;
+  }
+
+  private startBufferedAction(): void {
+    if (this.playerAction !== "idle" || this.input.blocking()) return;
+    if (this.dodgeBuffered && this.dodgeCooldown === 0) {
+      this.dodgeBuffered = false;
+      this.startDodge();
+    } else if (this.attackBuffered) {
+      this.attackBuffered = false;
+      this.startAttack();
+    }
   }
 
   private engageCombat(): void {
