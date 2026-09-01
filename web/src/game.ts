@@ -388,8 +388,15 @@ export class AlbionGame {
     }
     if (this.input.consumeDodge()) {
       this.unlockAudio();
-      if (this.playerAction === "idle" && this.dodgeCooldown === 0) this.startDodge();
-      else this.dodgeBuffered = true;
+      if ((this.playerAction === "idle" || this.attack) && this.dodgeCooldown === 0) {
+        if (this.attack) {
+          this.attack = null;
+          this.attackBuffered = false;
+          this.comboStep = 0;
+          this.comboWindow = 0;
+        }
+        this.startDodge();
+      } else this.dodgeBuffered = true;
     }
     if (this.guardBreakElapsed > 0) {
       this.guardBreakElapsed = Math.max(0, this.guardBreakElapsed - delta);
