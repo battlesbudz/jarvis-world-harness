@@ -483,23 +483,24 @@ export class AlbionGame {
     if (this.attack && !this.attack.hitApplied) {
       include(COMBAT.attackHitTimes[this.attack.step - 1] - this.attack.elapsed);
     }
-    if (this.enemyAttack) {
-      const transition = this.enemyAttack.resolved
-        ? COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind] + COMBAT.enemyRecoverySeconds
-        : COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind];
-      include(transition - this.enemyAttack.elapsed);
-    } else if (
-      this.phase === "engaged"
-      && this.enemyStaggerElapsed === 0
-      && this.enemyDodgeElapsed === 0
-      && Vector3.Distance(this.player.position, this.enemy.position) <= ENEMY_RANGE
-    ) include(this.enemyAttackCooldown);
+    if (this.phase === "engaged") {
+      if (this.enemyAttack) {
+        const transition = this.enemyAttack.resolved
+          ? COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind] + COMBAT.enemyRecoverySeconds
+          : COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind];
+        include(transition - this.enemyAttack.elapsed);
+      } else if (
+        this.enemyStaggerElapsed === 0
+        && this.enemyDodgeElapsed === 0
+        && Vector3.Distance(this.player.position, this.enemy.position) <= ENEMY_RANGE
+      ) include(this.enemyAttackCooldown);
+      include(this.enemyStaggerElapsed);
+      include(this.enemyDodgeElapsed);
+    }
     if (this.dodgeBuffered) include(this.dodgeCooldown);
     include(this.dodgeElapsed);
     include(this.guardBreakElapsed);
     include(this.hitReactionElapsed);
-    include(this.enemyStaggerElapsed);
-    include(this.enemyDodgeElapsed);
     if (this.phase === "defeat") include(COMBAT.defeatResetSeconds - this.defeatElapsed);
     return Math.max(0.000001, boundary);
   }
@@ -779,6 +780,9 @@ export class AlbionGame {
     this.targetLocked = false;
     this.targetMarker.isVisible = false;
     this.enemyAttack = null;
+    this.enemyAttackCooldown = 0;
+    this.enemyStaggerElapsed = 0;
+    this.enemyDodgeElapsed = 0;
     this.telegraphRing.isVisible = false;
     this.playActor(this.enemyActor, "Death", false);
     this.elements.status.textContent = "Bandit defeated";
