@@ -426,6 +426,7 @@ export class AlbionGame {
     this.unlockAudio();
     if ((this.playerAction === "idle" || this.attack) && this.dodgeCooldown === 0) {
       if (this.attack) {
+        if (this.attack.step === 3 && this.attack.hitApplied) this.completedCombos += 1;
         this.attack = null;
         this.attackBuffered = false;
         this.comboStep = 0;
