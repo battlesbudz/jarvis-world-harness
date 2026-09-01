@@ -25,6 +25,7 @@ export interface GameSnapshot {
     playerStamina: number;
     playerAction: CombatAction;
     playerFacingYaw: number;
+    targetFacingError: number;
     comboStep: number;
     enemyHealth: number;
     enemyHome: Position3;
