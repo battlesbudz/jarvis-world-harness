@@ -447,19 +447,24 @@ test("target lock keeps the hero and camera facing the bandit", async ({ page })
   await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.5, { steps: 3 });
   await page.mouse.up();
   await page.waitForTimeout(100);
-  const state = await snapshot(page);
-  const targetYaw = Math.atan2(
-    state.combat.enemyPosition.x - state.position.x,
-    state.combat.enemyPosition.z - state.position.z,
-  );
-  const heroDifference = Math.atan2(
-    Math.sin(targetYaw - state.combat.playerFacingYaw),
-    Math.cos(targetYaw - state.combat.playerFacingYaw),
-  );
-  const cameraDifference = Math.atan2(Math.sin(targetYaw - state.yaw), Math.cos(targetYaw - state.yaw));
-  expect(Math.abs(heroDifference)).toBeLessThan(0.02);
-  expect(Math.abs(cameraDifference)).toBeLessThan(0.02);
-  expect(state.runtimeErrors).toEqual([]);
+  const expectLockedFacing = async (): Promise<void> => {
+    const state = await snapshot(page);
+    const targetYaw = Math.atan2(
+      state.combat.enemyPosition.x - state.position.x,
+      state.combat.enemyPosition.z - state.position.z,
+    );
+    const heroDifference = Math.atan2(
+      Math.sin(targetYaw - state.combat.playerFacingYaw),
+      Math.cos(targetYaw - state.combat.playerFacingYaw),
+    );
+    const cameraDifference = Math.atan2(Math.sin(targetYaw - state.yaw), Math.cos(targetYaw - state.yaw));
+    expect(Math.abs(heroDifference)).toBeLessThan(0.02);
+    expect(Math.abs(cameraDifference)).toBeLessThan(0.02);
+    expect(state.runtimeErrors).toEqual([]);
+  };
+  await expectLockedFacing();
+  await hold(page, "KeyD", 250);
+  await expectLockedFacing();
 });
 
 test("the legitimate route defeats the bandit and unlocks the village gate", async ({ page }, testInfo) => {
