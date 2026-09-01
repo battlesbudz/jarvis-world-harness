@@ -172,6 +172,8 @@ export class AlbionGame {
   private animationSpeedRestores: Array<{ animation: AnimationGroup; speedRatio: number }> = [];
   private simulationFrameSeconds = 0;
   private simulationStepOffset = 0;
+  private simulationStepStartOffset = 0;
+  private animationStartOffsetOverride: number | null = null;
   private audioContext: AudioContext | null = null;
 
   constructor(private readonly elements: GameElements, private readonly runtimeErrors: string[]) {
@@ -355,6 +357,7 @@ export class AlbionGame {
         let movementSeconds = simulationSeconds;
         let elapsedSeconds = 0;
         while (movementSeconds > 0.000001) {
+          this.simulationStepStartOffset = elapsedSeconds;
           this.simulationStepOffset = elapsedSeconds;
           if (this.phase !== "defeat") this.startBufferedAction();
           const stepSeconds = this.nextSimulationStep(Math.min(movementSeconds, COMBAT.frameCapSeconds));
@@ -362,6 +365,7 @@ export class AlbionGame {
             this.movePlayer(stepSeconds);
           }
           this.updateRoute();
+          this.simulationStepOffset = elapsedSeconds + stepSeconds;
           this.updateCombat(stepSeconds);
           this.dodgeCooldown = Math.max(0, this.dodgeCooldown - stepSeconds);
           movementSeconds -= stepSeconds;
@@ -533,7 +537,7 @@ export class AlbionGame {
     this.staminaRegenDelay = COMBAT.staminaRegenDelaySeconds;
     this.attack = { step, elapsed: 0, hitApplied: false, staminaBefore };
     this.playerAction = `attack-${step}`;
-    this.playActor(
+    this.playActorFromStepStart(
       this.playerActor,
       step === 2 ? "Attack2" : "Attack",
       false,
@@ -698,6 +702,7 @@ export class AlbionGame {
       );
       this.showFeedback(kind === "area" ? "AREA ATTACK" : kind === "heavy" ? "HEAVY ATTACK" : "SWORD ATTACK", kind);
       this.playTone(kind === "basic" ? 240 : kind === "heavy" ? 155 : 110, 0.16, "sawtooth");
+      return;
     }
     const attack = this.enemyAttack;
     if (!attack) return;
@@ -1006,12 +1011,25 @@ export class AlbionGame {
         : 1;
     animation?.start(loop, speedRatio, animation.from, animation.to, false);
     actor.current = name;
-    if (this.simulationFrameSeconds > 0 && this.simulationStepOffset > 0) {
+    const animationOffset = this.animationStartOffsetOverride ?? this.simulationStepOffset;
+    if (this.simulationFrameSeconds > 0 && animationOffset > 0) {
       this.scaleCurrentAnimationForRender(
         actor,
-        (this.simulationFrameSeconds - this.simulationStepOffset) / this.simulationFrameSeconds,
+        (this.simulationFrameSeconds - animationOffset) / this.simulationFrameSeconds,
       );
     }
+  }
+
+  private playActorFromStepStart(
+    actor: LoadedActor | null,
+    name: string,
+    loop: boolean,
+    durationSeconds?: number,
+  ): void {
+    const previousOverride = this.animationStartOffsetOverride;
+    this.animationStartOffsetOverride = this.simulationStepStartOffset;
+    this.playActor(actor, name, loop, durationSeconds);
+    this.animationStartOffsetOverride = previousOverride;
   }
 
   private scaleCurrentAnimationForRender(actor: LoadedActor | null, scale: number): void {
