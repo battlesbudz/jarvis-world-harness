@@ -330,6 +330,7 @@ export class AlbionGame {
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
         this.ageEffects(simulationSeconds);
+        if (this.phase !== "defeat") this.consumeDodgeInput();
         let movementSeconds = simulationSeconds;
         while (movementSeconds > 0) {
           const stepSeconds = Math.min(movementSeconds, COMBAT.frameCapSeconds);
@@ -390,18 +391,6 @@ export class AlbionGame {
         else if (this.playerAction === "idle") this.startAttack();
       }
     }
-    if (this.input.consumeDodge()) {
-      this.unlockAudio();
-      if ((this.playerAction === "idle" || this.attack) && this.dodgeCooldown === 0) {
-        if (this.attack) {
-          this.attack = null;
-          this.attackBuffered = false;
-          this.comboStep = 0;
-          this.comboWindow = 0;
-        }
-        this.startDodge();
-      } else this.dodgeBuffered = true;
-    }
     if (this.guardBreakElapsed > 0) {
       this.guardBreakElapsed = Math.max(0, this.guardBreakElapsed - delta);
       this.playerAction = "guard-broken";
@@ -432,6 +421,20 @@ export class AlbionGame {
     if (this.phase === "engaged") this.updateEnemy(delta);
     else if (this.phase === "victory") this.openGate(delta);
     if (this.targetLocked && this.dodgeElapsed === 0) this.faceLockedTarget();
+  }
+
+  private consumeDodgeInput(): void {
+    if (!this.input.consumeDodge()) return;
+    this.unlockAudio();
+    if ((this.playerAction === "idle" || this.attack) && this.dodgeCooldown === 0) {
+      if (this.attack) {
+        this.attack = null;
+        this.attackBuffered = false;
+        this.comboStep = 0;
+        this.comboWindow = 0;
+      }
+      this.startDodge();
+    } else this.dodgeBuffered = true;
   }
 
   private engageCombat(): void {
