@@ -403,8 +403,6 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
     window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
     let minimumStamina = initial.combat.playerStamina;
     let sawDodge = false;
-    let wasDodging = false;
-    let completedDodges = 0;
     let queuedSecondDodge = false;
     const deadline = performance.now() + 15_000;
     try {
@@ -418,9 +416,13 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
           window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
           queuedSecondDodge = true;
         }
-        if (wasDodging && current.combat.playerAction === "idle") completedDodges += 1;
-        wasDodging = current.combat.playerAction === "dodge";
-        if (sawDodge && completedDodges === 2) return { current, minimumStamina };
+        const distance = Math.hypot(
+          current.position.x - initial.position.x,
+          current.position.z - initial.position.z,
+        );
+        if (sawDodge && queuedSecondDodge && distance > 5.4 && current.combat.playerAction === "idle") {
+          return { current, minimumStamina };
+        }
       }
       throw new Error(`dodge did not complete: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
     } finally {
