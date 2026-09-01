@@ -401,11 +401,6 @@ export class AlbionGame {
 
   private updateCombat(delta: number): void {
     const blocking = this.input.blocking();
-    const regenSeconds = Math.max(0, delta - this.staminaRegenDelay);
-    this.staminaRegenDelay = Math.max(0, this.staminaRegenDelay - delta);
-    this.playerStamina = regenerateStamina(this.playerStamina, regenSeconds, blocking);
-    this.comboWindow = Math.max(0, this.comboWindow - delta);
-    if (this.comboWindow === 0 && !this.attack) this.comboStep = 0;
     if (this.phase === "defeat") {
       this.defeatElapsed += delta;
       if (this.defeatElapsed >= COMBAT.defeatResetSeconds) this.reset();
@@ -424,6 +419,11 @@ export class AlbionGame {
         else if (this.playerAction === "idle") this.startAttack();
       }
     }
+    const regenSeconds = Math.max(0, delta - this.staminaRegenDelay);
+    this.staminaRegenDelay = Math.max(0, this.staminaRegenDelay - delta);
+    this.playerStamina = regenerateStamina(this.playerStamina, regenSeconds, blocking);
+    this.comboWindow = Math.max(0, this.comboWindow - delta);
+    if (this.comboWindow === 0 && !this.attack) this.comboStep = 0;
     if (this.guardBreakElapsed > 0) {
       this.guardBreakElapsed = Math.max(0, this.guardBreakElapsed - delta);
       this.playerAction = "guard-broken";
