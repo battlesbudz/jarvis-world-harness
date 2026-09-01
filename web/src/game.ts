@@ -323,19 +323,14 @@ export class AlbionGame {
     if (this.disposed) return;
     try {
       const rawDeltaSeconds = Math.max(0, this.engine.getDeltaTime() / 1000);
-      const simulationSeconds = Math.min(rawDeltaSeconds, COMBAT.maxCatchUpSeconds);
+      const simulationSeconds = Math.min(rawDeltaSeconds, COMBAT.frameCapSeconds);
       const pauseRequested = this.input.consumePause();
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
-        let remainingSeconds = simulationSeconds;
-        while (remainingSeconds > 0) {
-          const stepSeconds = Math.min(remainingSeconds, COMBAT.frameCapSeconds);
-          this.updateCombat(stepSeconds);
-          if (this.phase !== "defeat") this.movePlayer(stepSeconds);
-          this.updateRoute();
-          this.updateEffects(stepSeconds);
-          remainingSeconds -= stepSeconds;
-        }
+        this.updateCombat(simulationSeconds);
+        if (this.phase !== "defeat") this.movePlayer(simulationSeconds);
+        this.updateRoute();
+        this.updateEffects(simulationSeconds);
         this.updateCamera();
       }
       this.updateHud();
@@ -727,7 +722,8 @@ export class AlbionGame {
     const forward = new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     const right = new Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     this.movePlayerCollider(forward.scale(movement.forward).addInPlace(right.scale(movement.right)).scaleInPlace(4.6 * delta));
-    if (!this.targetLocked) this.player.rotation.y = this.yaw;
+    if (this.targetLocked) this.faceLockedTarget();
+    else this.player.rotation.y = this.yaw;
     if (!this.attack && this.playerAction === "idle") this.playActor(this.playerActor, "Run", true);
   }
 
