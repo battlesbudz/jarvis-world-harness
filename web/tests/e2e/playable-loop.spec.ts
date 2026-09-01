@@ -403,6 +403,9 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
     window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
     let minimumStamina = initial.combat.playerStamina;
     let sawDodge = false;
+    let wasDodging = false;
+    let completedDodges = 0;
+    let queuedSecondDodge = false;
     const deadline = performance.now() + 15_000;
     try {
       while (performance.now() < deadline) {
@@ -410,7 +413,14 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
         const current = window.__JARVIS_H2__.snapshot();
         minimumStamina = Math.min(minimumStamina, current.combat.playerStamina);
         sawDodge ||= current.combat.playerAction === "dodge";
-        if (sawDodge && current.combat.playerAction === "idle") return { current, minimumStamina };
+        if (current.combat.playerAction === "dodge" && !queuedSecondDodge) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
+          window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
+          queuedSecondDodge = true;
+        }
+        if (wasDodging && current.combat.playerAction === "idle") completedDodges += 1;
+        wasDodging = current.combat.playerAction === "dodge";
+        if (sawDodge && completedDodges === 2) return { current, minimumStamina };
       }
       throw new Error(`dodge did not complete: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
     } finally {
@@ -422,8 +432,8 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
     dodge.current.position.x - beforeDodge.position.x,
     dodge.current.position.z - beforeDodge.position.z,
   );
-  expect(dodgeDistance).toBeGreaterThan(2.4);
-  expect(dodgeDistance).toBeLessThan(3.2);
+  expect(dodgeDistance).toBeGreaterThan(5.4);
+  expect(dodgeDistance).toBeLessThan(6.3);
   await page.getByRole("button", { name: "Pause combat" }).click();
   await expect(page.locator("#pause-overlay")).toBeVisible();
   const paused = await snapshot(page);
