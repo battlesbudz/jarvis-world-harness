@@ -60,10 +60,10 @@ describe("combat rules", () => {
     expect([0, 1, 2, 3, 4].map(nextEnemyAttack)).toEqual(["basic", "basic", "heavy", "area", "basic"]);
   });
 
-  it("keeps actor animation on real render time while combat caps long frames", () => {
+  it("keeps actor animation synchronized when combat caps long frames", () => {
     expect(cappedAnimationTimeScale(0.05, false)).toBe(1);
-    expect(cappedAnimationTimeScale(0.2, false)).toBe(1);
-    expect(cappedAnimationTimeScale(0.5, false)).toBeCloseTo(0.6);
+    expect(cappedAnimationTimeScale(0.2, false)).toBe(0.5);
+    expect(cappedAnimationTimeScale(0.5, false)).toBeCloseTo(0.2);
     expect(cappedAnimationTimeScale(0.2, true)).toBe(0);
     expect(cappedAnimationTimeScale(0, false)).toBe(0);
   });
