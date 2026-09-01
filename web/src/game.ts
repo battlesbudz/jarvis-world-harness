@@ -800,6 +800,8 @@ export class AlbionGame {
     this.playerAction = "idle";
     this.hitReactionElapsed = 0;
     this.defeatElapsed = 0;
+    this.playerReactionHeldUntilRender = false;
+    this.deferredPlayerAnimation = null;
     this.elements.defeatOverlay.hidden = false;
     this.elements.status.textContent = "Bio defeated";
     this.elements.objective.textContent = "The route will reset";
@@ -1006,7 +1008,12 @@ export class AlbionGame {
   }
 
   private playActor(actor: LoadedActor | null, name: string, loop: boolean, durationSeconds?: number): void {
-    if (actor === this.playerActor && this.playerReactionHeldUntilRender && name !== "RecieveHit") {
+    if (
+      actor === this.playerActor
+      && this.playerReactionHeldUntilRender
+      && name !== "RecieveHit"
+      && name !== "Death"
+    ) {
       this.deferredPlayerAnimation = { name, loop, durationSeconds };
       return;
     }
