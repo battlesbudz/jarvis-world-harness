@@ -100,6 +100,12 @@ interface LoadedActor {
   current: string | null;
 }
 
+interface ActorAnimationRequest {
+  name: string;
+  loop: boolean;
+  durationSeconds?: number;
+}
+
 const ENEMY_HOME = Object.freeze({ x: 0, y: 0.9, z: 6.5 });
 const ARENA_CENTER = new Vector3(0, 0.9, 6.2);
 const AGGRO_RADIUS = 5.4;
@@ -163,6 +169,9 @@ export class AlbionGame {
   private feedbackElapsed = 0;
   private playerActor: LoadedActor | null = null;
   private enemyActor: LoadedActor | null = null;
+  private playerReactionHeldUntilRender = false;
+  private deferredPlayerAnimation: ActorAnimationRequest | null = null;
+  private animationSpeedRestores: Array<{ animation: AnimationGroup; speedRatio: number }> = [];
   private audioContext: AudioContext | null = null;
 
   constructor(private readonly elements: GameElements, private readonly runtimeErrors: string[]) {
@@ -308,6 +317,9 @@ export class AlbionGame {
     this.gateRise = 0;
     this.impactElapsed = 0;
     this.feedbackElapsed = 0;
+    this.playerReactionHeldUntilRender = false;
+    this.deferredPlayerAnimation = null;
+    this.animationSpeedRestores = [];
     this.telegraphRing.isVisible = false;
     this.targetMarker.isVisible = false;
     this.impactFlash.isVisible = false;
@@ -333,6 +345,7 @@ export class AlbionGame {
       const pauseRequested = this.input.consumePause();
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
+        this.animationSpeedRestores = [];
         this.ageEffects(simulationSeconds);
         this.dodgeStartedThisFrame = false;
         const previousCooldownElapsed = Math.min(this.dodgeCooldown, simulationSeconds);
@@ -344,6 +357,12 @@ export class AlbionGame {
         if (this.dodgeStartedThisFrame) {
           this.dodgeStartDelay = previousCooldownElapsed;
           this.dodgeCooldown = Math.max(0, this.dodgeCooldown - (simulationSeconds - previousCooldownElapsed));
+          if (simulationSeconds > 0 && previousCooldownElapsed > 0) {
+            this.scaleCurrentAnimationForRender(
+              this.playerActor,
+              (simulationSeconds - previousCooldownElapsed) / simulationSeconds,
+            );
+          }
         }
         let movementSeconds = simulationSeconds;
         while (movementSeconds > 0.000001) {
@@ -361,6 +380,7 @@ export class AlbionGame {
       this.updateHud();
       this.scene.animationTimeScale = cappedAnimationTimeScale(rawDeltaSeconds, this.paused);
       this.scene.render();
+      this.completeRenderedVisualTransitions();
       this.completeRenderedPlayerAttack();
       if (!this.ready) {
         this.ready = true;
@@ -732,6 +752,7 @@ export class AlbionGame {
         false,
         result.guardBroken ? COMBAT.guardBreakSeconds : COMBAT.hitReactionSeconds,
       );
+      this.playerReactionHeldUntilRender = true;
       this.playTone(72, 0.18, "square");
     }
     if (result.guardBroken) {
@@ -983,6 +1004,10 @@ export class AlbionGame {
   }
 
   private playActor(actor: LoadedActor | null, name: string, loop: boolean, durationSeconds?: number): void {
+    if (actor === this.playerActor && this.playerReactionHeldUntilRender && name !== "RecieveHit") {
+      this.deferredPlayerAnimation = { name, loop, durationSeconds };
+      return;
+    }
     if (!actor || (actor.current === name && loop)) return;
     for (const animation of actor.animations.values()) animation.stop();
     const animation = actor.animations.get(name) ?? actor.animations.get("Idle");
@@ -993,6 +1018,23 @@ export class AlbionGame {
         : 1;
     animation?.start(loop, speedRatio, animation.from, animation.to, false);
     actor.current = name;
+  }
+
+  private scaleCurrentAnimationForRender(actor: LoadedActor | null, scale: number): void {
+    if (!actor?.current || scale >= 1) return;
+    const animation = actor.animations.get(actor.current);
+    if (!animation) return;
+    this.animationSpeedRestores.push({ animation, speedRatio: animation.speedRatio });
+    animation.speedRatio *= Math.max(0, scale);
+  }
+
+  private completeRenderedVisualTransitions(): void {
+    for (const restore of this.animationSpeedRestores) restore.animation.speedRatio = restore.speedRatio;
+    this.animationSpeedRestores = [];
+    this.playerReactionHeldUntilRender = false;
+    const deferred = this.deferredPlayerAnimation;
+    this.deferredPlayerAnimation = null;
+    if (deferred) this.playActor(this.playerActor, deferred.name, deferred.loop, deferred.durationSeconds);
   }
 
   private combatLineClear(): boolean {
