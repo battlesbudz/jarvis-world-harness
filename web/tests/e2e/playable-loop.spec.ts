@@ -508,7 +508,7 @@ test("target lock keeps the hero and camera facing the bandit", async ({ page })
     await page.mouse.down();
     await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.5, { steps: 3 });
     await page.mouse.up();
-    const lockedFacingError = (state: GameSnapshot): number => state.combat.targetFacingError;
+    const lockedFacingError = (state: GameSnapshot): number => state.combat.targetFacingError ?? Number.POSITIVE_INFINITY;
     await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
     const beforeMove = await snapshot(page);
     const afterMove = await page.evaluate(async () => {
@@ -533,6 +533,13 @@ test("target lock keeps the hero and camera facing the bandit", async ({ page })
       afterMove.position.x - beforeMove.position.x,
       afterMove.position.z - beforeMove.position.z,
     )).toBeGreaterThan(0.05);
+    await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
+    await page.keyboard.down("KeyD");
+    await page.keyboard.press("Space");
+    await expect.poll(async () => (await snapshot(page)).combat.playerAction, { timeout: 15_000 }).toBe("dodge");
+    expect((await snapshot(page)).combat.targetFacingError).toBeNull();
+    await page.keyboard.up("KeyD");
+    await expect.poll(async () => (await snapshot(page)).combat.playerAction, { timeout: 15_000 }).toBe("idle");
     await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
     expect((await snapshot(page)).runtimeErrors).toEqual([]);
   } finally {
