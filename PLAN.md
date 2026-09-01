@@ -1,5 +1,12 @@
 # Agent Plan
 
+## Active playtest correction
+
+1. Codify target-relative facing, directional dodge, combo input preservation, and frontal hit validation as deterministic rules.
+2. Make lock-on authoritative for player facing and camera framing, and give all three strikes distinct timing/animation presentation.
+3. Blend temporary character animations and keep animation time aligned with real rendering time during slow mobile frames.
+4. Run focused unit tests, the browser combat scenario, and the complete H2 gate; record reproducible evidence.
+
 1. Freeze a versioned bridge contract between authoritative Unreal events, World OS inputs, proposals, validation outcomes, and causal traces. Persist retry ledgers with world state, authenticate World OS proposal origins, and enforce canonical outcome/event identities across conflicts and restarts.
 2. Build one compact mobile-first Babylon.js Albion village greybox around measured player movement and combat metrics.
 3. Publish each tested `main` build to GitHub Pages, drive the deployed URL in WebGL-capable desktop and mobile browsers, and verify it on the target phone.
