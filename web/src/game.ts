@@ -351,6 +351,7 @@ export class AlbionGame {
         const previousCooldownElapsed = Math.min(this.dodgeCooldown, simulationSeconds);
         this.dodgeCooldown = Math.max(0, this.dodgeCooldown - simulationSeconds);
         if (this.phase !== "defeat") {
+          if (this.playerAction === "block" && !this.input.blocking()) this.playerAction = "idle";
           this.consumeDodgeInput();
           this.startBufferedAction();
         }
@@ -491,8 +492,10 @@ export class AlbionGame {
         : COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind];
       include(transition - this.enemyAttack.elapsed);
     } else include(this.enemyAttackCooldown);
-    include(this.dodgeElapsed);
-    include(this.dodgeStartDelay);
+    if (this.dodgeElapsed > 0) {
+      include(this.dodgeElapsed);
+      include(this.dodgeStartDelay);
+    }
     include(this.guardBreakElapsed);
     include(this.hitReactionElapsed);
     include(this.enemyStaggerElapsed);
@@ -765,6 +768,7 @@ export class AlbionGame {
       this.attackBuffered = false;
       this.dodgeBuffered = false;
       this.dodgeElapsed = 0;
+      this.dodgeStartDelay = 0;
       this.dodgeVelocity = Vector3.Zero();
       this.hitReactionElapsed = COMBAT.hitReactionSeconds;
       this.playerAction = "hit";
