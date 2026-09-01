@@ -63,6 +63,7 @@ describe("combat rules", () => {
   it("keeps actor animation on real render time while combat caps long frames", () => {
     expect(cappedAnimationTimeScale(0.05, false)).toBe(1);
     expect(cappedAnimationTimeScale(0.2, false)).toBe(1);
+    expect(cappedAnimationTimeScale(0.5, false)).toBeCloseTo(0.6);
     expect(cappedAnimationTimeScale(0.2, true)).toBe(0);
     expect(cappedAnimationTimeScale(0, false)).toBe(0);
   });
