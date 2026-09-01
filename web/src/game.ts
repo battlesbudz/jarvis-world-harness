@@ -29,6 +29,7 @@ import {
   resolveEnemyHit,
   spendStamina,
   staminaStrength,
+  targetWithinAttackArc,
   type EnemyAttackKind,
 } from "./combatRules";
 import { createInputController, type InputController } from "./input";
@@ -191,7 +192,7 @@ export class AlbionGame {
       elements.joystickKnob,
       { attack: elements.attack, block: elements.block, dodge: elements.dodge, pause: elements.pause },
       (deltaYaw, deltaPitch) => {
-        this.yaw += deltaYaw;
+        if (!this.targetLocked) this.yaw += deltaYaw;
         this.pitch = clamp(this.pitch + deltaPitch, -0.15, 0.65);
       },
     );
@@ -200,7 +201,7 @@ export class AlbionGame {
     window.addEventListener("resize", this.resize);
     window.addEventListener("blur", this.autoPause);
     document.addEventListener("visibilitychange", this.visibilityPause);
-    this.updateCamera(0);
+    this.updateCamera();
     this.updateHud();
     this.engine.runRenderLoop(this.frame);
     void this.loadActors();
@@ -223,6 +224,7 @@ export class AlbionGame {
         playerHealth: Number(this.playerHealth.toFixed(2)),
         playerStamina: Number(this.playerStamina.toFixed(2)),
         playerAction: this.playerAction,
+        playerFacingYaw: Number(this.player.rotation.y.toFixed(4)),
         comboStep: this.comboStep,
         enemyHealth: Number(this.enemyHealth.toFixed(2)),
         enemyHome: roundedPosition({ ...ENEMY_HOME }),
@@ -312,7 +314,7 @@ export class AlbionGame {
     this.setPaused(false);
     this.playActor(this.playerActor, "Idle", true);
     this.playActor(this.enemyActor, "Idle_Attacking", true);
-    this.updateCamera(0);
+    this.updateCamera();
     this.updateHud();
   };
 
@@ -326,7 +328,7 @@ export class AlbionGame {
       if (!this.paused) {
         this.updateCombat(deltaSeconds);
         if (this.phase !== "defeat") this.movePlayer(deltaSeconds);
-        this.updateCamera(deltaSeconds);
+        this.updateCamera();
         this.updateRoute();
         this.updateEffects(deltaSeconds);
       }
@@ -369,7 +371,7 @@ export class AlbionGame {
       this.disengageCombat();
       return;
     }
-    if (this.input.consumeAttack()) {
+    if (!this.attackBuffered && this.input.consumeAttack()) {
       this.unlockAudio();
       if (!blocking) {
         if (this.attack) this.attackBuffered = true;
@@ -409,12 +411,15 @@ export class AlbionGame {
     }
     if (this.phase === "engaged") this.updateEnemy(delta);
     else if (this.phase === "victory") this.openGate(delta);
+    if (this.targetLocked && this.dodgeElapsed === 0) this.faceLockedTarget();
   }
 
   private engageCombat(): void {
     this.phase = "engaged";
     this.targetLocked = true;
     this.targetMarker.isVisible = true;
+    this.faceLockedTarget();
+    this.yaw = this.player.rotation.y;
     this.elements.status.textContent = "Bandit engaged";
     this.elements.objective.textContent = "Defeat the sword bandit to open the gate";
     this.showFeedback("COMBAT", "warning");
@@ -440,6 +445,7 @@ export class AlbionGame {
   }
 
   private startAttack(): void {
+    if (this.targetLocked) this.faceLockedTarget();
     const step = (this.comboStep >= 1 && this.comboStep < 3 && this.comboWindow > 0 ? this.comboStep + 1 : 1) as 1 | 2 | 3;
     const staminaBefore = this.playerStamina;
     this.playerStamina = spendStamina(this.playerStamina, COMBAT.attackStaminaCost);
@@ -484,6 +490,16 @@ export class AlbionGame {
     if (this.phase !== "engaged") return;
     const toward = this.enemy.position.subtract(this.player.position);
     const distance = toward.length();
+    if (!targetWithinAttackArc(
+      this.player.rotation.y,
+      this.player.position.x,
+      this.player.position.z,
+      this.enemy.position.x,
+      this.enemy.position.z,
+    )) {
+      this.showFeedback("MISS · WRONG DIRECTION", "muted");
+      return;
+    }
     if (distance > PLAYER_RANGE && distance <= PLAYER_RANGE + 0.65) {
       this.player.moveWithCollisions(toward.normalize().scale(Math.min(0.42, distance - PLAYER_RANGE + 0.08)));
     }
@@ -529,14 +545,16 @@ export class AlbionGame {
 
   private startDodge(): void {
     const movement = this.input.movement();
-    const forward = new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
-    const right = new Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+    const facingYaw = this.player.rotation.y;
+    const forward = new Vector3(Math.sin(facingYaw), 0, Math.cos(facingYaw));
+    const right = new Vector3(Math.cos(facingYaw), 0, -Math.sin(facingYaw));
     const requested = forward.scale(movement.forward).add(right.scale(movement.right));
     const direction = requested.lengthSquared() > 0.02 ? requested.normalize() : forward;
     const strength = staminaStrength(this.playerStamina, COMBAT.dodgeStaminaCost);
     this.playerStamina = spendStamina(this.playerStamina, COMBAT.dodgeStaminaCost);
     const distance = strength <= 0.25 ? COMBAT.exhaustedDodgeDistance : COMBAT.dodgeDistance * strength;
     this.dodgeVelocity = direction.scale(distance / COMBAT.dodgeDurationSeconds);
+    this.player.rotation.y = Math.atan2(direction.x, direction.z);
     this.dodgeElapsed = COMBAT.dodgeDurationSeconds;
     this.dodgeCooldown = COMBAT.dodgeCooldownSeconds;
     this.playerAction = "dodge";
@@ -549,6 +567,7 @@ export class AlbionGame {
     this.dodgeElapsed = Math.max(0, this.dodgeElapsed - delta);
     if (this.dodgeElapsed === 0) {
       this.playerAction = "idle";
+      if (this.targetLocked) this.faceLockedTarget();
       this.playActor(this.playerActor, "Idle_Attacking", true);
     }
   }
@@ -691,6 +710,7 @@ export class AlbionGame {
   private movePlayer(delta: number): void {
     if (this.dodgeElapsed > 0) return;
     const movement = this.input.movement();
+    if (this.targetLocked) this.faceLockedTarget();
     if (movement.forward === 0 && movement.right === 0) {
       this.collisionActive = false;
       if (!this.attack && this.playerAction === "idle") {
@@ -701,10 +721,7 @@ export class AlbionGame {
     const forward = new Vector3(Math.sin(this.yaw), 0, Math.cos(this.yaw));
     const right = new Vector3(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
     this.movePlayerCollider(forward.scale(movement.forward).addInPlace(right.scale(movement.right)).scaleInPlace(4.6 * delta));
-    if (this.targetLocked) {
-      const toward = this.enemy.position.subtract(this.player.position);
-      this.player.rotation.y = Math.atan2(toward.x, toward.z);
-    } else this.player.rotation.y = this.yaw;
+    if (!this.targetLocked) this.player.rotation.y = this.yaw;
     if (!this.attack && this.playerAction === "idle") this.playActor(this.playerActor, "Run", true);
   }
 
@@ -725,13 +742,10 @@ export class AlbionGame {
     this.collisionActive = blocked;
   }
 
-  private updateCamera(delta: number): void {
-    if (this.targetLocked && delta > 0) {
+  private updateCamera(): void {
+    if (this.targetLocked) {
       const toward = this.enemy.position.subtract(this.player.position);
-      const desired = Math.atan2(toward.x, toward.z);
-      let difference = ((desired - this.yaw + Math.PI) % (Math.PI * 2)) - Math.PI;
-      if (difference < -Math.PI) difference += Math.PI * 2;
-      this.yaw += difference * Math.min(1, delta * 0.72);
+      this.yaw = Math.atan2(toward.x, toward.z);
     }
     const distance = 5.4 * Math.cos(this.pitch);
     const target = this.player.position.add(new Vector3(0, 0.65, 0));
@@ -743,6 +757,11 @@ export class AlbionGame {
     this.camera.setTarget(this.targetLocked
       ? Vector3.Lerp(target, this.enemy.position.add(new Vector3(0, 0.8, 0)), 0.32)
       : target.add(new Vector3(0, 0.25, 0)));
+  }
+
+  private faceLockedTarget(): void {
+    const toward = this.enemy.position.subtract(this.player.position);
+    if (toward.lengthSquared() > 0.0001) this.player.rotation.y = Math.atan2(toward.x, toward.z);
   }
 
   private updateRoute(): void {
@@ -862,6 +881,12 @@ export class AlbionGame {
       mesh.rotationQuaternion = null;
       mesh.rotation.y = Math.PI;
       mesh.isPickable = false;
+    }
+    for (const group of groups) {
+      for (const targeted of group.targetedAnimations) {
+        targeted.animation.enableBlending = true;
+        targeted.animation.blendingSpeed = 0.14;
+      }
     }
     return { animations: new Map(groups.map((group) => [group.name, group])), current: null };
   }
