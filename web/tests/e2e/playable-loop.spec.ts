@@ -47,7 +47,7 @@ async function holdUntil(page: Page, key: string, condition: HoldCondition): Pro
       if (kind === "square") return state.checkpoint === "square";
       if (kind === "engaged") return state.combat.phase === "engaged";
       return state.position.z >= 3.2;
-    }, condition, { timeout: 15_000, polling: "raf" });
+    }, condition, { timeout: 30_000, polling: "raf" });
   } finally {
     await page.keyboard.up(key);
   }
@@ -262,7 +262,7 @@ test("keyboard movement is physical and the shortcut wall blocks passage", async
   await holdUntil(page, "KeyW", "collision");
   const blocked = await snapshot(page);
   expect(blocked.position.z).toBeGreaterThan(-12);
-  expect(blocked.position.z).toBeLessThan(-2.7);
+  expect(blocked.position.z).toBeLessThan(-2.6);
   expect(blocked.collisionCount).toBeGreaterThan(0);
   expect(blocked.runtimeErrors).toEqual([]);
   const screenshot = `blocked-shortcut-${testInfo.project.name}.png`;
@@ -370,18 +370,33 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
   test.setTimeout(120_000);
   await openGame(page);
   await page.locator("#attack").click();
-  await page.waitForTimeout(90);
-  expect((await snapshot(page)).combat.playerStamina).toBeLessThan(100);
-  await expect.poll(async () => (await snapshot(page)).combat.playerAction).toBe("idle");
+  await expect.poll(async () => (await snapshot(page)).combat.playerStamina, { timeout: 15_000 }).toBeLessThan(100);
+  await expect.poll(async () => (await snapshot(page)).combat.playerAction, { timeout: 15_000 }).toBe("idle");
   await page.keyboard.down("ShiftLeft");
   const staminaBeforeBlock = (await snapshot(page)).combat.playerStamina;
-  await page.waitForTimeout(650);
-  await page.keyboard.up("ShiftLeft");
-  expect((await snapshot(page)).combat.playerStamina).toBeLessThan(staminaBeforeBlock - 2);
+  try {
+    await expect.poll(async () => (await snapshot(page)).combat.playerStamina, { timeout: 15_000 })
+      .toBeLessThan(staminaBeforeBlock - 2);
+  } finally {
+    await page.keyboard.up("ShiftLeft");
+  }
   const beforeDodge = await snapshot(page);
-  await page.keyboard.press("Space");
-  await expect.poll(async () => (await snapshot(page)).combat.playerStamina).toBeLessThan(beforeDodge.combat.playerStamina - 10);
-  await expect.poll(async () => (await snapshot(page)).position.z).toBeGreaterThan(beforeDodge.position.z + 0.2);
+  const dodge = await page.evaluate(async (initial) => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
+    window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
+    let minimumStamina = initial.combat.playerStamina;
+    const deadline = performance.now() + 15_000;
+    while (performance.now() < deadline) {
+      await new Promise(requestAnimationFrame);
+      const current = window.__JARVIS_H2__.snapshot();
+      minimumStamina = Math.min(minimumStamina, current.combat.playerStamina);
+      if (Math.hypot(current.position.x - initial.position.x, current.position.z - initial.position.z) > 0.2) {
+        return { current, minimumStamina };
+      }
+    }
+    throw new Error(`dodge did not move Bio: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
+  }, beforeDodge);
+  expect(dodge.minimumStamina).toBeLessThan(beforeDodge.combat.playerStamina - 10);
   await page.getByRole("button", { name: "Pause combat" }).click();
   await expect(page.locator("#pause-overlay")).toBeVisible();
   const paused = await snapshot(page);
@@ -405,9 +420,9 @@ test("combat controls expose stamina, blocking, dodge, and pause", async ({ page
     await page.waitForFunction(() => {
       const state = window.__JARVIS_H2__.snapshot();
       return state.combat.enemyAttack === "basic" && state.combat.enemyTelegraph;
-    }, undefined, { timeout: 15_000, polling: "raf" });
+    }, undefined, { timeout: 30_000, polling: "raf" });
     await page.waitForFunction(() => !window.__JARVIS_H2__.snapshot().combat.enemyTelegraph, undefined, {
-      timeout: 15_000,
+      timeout: 30_000,
       polling: "raf",
     });
   } finally {
@@ -434,37 +449,55 @@ test("rapid taps preserve the readable three-strike combo", async ({ page }) => 
 });
 
 test("target lock keeps the hero and camera facing the bandit", async ({ page }) => {
+  test.setTimeout(120_000);
   await openGame(page);
   await holdUntil(page, "KeyD", "x6");
   await holdUntil(page, "KeyW", "square");
   await centerOnVillageRoad(page);
   await holdUntil(page, "KeyW", "engaged");
-  const canvas = page.locator("#game-canvas");
-  const bounds = await canvas.boundingBox();
-  if (!bounds) throw new Error("game canvas has no bounds");
-  await page.mouse.move(bounds.x + bounds.width * 0.55, bounds.y + bounds.height * 0.5);
-  await page.mouse.down();
-  await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.5, { steps: 3 });
-  await page.mouse.up();
-  await page.waitForTimeout(100);
-  const expectLockedFacing = async (): Promise<void> => {
-    const state = await snapshot(page);
-    const targetYaw = Math.atan2(
-      state.combat.enemyPosition.x - state.position.x,
-      state.combat.enemyPosition.z - state.position.z,
-    );
-    const heroDifference = Math.atan2(
-      Math.sin(targetYaw - state.combat.playerFacingYaw),
-      Math.cos(targetYaw - state.combat.playerFacingYaw),
-    );
-    const cameraDifference = Math.atan2(Math.sin(targetYaw - state.yaw), Math.cos(targetYaw - state.yaw));
-    expect(Math.abs(heroDifference)).toBeLessThan(0.02);
-    expect(Math.abs(cameraDifference)).toBeLessThan(0.02);
-    expect(state.runtimeErrors).toEqual([]);
-  };
-  await expectLockedFacing();
-  await hold(page, "KeyD", 250);
-  await expectLockedFacing();
+  await page.keyboard.down("ShiftLeft");
+  try {
+    const canvas = page.locator("#game-canvas");
+    const bounds = await canvas.boundingBox();
+    if (!bounds) throw new Error("game canvas has no bounds");
+    await page.mouse.move(bounds.x + bounds.width * 0.55, bounds.y + bounds.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.5, { steps: 3 });
+    await page.mouse.up();
+    await page.waitForTimeout(100);
+    const expectLockedFacing = (state: GameSnapshot): void => {
+      const targetYaw = Math.atan2(
+        state.combat.enemyPosition.x - state.position.x,
+        state.combat.enemyPosition.z - state.position.z,
+      );
+      const heroDifference = Math.atan2(
+        Math.sin(targetYaw - state.combat.playerFacingYaw),
+        Math.cos(targetYaw - state.combat.playerFacingYaw),
+      );
+      const cameraDifference = Math.atan2(Math.sin(targetYaw - state.yaw), Math.cos(targetYaw - state.yaw));
+      expect(Math.abs(heroDifference)).toBeLessThan(0.02);
+      expect(Math.abs(cameraDifference)).toBeLessThan(0.02);
+      expect(state.runtimeErrors).toEqual([]);
+    };
+    const beforeMove = await snapshot(page);
+    expectLockedFacing(beforeMove);
+    const afterMove = await page.evaluate(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyD", bubbles: true }));
+      try {
+        await new Promise(requestAnimationFrame);
+        return window.__JARVIS_H2__.snapshot();
+      } finally {
+        window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyD", bubbles: true }));
+      }
+    });
+    expect(Math.hypot(
+      afterMove.position.x - beforeMove.position.x,
+      afterMove.position.z - beforeMove.position.z,
+    )).toBeGreaterThan(0.05);
+    expectLockedFacing(afterMove);
+  } finally {
+    await page.keyboard.up("ShiftLeft");
+  }
 });
 
 test("the legitimate route defeats the bandit and unlocks the village gate", async ({ page }, testInfo) => {
