@@ -328,7 +328,6 @@ export class AlbionGame {
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
         this.ageEffects(simulationSeconds);
-        this.updateCombat(simulationSeconds);
         let movementSeconds = simulationSeconds;
         while (movementSeconds > 0) {
           const stepSeconds = Math.min(movementSeconds, COMBAT.frameCapSeconds);
@@ -336,6 +335,7 @@ export class AlbionGame {
           this.updateRoute();
           movementSeconds -= stepSeconds;
         }
+        this.updateCombat(simulationSeconds);
         this.syncEffectTransforms(simulationSeconds);
         this.updateCamera();
       }
