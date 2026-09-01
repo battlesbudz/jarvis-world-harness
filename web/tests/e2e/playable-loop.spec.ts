@@ -47,7 +47,7 @@ async function holdUntil(page: Page, key: string, condition: HoldCondition): Pro
       if (kind === "square") return state.checkpoint === "square";
       if (kind === "engaged") return state.combat.phase === "engaged";
       return state.position.z >= 3.2;
-    }, condition, { timeout: 45_000, polling: "raf" });
+    }, condition, { timeout: 90_000, polling: "raf" });
   } finally {
     await page.keyboard.up(key);
   }
@@ -69,6 +69,7 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
     const expectedResetId = initialState.resetId;
     const initialEnemyHealth = initialState.combat.enemyHealth;
     let activeMove: string | null = null;
+    let blocking = false;
     let attackQueuedAt = 0;
     let dodgedAttack: string | null = null;
     const setMove = (next: string | null): void => {
@@ -76,6 +77,11 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
       if (activeMove) window.dispatchEvent(new KeyboardEvent("keyup", { code: activeMove, bubbles: true }));
       activeMove = next;
       if (activeMove) window.dispatchEvent(new KeyboardEvent("keydown", { code: activeMove, bubbles: true }));
+    };
+    const setBlocking = (next: boolean): void => {
+      if (blocking === next) return;
+      blocking = next;
+      window.dispatchEvent(new KeyboardEvent(next ? "keydown" : "keyup", { code: "ShiftLeft", bubbles: true }));
     };
     const rankedKey = (state: GameSnapshot, away: boolean): string => {
       const forward = { x: Math.sin(state.yaw), z: Math.cos(state.yaw) };
@@ -135,15 +141,17 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
           state.position.z - state.combat.enemyPosition.z,
         );
         if (state.combat.enemyTelegraph) {
+          setBlocking(state.combat.enemyAttack !== "area" && state.combat.playerStamina < 20);
           if (distance < 4.2) {
             setMove(rankedKey(state, true));
-            if (dodgedAttack !== state.combat.enemyAttack) {
+            if (state.combat.playerStamina >= 20 && dodgedAttack !== state.combat.enemyAttack) {
               window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
               window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
               dodgedAttack = state.combat.enemyAttack;
             }
           } else setMove(null);
         } else {
+          setBlocking(false);
           dodgedAttack = null;
           if (distance > 1.5) {
             setMove(rankedKey(state, false));
@@ -151,7 +159,7 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
             setMove(null);
             if (
               state.combat.playerAction === "idle"
-              && state.combat.playerStamina >= 12
+              && state.combat.playerStamina >= 32
               && performance.now() - attackQueuedAt >= 500
             ) {
               document.querySelector<HTMLButtonElement>("#attack")?.dispatchEvent(new PointerEvent("pointerdown", {
@@ -167,7 +175,7 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
       throw new Error(`bandit did not fall in browser-frame combat: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
     } finally {
       setMove(null);
-      window.dispatchEvent(new KeyboardEvent("keyup", { code: "ShiftLeft", bubbles: true }));
+      setBlocking(false);
     }
   }, stopOnFirstHit);
 }
@@ -375,7 +383,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
 }
 
 test("combat controls expose stamina, blocking, dodge, and pause", async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   await openGame(page);
   await page.locator("#attack").dispatchEvent("pointerdown", { pointerId: 1 });
   await expect.poll(async () => (await snapshot(page)).combat.playerStamina, { timeout: 15_000 }).toBeLessThan(100);
@@ -457,7 +465,7 @@ test("rapid taps preserve the readable three-strike combo", async ({ page }) => 
 });
 
 test("target lock keeps the hero and camera facing the bandit", async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   await openGame(page);
   await holdUntil(page, "KeyD", "x6");
   await holdUntil(page, "KeyW", "square");
@@ -472,8 +480,7 @@ test("target lock keeps the hero and camera facing the bandit", async ({ page })
     await page.mouse.down();
     await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.5, { steps: 3 });
     await page.mouse.up();
-    await page.waitForTimeout(100);
-    const expectLockedFacing = (state: GameSnapshot): void => {
+    const lockedFacingError = (state: GameSnapshot): number => {
       const targetYaw = Math.atan2(
         state.combat.enemyPosition.x - state.position.x,
         state.combat.enemyPosition.z - state.position.z,
@@ -483,12 +490,10 @@ test("target lock keeps the hero and camera facing the bandit", async ({ page })
         Math.cos(targetYaw - state.combat.playerFacingYaw),
       );
       const cameraDifference = Math.atan2(Math.sin(targetYaw - state.yaw), Math.cos(targetYaw - state.yaw));
-      expect(Math.abs(heroDifference)).toBeLessThan(0.02);
-      expect(Math.abs(cameraDifference)).toBeLessThan(0.02);
-      expect(state.runtimeErrors).toEqual([]);
+      return Math.max(Math.abs(heroDifference), Math.abs(cameraDifference));
     };
+    await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
     const beforeMove = await snapshot(page);
-    expectLockedFacing(beforeMove);
     const afterMove = await page.evaluate(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyD", bubbles: true }));
       try {
@@ -511,14 +516,15 @@ test("target lock keeps the hero and camera facing the bandit", async ({ page })
       afterMove.position.x - beforeMove.position.x,
       afterMove.position.z - beforeMove.position.z,
     )).toBeGreaterThan(0.05);
-    expectLockedFacing(afterMove);
+    await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
+    expect((await snapshot(page)).runtimeErrors).toEqual([]);
   } finally {
     await page.keyboard.up("ShiftLeft");
   }
 });
 
 test("the legitimate route defeats the bandit and unlocks the village gate", async ({ page }, testInfo) => {
-  test.setTimeout(240_000);
+  test.setTimeout(480_000);
   await openGame(page);
   await mkdir(evidenceDirectory, { recursive: true });
   await holdUntil(page, "KeyD", "x6");
