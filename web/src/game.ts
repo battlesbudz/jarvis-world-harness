@@ -161,6 +161,7 @@ export class AlbionGame {
   private enemyAttackCooldown = 0.7;
   private enemyStaggerElapsed = 0;
   private enemyDodgeElapsed = 0;
+  private enemyReactionStartedAtBoundary = false;
   private defeatElapsed = 0;
   private gateRise = 0;
   private impactElapsed = 0;
@@ -400,6 +401,7 @@ export class AlbionGame {
   };
 
   private updateCombat(delta: number): void {
+    this.enemyReactionStartedAtBoundary = false;
     const blocking = this.input.blocking();
     if (this.phase === "defeat") {
       this.defeatElapsed += delta;
@@ -444,7 +446,7 @@ export class AlbionGame {
     } else {
       this.playerAction = "idle";
     }
-    if (this.phase === "engaged") this.updateEnemy(delta);
+    if (this.phase === "engaged" && !this.enemyReactionStartedAtBoundary) this.updateEnemy(delta);
     else if (this.phase === "victory") this.openGate(delta);
     if (this.targetLocked && this.dodgeElapsed === 0) this.faceLockedTarget();
   }
@@ -617,6 +619,7 @@ export class AlbionGame {
       this.enemyAttack = null;
       this.enemyAttackCooldown = 0.58;
       this.enemyDodgeElapsed = COMBAT.enemyDodgeSeconds;
+      this.enemyReactionStartedAtBoundary = true;
       this.telegraphRing.isVisible = false;
       this.playActor(this.enemyActor, "Roll", false, COMBAT.enemyDodgeSeconds);
       this.showFeedback("DODGED", "warning");
@@ -631,6 +634,7 @@ export class AlbionGame {
     this.playTone(95 + attack.step * 18, 0.12, "square");
     if (attack.step === 3) {
       this.enemyStaggerElapsed = COMBAT.enemyStaggerSeconds;
+      this.enemyReactionStartedAtBoundary = true;
       this.enemyAttack = null;
       this.telegraphRing.isVisible = false;
       this.showFeedback("GUARD BROKEN", "success");
