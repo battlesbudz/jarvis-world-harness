@@ -146,6 +146,7 @@ export class AlbionGame {
   private dodgeElapsed = 0;
   private dodgeCooldown = 0;
   private dodgeStartedThisFrame = false;
+  private dodgeStartDelay = 0;
   private dodgeVelocity = Vector3.Zero();
   private guardBreakElapsed = 0;
   private hitReactionElapsed = 0;
@@ -293,6 +294,7 @@ export class AlbionGame {
     this.dodgeElapsed = 0;
     this.dodgeCooldown = 0;
     this.dodgeStartedThisFrame = false;
+    this.dodgeStartDelay = 0;
     this.guardBreakElapsed = 0;
     this.hitReactionElapsed = 0;
     this.comboStep = 0;
@@ -340,6 +342,7 @@ export class AlbionGame {
           this.startBufferedAction();
         }
         if (this.dodgeStartedThisFrame) {
+          this.dodgeStartDelay = previousCooldownElapsed;
           this.dodgeCooldown = Math.max(0, this.dodgeCooldown - (simulationSeconds - previousCooldownElapsed));
         }
         let movementSeconds = simulationSeconds;
@@ -469,6 +472,7 @@ export class AlbionGame {
       include(transition - this.enemyAttack.elapsed);
     } else include(this.enemyAttackCooldown);
     include(this.dodgeElapsed);
+    include(this.dodgeStartDelay);
     include(this.guardBreakElapsed);
     include(this.hitReactionElapsed);
     include(this.enemyStaggerElapsed);
@@ -630,14 +634,19 @@ export class AlbionGame {
     this.dodgeElapsed = COMBAT.dodgeDurationSeconds;
     this.dodgeCooldown = COMBAT.dodgeCooldownSeconds;
     this.dodgeStartedThisFrame = true;
+    this.dodgeStartDelay = 0;
     this.playerAction = "dodge";
     this.playActor(this.playerActor, "Roll", false, COMBAT.dodgeDurationSeconds);
     this.playTone(310, 0.1, "sine");
   }
 
   private updateDodge(delta: number): void {
-    this.movePlayerCollider(this.dodgeVelocity.scale(Math.min(delta, this.dodgeElapsed)));
-    this.dodgeElapsed = Math.max(0, this.dodgeElapsed - delta);
+    const delayed = Math.min(delta, this.dodgeStartDelay);
+    this.dodgeStartDelay = Math.max(0, this.dodgeStartDelay - delta);
+    const activeDelta = delta - delayed;
+    if (activeDelta === 0) return;
+    this.movePlayerCollider(this.dodgeVelocity.scale(Math.min(activeDelta, this.dodgeElapsed)));
+    this.dodgeElapsed = Math.max(0, this.dodgeElapsed - activeDelta);
     if (this.dodgeElapsed === 0) {
       this.playerAction = "idle";
       if (this.targetLocked) this.faceLockedTarget();
