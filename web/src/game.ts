@@ -401,6 +401,7 @@ export class AlbionGame {
   };
 
   private updateCombat(delta: number): void {
+    const phaseAtStepStart = this.phase;
     this.enemyReactionStartedAtBoundary = false;
     const blocking = this.input.blocking();
     if (this.phase === "defeat") {
@@ -446,8 +447,12 @@ export class AlbionGame {
     } else {
       this.playerAction = "idle";
     }
-    if (this.phase === "engaged" && !this.enemyReactionStartedAtBoundary) this.updateEnemy(delta);
-    else if (this.phase === "victory") this.openGate(delta);
+    if (
+      this.phase === "engaged"
+      && phaseAtStepStart === "engaged"
+      && !this.enemyReactionStartedAtBoundary
+    ) this.updateEnemy(delta);
+    else if (this.phase === "victory" && phaseAtStepStart === "victory") this.openGate(delta);
     if (this.targetLocked && this.dodgeElapsed === 0) this.faceLockedTarget();
   }
 
