@@ -248,9 +248,9 @@ export class AlbionGame {
         playerStamina: Number(this.playerStamina.toFixed(2)),
         playerAction: this.playerAction,
         playerFacingYaw: Number(this.player.rotation.y.toFixed(4)),
-        targetFacingError: this.targetLocked
+        targetFacingError: this.targetLocked && this.dodgeElapsed === 0
           ? Number(Math.max(facingError(this.player.rotation.y), facingError(this.yaw)).toFixed(5))
-          : 0,
+          : null,
         comboStep: this.comboStep,
         enemyHealth: Number(this.enemyHealth.toFixed(2)),
         enemyHome: roundedPosition({ ...ENEMY_HOME }),
@@ -674,6 +674,7 @@ export class AlbionGame {
     this.staminaRegenDelay = COMBAT.staminaRegenDelaySeconds;
     const distance = strength <= 0.25 ? COMBAT.exhaustedDodgeDistance : COMBAT.dodgeDistance * strength;
     this.dodgeVelocity = direction.scale(distance / COMBAT.dodgeDurationSeconds);
+    // Locked rolls travel target-relative but turn into their displacement, then reacquire on completion.
     this.player.rotation.y = Math.atan2(direction.x, direction.z);
     this.dodgeElapsed = COMBAT.dodgeDurationSeconds;
     this.dodgeCooldown = COMBAT.dodgeCooldownSeconds;
