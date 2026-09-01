@@ -12,6 +12,7 @@ export const COMBAT = Object.freeze({
   playerMaxStamina: 100,
   enemyMaxHealth: 100,
   staminaRegenPerSecond: 12.5,
+  staminaRegenDelaySeconds: 0.65,
   attackStaminaCost: 100 / 9,
   dodgeStaminaCost: 20,
   blockDrainPerSecond: 12.5,
