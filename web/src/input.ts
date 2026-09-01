@@ -31,7 +31,7 @@ export function createInputController(
   let lookX = 0;
   let lookY = 0;
   let lookTravel = 0;
-  let attackQueued = false;
+  let attacksQueued = 0;
   let dodgeQueued = false;
   let pauseQueued = false;
   let blockHeld = false;
@@ -98,7 +98,7 @@ export function createInputController(
     keys.clear();
     stopJoystick();
     lookPointer = null;
-    attackQueued = false;
+    attacksQueued = 0;
     dodgeQueued = false;
     pauseQueued = false;
     blockHeld = false;
@@ -127,13 +127,13 @@ export function createInputController(
   };
   const onLookUp = (event: PointerEvent): void => {
     if (event.pointerId === lookPointer) {
-      if (lookTravel < 7 && event.pointerType === "mouse") attackQueued = true;
+      if (lookTravel < 7 && event.pointerType === "mouse") attacksQueued = Math.min(3, attacksQueued + 1);
       lookPointer = null;
     }
   };
 
   const queueAttack = (event: Event): void => {
-    attackQueued = true;
+    attacksQueued = Math.min(3, attacksQueued + 1);
     event.preventDefault();
   };
   const queueDodge = (event: Event): void => {
@@ -187,9 +187,9 @@ export function createInputController(
       });
     },
     consumeAttack(): boolean {
-      const value = attackQueued;
-      attackQueued = false;
-      return value;
+      if (attacksQueued === 0) return false;
+      attacksQueued -= 1;
+      return true;
     },
     consumeDodge(): boolean {
       const value = dodgeQueued;
