@@ -299,6 +299,7 @@ test("camera drag changes facing and reset restores the exact spawn", async ({ p
   expect(reset.resetId).toBe(2);
   expect(reset.position).toEqual({ x: 0, y: 0.9, z: -12 });
   expect(reset.yaw).toBe(0);
+  expect(reset.combat.playerFacingYaw).toBe(0);
   expect(reset.checkpoint).toBe("spawn");
   expect(settled.position).toEqual({ x: 0, y: 0.9, z: -12 });
   expect(settled.runtimeErrors).toEqual([]);
