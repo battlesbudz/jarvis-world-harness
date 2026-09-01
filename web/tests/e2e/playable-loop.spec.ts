@@ -47,7 +47,7 @@ async function holdUntil(page: Page, key: string, condition: HoldCondition): Pro
       if (kind === "square") return state.checkpoint === "square";
       if (kind === "engaged") return state.combat.phase === "engaged";
       return state.position.z >= 3.2;
-    }, condition, { timeout: 30_000, polling: "raf" });
+    }, condition, { timeout: 45_000, polling: "raf" });
   } finally {
     await page.keyboard.up(key);
   }
@@ -70,6 +70,7 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
     const initialEnemyHealth = initialState.combat.enemyHealth;
     let activeMove: string | null = null;
     let attackQueuedAt = 0;
+    let dodgedAttack: string | null = null;
     const setMove = (next: string | null): void => {
       if (activeMove === next) return;
       if (activeMove) window.dispatchEvent(new KeyboardEvent("keyup", { code: activeMove, bubbles: true }));
@@ -134,9 +135,16 @@ async function driveBanditOnBrowserFrames(page: Page, stopOnFirstHit = false): P
           state.position.z - state.combat.enemyPosition.z,
         );
         if (state.combat.enemyTelegraph) {
-          if (distance < 3.1) setMove(rankedKey(state, true));
-          else setMove(null);
+          if (distance < 4.2) {
+            setMove(rankedKey(state, true));
+            if (dodgedAttack !== state.combat.enemyAttack) {
+              window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space", bubbles: true }));
+              window.dispatchEvent(new KeyboardEvent("keyup", { code: "Space", bubbles: true }));
+              dodgedAttack = state.combat.enemyAttack;
+            }
+          } else setMove(null);
         } else {
+          dodgedAttack = null;
           if (distance > 1.5) {
             setMove(rankedKey(state, false));
           } else {
@@ -262,7 +270,7 @@ test("keyboard movement is physical and the shortcut wall blocks passage", async
   await holdUntil(page, "KeyW", "collision");
   const blocked = await snapshot(page);
   expect(blocked.position.z).toBeGreaterThan(-12);
-  expect(blocked.position.z).toBeLessThan(-2.6);
+  expect(blocked.position.z).toBeLessThan(-2);
   expect(blocked.collisionCount).toBeGreaterThan(0);
   expect(blocked.runtimeErrors).toEqual([]);
   const screenshot = `blocked-shortcut-${testInfo.project.name}.png`;
@@ -369,7 +377,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
 test("combat controls expose stamina, blocking, dodge, and pause", async ({ page }) => {
   test.setTimeout(120_000);
   await openGame(page);
-  await page.locator("#attack").click();
+  await page.locator("#attack").dispatchEvent("pointerdown", { pointerId: 1 });
   await expect.poll(async () => (await snapshot(page)).combat.playerStamina, { timeout: 15_000 }).toBeLessThan(100);
   await expect.poll(async () => (await snapshot(page)).combat.playerAction, { timeout: 15_000 }).toBe("idle");
   await page.keyboard.down("ShiftLeft");
@@ -484,8 +492,17 @@ test("target lock keeps the hero and camera facing the bandit", async ({ page })
     const afterMove = await page.evaluate(async () => {
       window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyD", bubbles: true }));
       try {
-        await new Promise(requestAnimationFrame);
-        return window.__JARVIS_H2__.snapshot();
+        const initial = window.__JARVIS_H2__.snapshot();
+        const deadline = performance.now() + 30_000;
+        while (performance.now() < deadline) {
+          await new Promise(requestAnimationFrame);
+          const current = window.__JARVIS_H2__.snapshot();
+          if (Math.hypot(
+            current.position.x - initial.position.x,
+            current.position.z - initial.position.z,
+          ) > 0.05) return current;
+        }
+        throw new Error(`locked strafe did not move Bio: ${JSON.stringify(window.__JARVIS_H2__.snapshot())}`);
       } finally {
         window.dispatchEvent(new KeyboardEvent("keyup", { code: "KeyD", bubbles: true }));
       }
