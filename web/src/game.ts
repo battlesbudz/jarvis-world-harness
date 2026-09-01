@@ -323,19 +323,25 @@ export class AlbionGame {
     if (this.disposed) return;
     try {
       const rawDeltaSeconds = Math.max(0, this.engine.getDeltaTime() / 1000);
-      const simulationSeconds = Math.min(rawDeltaSeconds, COMBAT.frameCapSeconds);
+      const simulationSeconds = Math.min(rawDeltaSeconds, COMBAT.maxFrameSeconds);
       const pauseRequested = this.input.consumePause();
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
         this.updateCombat(simulationSeconds);
-        if (this.phase !== "defeat") this.movePlayer(simulationSeconds);
-        this.updateRoute();
+        let movementSeconds = simulationSeconds;
+        while (movementSeconds > 0) {
+          const stepSeconds = Math.min(movementSeconds, COMBAT.frameCapSeconds);
+          if (this.phase !== "defeat") this.movePlayer(stepSeconds);
+          this.updateRoute();
+          movementSeconds -= stepSeconds;
+        }
         this.updateEffects(simulationSeconds);
         this.updateCamera();
       }
       this.updateHud();
       this.scene.animationTimeScale = cappedAnimationTimeScale(rawDeltaSeconds, this.paused);
       this.scene.render();
+      this.completeRenderedPlayerAttack();
       if (!this.ready) {
         this.ready = true;
         this.elements.status.textContent = "Ready";
@@ -469,7 +475,14 @@ export class AlbionGame {
       attack.hitApplied = true;
       this.applyPlayerHit(attack);
     }
-    if (attack.elapsed < COMBAT.attackDurations[attack.step - 1]) return;
+    const duration = COMBAT.attackDurations[attack.step - 1];
+    if (attack.elapsed < duration) return;
+    attack.elapsed = duration;
+  }
+
+  private completeRenderedPlayerAttack(): void {
+    const attack = this.attack;
+    if (!attack || attack.elapsed < COMBAT.attackDurations[attack.step - 1]) return;
     this.comboStep = attack.step;
     this.comboWindow = COMBAT.comboWindowSeconds;
     if (attack.step === 3) {
