@@ -145,6 +145,7 @@ export class AlbionGame {
   private dodgeBuffered = false;
   private dodgeElapsed = 0;
   private dodgeCooldown = 0;
+  private dodgeStartedThisFrame = false;
   private dodgeVelocity = Vector3.Zero();
   private guardBreakElapsed = 0;
   private hitReactionElapsed = 0;
@@ -291,6 +292,7 @@ export class AlbionGame {
     this.dodgeBuffered = false;
     this.dodgeElapsed = 0;
     this.dodgeCooldown = 0;
+    this.dodgeStartedThisFrame = false;
     this.guardBreakElapsed = 0;
     this.hitReactionElapsed = 0;
     this.comboStep = 0;
@@ -330,10 +332,15 @@ export class AlbionGame {
       if (pauseRequested && this.phase !== "defeat") this.setPaused(!this.paused);
       if (!this.paused) {
         this.ageEffects(simulationSeconds);
+        this.dodgeStartedThisFrame = false;
+        const previousCooldownElapsed = Math.min(this.dodgeCooldown, simulationSeconds);
         this.dodgeCooldown = Math.max(0, this.dodgeCooldown - simulationSeconds);
         if (this.phase !== "defeat") {
           this.consumeDodgeInput();
           this.startBufferedAction();
+        }
+        if (this.dodgeStartedThisFrame) {
+          this.dodgeCooldown = Math.max(0, this.dodgeCooldown - (simulationSeconds - previousCooldownElapsed));
         }
         let movementSeconds = simulationSeconds;
         while (movementSeconds > 0.000001) {
@@ -622,6 +629,7 @@ export class AlbionGame {
     this.player.rotation.y = Math.atan2(direction.x, direction.z);
     this.dodgeElapsed = COMBAT.dodgeDurationSeconds;
     this.dodgeCooldown = COMBAT.dodgeCooldownSeconds;
+    this.dodgeStartedThisFrame = true;
     this.playerAction = "dodge";
     this.playActor(this.playerActor, "Roll", false, COMBAT.dodgeDurationSeconds);
     this.playTone(310, 0.1, "sine");
