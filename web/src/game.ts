@@ -136,6 +136,7 @@ export class AlbionGame {
   private targetLocked = false;
   private playerHealth = 100;
   private playerStamina = 100;
+  private staminaRegenDelay = 0;
   private playerAction: CombatAction = "idle";
   private enemyHealth = 100;
   private attack: AttackState | null = null;
@@ -281,6 +282,7 @@ export class AlbionGame {
     this.targetLocked = false;
     this.playerHealth = 100;
     this.playerStamina = 100;
+    this.staminaRegenDelay = 0;
     this.playerAction = "idle";
     this.enemyHealth = 100;
     this.attack = null;
@@ -364,7 +366,9 @@ export class AlbionGame {
 
   private updateCombat(delta: number): void {
     const blocking = this.input.blocking();
-    this.playerStamina = regenerateStamina(this.playerStamina, delta, blocking);
+    const regenSeconds = Math.max(0, delta - this.staminaRegenDelay);
+    this.staminaRegenDelay = Math.max(0, this.staminaRegenDelay - delta);
+    this.playerStamina = regenerateStamina(this.playerStamina, regenSeconds, blocking);
     this.dodgeCooldown = Math.max(0, this.dodgeCooldown - delta);
     this.comboWindow = Math.max(0, this.comboWindow - delta);
     if (this.comboWindow === 0 && !this.attack) this.comboStep = 0;
@@ -413,6 +417,7 @@ export class AlbionGame {
     } else if (blocking) {
       this.playerAction = "block";
       this.playerStamina = Math.max(0, this.playerStamina - COMBAT.blockDrainPerSecond * delta);
+      this.staminaRegenDelay = COMBAT.staminaRegenDelaySeconds;
       this.playActor(this.playerActor, "Idle_Attacking", true);
     } else {
       this.playerAction = "idle";
@@ -464,6 +469,7 @@ export class AlbionGame {
     const step = (this.comboStep >= 1 && this.comboStep < 3 && this.comboWindow > 0 ? this.comboStep + 1 : 1) as 1 | 2 | 3;
     const staminaBefore = this.playerStamina;
     this.playerStamina = spendStamina(this.playerStamina, COMBAT.attackStaminaCost);
+    this.staminaRegenDelay = COMBAT.staminaRegenDelaySeconds;
     this.attack = { step, elapsed: 0, hitApplied: false, staminaBefore };
     this.playerAction = `attack-${step}`;
     this.playActor(
@@ -574,6 +580,7 @@ export class AlbionGame {
     const direction = requested.lengthSquared() > 0.02 ? requested.normalize() : forward;
     const strength = staminaStrength(this.playerStamina, COMBAT.dodgeStaminaCost);
     this.playerStamina = spendStamina(this.playerStamina, COMBAT.dodgeStaminaCost);
+    this.staminaRegenDelay = COMBAT.staminaRegenDelaySeconds;
     const distance = strength <= 0.25 ? COMBAT.exhaustedDodgeDistance : COMBAT.dodgeDistance * strength;
     this.dodgeVelocity = direction.scale(distance / COMBAT.dodgeDurationSeconds);
     this.player.rotation.y = Math.atan2(direction.x, direction.z);
@@ -659,6 +666,7 @@ export class AlbionGame {
     }
     const result = resolveEnemyHit(kind, this.playerAction === "block", this.playerStamina);
     this.playerStamina = result.staminaAfter;
+    if (result.staminaAfter < COMBAT.playerMaxStamina) this.staminaRegenDelay = COMBAT.staminaRegenDelaySeconds;
     this.playerHealth = Math.max(0, this.playerHealth - result.damage);
     if (result.damage > 0) {
       this.comboStep = 0;
@@ -784,7 +792,11 @@ export class AlbionGame {
 
   private faceLockedTarget(): void {
     const toward = this.enemy.position.subtract(this.player.position);
-    if (toward.lengthSquared() > 0.0001) this.player.rotation.y = Math.atan2(toward.x, toward.z);
+    if (toward.lengthSquared() > 0.0001) {
+      const targetYaw = Math.atan2(toward.x, toward.z);
+      this.player.rotation.y = targetYaw;
+      this.yaw = targetYaw;
+    }
   }
 
   private updateRoute(): void {
