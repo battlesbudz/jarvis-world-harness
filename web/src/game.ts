@@ -223,6 +223,14 @@ export class AlbionGame {
   }
 
   snapshot(): GameSnapshot {
+    const targetYaw = Math.atan2(
+      this.enemy.position.x - this.player.position.x,
+      this.enemy.position.z - this.player.position.z,
+    );
+    const facingError = (yaw: number): number => Math.abs(Math.atan2(
+      Math.sin(targetYaw - yaw),
+      Math.cos(targetYaw - yaw),
+    ));
     return {
       ready: this.ready,
       seed: H2_SEED,
@@ -240,6 +248,9 @@ export class AlbionGame {
         playerStamina: Number(this.playerStamina.toFixed(2)),
         playerAction: this.playerAction,
         playerFacingYaw: Number(this.player.rotation.y.toFixed(4)),
+        targetFacingError: this.targetLocked
+          ? Number(Math.max(facingError(this.player.rotation.y), facingError(this.yaw)).toFixed(5))
+          : 0,
         comboStep: this.comboStep,
         enemyHealth: Number(this.enemyHealth.toFixed(2)),
         enemyHome: roundedPosition({ ...ENEMY_HOME }),
