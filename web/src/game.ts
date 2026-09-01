@@ -336,13 +336,15 @@ export class AlbionGame {
           this.startBufferedAction();
         }
         let movementSeconds = simulationSeconds;
-        while (movementSeconds > 0) {
-          const stepSeconds = Math.min(movementSeconds, COMBAT.frameCapSeconds);
-          if (this.phase !== "defeat") this.movePlayer(stepSeconds);
+        while (movementSeconds > 0.000001) {
+          const stepSeconds = this.nextSimulationStep(Math.min(movementSeconds, COMBAT.frameCapSeconds));
+          if (this.phase !== "defeat") {
+            this.movePlayer(stepSeconds);
+          }
           this.updateRoute();
+          this.updateCombat(stepSeconds);
           movementSeconds -= stepSeconds;
         }
-        this.updateCombat(simulationSeconds);
         this.syncEffectTransforms(simulationSeconds);
         this.updateCamera();
       }
@@ -442,6 +444,29 @@ export class AlbionGame {
       this.attackBuffered = false;
       this.startAttack();
     }
+  }
+
+  private nextSimulationStep(maximum: number): number {
+    let boundary = maximum;
+    const include = (remaining: number): void => {
+      if (remaining > 0.000001) boundary = Math.min(boundary, remaining);
+    };
+    if (this.attack && !this.attack.hitApplied) {
+      include(COMBAT.attackHitTimes[this.attack.step - 1] - this.attack.elapsed);
+    }
+    if (this.enemyAttack) {
+      const transition = this.enemyAttack.resolved
+        ? COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind] + COMBAT.enemyRecoverySeconds
+        : COMBAT.enemyTelegraphSeconds[this.enemyAttack.kind];
+      include(transition - this.enemyAttack.elapsed);
+    } else include(this.enemyAttackCooldown);
+    include(this.dodgeElapsed);
+    include(this.guardBreakElapsed);
+    include(this.hitReactionElapsed);
+    include(this.enemyStaggerElapsed);
+    include(this.enemyDodgeElapsed);
+    if (this.phase === "defeat") include(COMBAT.defeatResetSeconds - this.defeatElapsed);
+    return Math.max(0.000001, boundary);
   }
 
   private engageCombat(): void {
