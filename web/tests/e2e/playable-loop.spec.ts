@@ -259,7 +259,7 @@ async function evidenceEnvironment(page: Page, testInfo: TestInfo) {
   };
 }
 
-test("loads a deterministic rendered village without runtime errors", async ({ page }, testInfo) => {
+test("[smoke] loads a deterministic rendered village without runtime errors", async ({ page }, testInfo) => {
   await openGame(page);
   const state = await snapshot(page);
   expect(state).toMatchObject({
@@ -386,7 +386,7 @@ async function defeatBandit(page: Page, feedbackScreenshot: string): Promise<voi
   await driveBanditOnBrowserFrames(page);
 }
 
-test("combat controls expose stamina, blocking, dodge, and pause", async ({ page }) => {
+test("[smoke] combat controls expose stamina, blocking, dodge, and pause", async ({ page }) => {
   test.setTimeout(240_000);
   await openGame(page);
   await page.locator("#attack").dispatchEvent("pointerdown", { pointerId: 1 });
@@ -492,7 +492,7 @@ test("rapid taps preserve the readable three-strike combo", async ({ page }) => 
   expect((await snapshot(page)).runtimeErrors).toEqual([]);
 });
 
-test("target lock keeps the hero and camera facing the bandit", async ({ page }) => {
+test("[smoke] target lock keeps the hero and camera facing the bandit", async ({ page }) => {
   test.setTimeout(240_000);
   await openGame(page);
   await holdUntil(page, "KeyD", "x6");
