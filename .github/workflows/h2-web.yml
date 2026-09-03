@@ -53,6 +53,16 @@ jobs:
           name: h2-build-output
           path: web/dist
           if-no-files-found: error
+      - name: Publish debug-site download instructions
+        if: success()
+        run: |
+          {
+            echo "## H2 debug build"
+            echo
+            echo "The built site is available in the **h2-debug-site** artifact. Download it from the [workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+            echo
+            echo "This artifact is the exact build produced by the passing compile/unit-test job, even when the full browser suite fails."
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload GitHub Pages artifact
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: actions/upload-pages-artifact@v4

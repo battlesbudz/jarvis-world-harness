@@ -451,19 +451,12 @@ test("[smoke] combat controls expose stamina, blocking, dodge, and pause", async
   await holdUntil(page, "KeyD", "x6");
   await holdUntil(page, "KeyW", "square");
   await centerOnVillageRoad(page);
-  await page.keyboard.down("KeyW");
-  await page.evaluate(async () => {
-    while (window.__JARVIS_H2__.snapshot().combat.phase !== "engaged") {
-      await new Promise(requestAnimationFrame);
-    }
-    window.dispatchEvent(new KeyboardEvent("keydown", { code: "ShiftLeft", bubbles: true }));
-  });
-  await page.keyboard.up("KeyW");
+  await page.waitForFunction(() => {
+    const state = window.__JARVIS_H2__.snapshot();
+    return state.combat.enemyAttack === "basic" && state.combat.enemyTelegraph;
+  }, undefined, { timeout: 30_000, polling: "raf" });
+  await page.keyboard.down("ShiftLeft");
   try {
-    await page.waitForFunction(() => {
-      const state = window.__JARVIS_H2__.snapshot();
-      return state.combat.enemyAttack === "basic" && state.combat.enemyTelegraph;
-    }, undefined, { timeout: 30_000, polling: "raf" });
     const beforeGuardedImpact = await snapshot(page);
     await page.waitForFunction(() => !window.__JARVIS_H2__.snapshot().combat.enemyTelegraph, undefined, {
       timeout: 30_000,
@@ -499,7 +492,6 @@ test("[smoke] target lock keeps the hero and camera facing the bandit", async ({
   await holdUntil(page, "KeyW", "square");
   await centerOnVillageRoad(page);
   await holdUntil(page, "KeyW", "engaged");
-  await page.keyboard.down("ShiftLeft");
   try {
     const canvas = page.locator("#game-canvas");
     const bounds = await canvas.boundingBox();
@@ -538,7 +530,7 @@ test("[smoke] target lock keeps the hero and camera facing the bandit", async ({
     await page.keyboard.down("KeyD");
     await page.keyboard.press("Space");
     await expect.poll(async () => (await snapshot(page)).combat.playerAction, { timeout: 15_000 }).toBe("dodge");
-    expect((await snapshot(page)).combat.targetFacingError).toBeNull();
+    await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
     await page.keyboard.up("KeyD");
     await expect.poll(async () => (await snapshot(page)).combat.playerAction, { timeout: 15_000 }).toBe("idle");
     await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
