@@ -451,6 +451,7 @@ test("[smoke] combat controls expose stamina, blocking, dodge, and pause", async
   await holdUntil(page, "KeyD", "x6");
   await holdUntil(page, "KeyW", "square");
   await centerOnVillageRoad(page);
+  await holdUntil(page, "KeyW", "engaged");
   await page.waitForFunction(() => {
     const state = window.__JARVIS_H2__.snapshot();
     return state.combat.enemyAttack === "basic" && state.combat.enemyTelegraph;
@@ -493,13 +494,10 @@ test("[smoke] target lock keeps the hero and camera facing the bandit", async ({
   await centerOnVillageRoad(page);
   await holdUntil(page, "KeyW", "engaged");
   try {
+    await expect.poll(async () => (await snapshot(page)).combat.targetLocked, { timeout: 5_000 }).toBe(true);
     const canvas = page.locator("#game-canvas");
     const bounds = await canvas.boundingBox();
     if (!bounds) throw new Error("game canvas has no bounds");
-    await page.mouse.move(bounds.x + bounds.width * 0.55, bounds.y + bounds.height * 0.5);
-    await page.mouse.down();
-    await page.mouse.move(bounds.x + bounds.width * 0.8, bounds.y + bounds.height * 0.5, { steps: 3 });
-    await page.mouse.up();
     const lockedFacingError = (state: GameSnapshot): number => state.combat.targetFacingError ?? Number.POSITIVE_INFINITY;
     await expect.poll(async () => lockedFacingError(await snapshot(page)), { timeout: 15_000 }).toBeLessThan(0.02);
     const beforeMove = await snapshot(page);
