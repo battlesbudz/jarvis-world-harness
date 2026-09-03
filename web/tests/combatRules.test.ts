@@ -8,6 +8,7 @@ import {
   regenerateStamina,
   resolveEnemyHit,
   spendStamina,
+  targetWithinAttackArc,
 } from "../src/combatRules";
 
 describe("combat rules", () => {
@@ -59,10 +60,18 @@ describe("combat rules", () => {
     expect([0, 1, 2, 3, 4].map(nextEnemyAttack)).toEqual(["basic", "basic", "heavy", "area", "basic"]);
   });
 
-  it("advances actor animation on the same capped clock as combat", () => {
+  it("keeps actor animation synchronized when combat caps long frames", () => {
     expect(cappedAnimationTimeScale(0.05, false)).toBe(1);
-    expect(cappedAnimationTimeScale(0.2, false)).toBe(0.5);
+    expect(cappedAnimationTimeScale(0.2, false)).toBe(1);
+    expect(cappedAnimationTimeScale(0.5, false)).toBeCloseTo(0.6);
     expect(cappedAnimationTimeScale(0.2, true)).toBe(0);
     expect(cappedAnimationTimeScale(0, false)).toBe(0);
+  });
+
+  it("only validates player hits inside the hero's frontal attack arc", () => {
+    expect(targetWithinAttackArc(0, 0, 0, 0, 2)).toBe(true);
+    expect(targetWithinAttackArc(0, 0, 0, 1.5, 1.5)).toBe(true);
+    expect(targetWithinAttackArc(0, 0, 0, 2, 0)).toBe(false);
+    expect(targetWithinAttackArc(0, 0, 0, 0, -2)).toBe(false);
   });
 });

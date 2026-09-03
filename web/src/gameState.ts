@@ -24,6 +24,8 @@ export interface GameSnapshot {
     playerHealth: number;
     playerStamina: number;
     playerAction: CombatAction;
+    playerFacingYaw: number;
+    targetFacingError: number | null;
     comboStep: number;
     enemyHealth: number;
     enemyHome: Position3;
@@ -72,8 +74,8 @@ export function nextCheckpoint(position: Position3, current: RouteCheckpoint): R
 
 export function roundedPosition(position: Position3): Position3 {
   return {
-    x: Number(position.x.toFixed(3)),
-    y: Number(position.y.toFixed(3)),
-    z: Number(position.z.toFixed(3)),
+    x: Number(position.x.toFixed(5)),
+    y: Number(position.y.toFixed(5)),
+    z: Number(position.z.toFixed(5)),
   };
 }

@@ -12,14 +12,16 @@ export const COMBAT = Object.freeze({
   playerMaxStamina: 100,
   enemyMaxHealth: 100,
   staminaRegenPerSecond: 12.5,
+  staminaRegenDelaySeconds: 0.65,
   attackStaminaCost: 100 / 9,
   dodgeStaminaCost: 20,
   blockDrainPerSecond: 12.5,
   blockImpactCost: Object.freeze({ basic: 12, heavy: 25, area: 0 }),
   enemyDamage: Object.freeze({ basic: 20, heavy: 40, area: 30 }),
   playerDamage: Object.freeze([10, 10, 20] as const),
-  attackDurations: Object.freeze([0.36, 0.4, 0.52] as const),
-  attackHitTimes: Object.freeze([0.18, 0.2, 0.28] as const),
+  attackDurations: Object.freeze([0.46, 0.54, 0.68] as const),
+  attackHitTimes: Object.freeze([0.22, 0.29, 0.39] as const),
+  attackHalfAngleRadians: Math.PI * 0.31,
   comboWindowSeconds: 0.85,
   dodgeDistance: 3,
   exhaustedDodgeDistance: 0.75,
@@ -32,13 +34,32 @@ export const COMBAT = Object.freeze({
   enemyRecoverySeconds: 0.38,
   defeatResetSeconds: 1.35,
   frameCapSeconds: 0.1,
+  maxFrameSeconds: 0.3,
   enemyAttackCycle: Object.freeze(["basic", "basic", "heavy", "area"] as const),
   enemyTelegraphSeconds: Object.freeze({ basic: 0.58, heavy: 0.92, area: 1.12 }),
 });
 
 export function cappedAnimationTimeScale(rawDeltaSeconds: number, paused: boolean): number {
   if (paused || rawDeltaSeconds <= 0) return 0;
-  return Math.min(rawDeltaSeconds, COMBAT.frameCapSeconds) / rawDeltaSeconds;
+  return Math.min(rawDeltaSeconds, COMBAT.maxFrameSeconds) / rawDeltaSeconds;
+}
+
+export function targetWithinAttackArc(
+  attackerYaw: number,
+  attackerX: number,
+  attackerZ: number,
+  targetX: number,
+  targetZ: number,
+  halfAngle = COMBAT.attackHalfAngleRadians,
+): boolean {
+  const offsetX = targetX - attackerX;
+  const offsetZ = targetZ - attackerZ;
+  const distance = Math.hypot(offsetX, offsetZ);
+  if (distance < 0.0001) return true;
+  const facingX = Math.sin(attackerYaw);
+  const facingZ = Math.cos(attackerYaw);
+  const alignment = (facingX * offsetX + facingZ * offsetZ) / distance;
+  return alignment >= Math.cos(halfAngle);
 }
 
 export function staminaStrength(stamina: number, cost: number): number {
